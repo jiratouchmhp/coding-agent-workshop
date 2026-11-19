@@ -108,8 +108,8 @@ gemini-coding-agent-workshop/
 ├── starter/                                    # Hands-on participant workspace with # TODO(lab-N) markers
 │   ├── pyproject.toml                          # Python >=3.11 uv dependencies (ADK >=2.0, Agent Platform, Eval, OTel)
 │   ├── agents-cli-manifest.yaml                # Lab 1: agents-cli config (agent_directory: coding_agent, target: agent_runtime)
-│   ├── services.yaml                           # Lab 1 Part B: Declarative ADK v1.34.0 custom service registration
-│   ├── services.py                             # Lab 1 Part B: Programmatic ADK v1.34.0 service registration (precedence over YAML)
+│   ├── services.yaml                           # Lab 1 Part B: Declarative ADK 2.0+ custom service registration
+│   ├── services.py                             # Lab 1 Part B: Programmatic ADK 2.0+ service registration (precedence over YAML)
 │   ├── Dockerfile                              # Lab 3: Trusted Agent Runtime BYOC image (0.0.0.0:8080, non-root)
 │   ├── main.py                                 # Lab 3: FastAPI/ADK HTTP server (GET /, /api/reasoning_engine, /api/stream_reasoning_engine)
 │   ├── requirements.txt                        # Lab 3: Agent Runtime container deps (for container_spec & source_code_spec)

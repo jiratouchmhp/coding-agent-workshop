@@ -1,7 +1,7 @@
 # Maintenance & Upstream Source Verification (`adk-coding-agent-build`)
 
 - **Last Verified Date:** `2026-11-19`
-- **Skill Scope:** Build Pillar — Google ADK Python (`v1.27.0` / `v1.29.0` / `v1.34.0` / `v2.0+` / `v2.4.0`), `EnvironmentToolset` / `LocalEnvironment` / `BaseEnvironment`, `ExecuteBashTool` / `BashToolPolicy`, ADK 2.0 Agent Architectures, Collaborative Teams, Service Registration, Graph & Dynamic Workflows, and `google/agents-cli` (`~= 1.15.0`).
+- **Skill Scope:** Build Pillar — Google ADK Python (`v2.0+` / `v2.4.0` Preview), `EnvironmentToolset` / `LocalEnvironment` / `BaseEnvironment`, `ExecuteBashTool` / `BashToolPolicy`, ADK 2.0 Agent Architectures, Collaborative Teams, Service Registration, Graph & Dynamic Workflows, and `google/agents-cli` (`~= 1.15.0`).
 - **Validation Command:** `python3 scripts/validate_skills.py .agents/skills` (must exit `0` with `PASS`, `<= 450` lines in `SKILL.md`, `< 1024` char folded `description: >-`, zero orphan references, zero 2-hop reference links, and zero hardcoded workstation paths).
 
 ---
@@ -19,7 +19,7 @@ Every refresh pass MUST start from these two canonical seed entrypoints:
 
 ## 2. Complete Tier-1 & Tier-2 Upstream Source Registry
 
-### 2.1 Google ADK Core, Models & Migration (`adk-core-and-setup.md`)
+### 2.1 Google ADK Core, Models & Setup (`adk-core-and-setup.md`)
 
 | Canonical Upstream URL | Refresh Endpoint (`.md` / Raw) | Feeds Local File |
 |---|---|---|
@@ -31,7 +31,6 @@ Every refresh pass MUST start from these two canonical seed entrypoints:
 | `https://adk.dev/get-started/java/` | `https://adk.dev/get-started/java/index.md` | `references/adk-core-and-setup.md` |
 | `https://adk.dev/get-started/kotlin/` | `https://adk.dev/get-started/kotlin/index.md` | `references/adk-core-and-setup.md` |
 | `https://adk.dev/get-started/google-cloud/` | `https://adk.dev/get-started/google-cloud/index.md` | `references/adk-core-and-setup.md` |
-| `https://adk.dev/get-started/migrate/` | `https://adk.dev/get-started/migrate/index.md` | `references/adk-core-and-setup.md` |
 | `https://adk.dev/2.0/` | `https://adk.dev/2.0/index.md` | `references/adk-core-and-setup.md`, `references/agent-architectures-and-workflows.md`, `references/graph-and-dynamic-workflows.md`, `SKILL.md` |
 | `https://adk.dev/agents/models/google-gemini/` | `https://adk.dev/agents/models/google-gemini/index.md` | `references/adk-core-and-setup.md`, `SKILL.md` |
 | `https://docs.cloud.google.com/gemini-enterprise-agent-platform/build/agent-garden` | `https://docs.cloud.google.com/gemini-enterprise-agent-platform/build/agent-garden.md.txt` | `references/agents-cli-lifecycle.md` |
@@ -60,8 +59,6 @@ Every refresh pass MUST start from these two canonical seed entrypoints:
 | `https://adk.dev/agents/service-registration/` | `https://adk.dev/agents/service-registration/index.md` | `references/agent-architectures-and-workflows.md`, `SKILL.md` |
 | `https://adk.dev/workflows/` | `https://adk.dev/workflows/index.md` | `references/agent-architectures-and-workflows.md`, `SKILL.md` |
 | `https://adk.dev/workflows/collaboration/` | `https://adk.dev/workflows/collaboration/index.md` | `references/agent-architectures-and-workflows.md`, `SKILL.md` |
-| `https://adk.dev/agents/workflow-agents/` | `https://adk.dev/agents/workflow-agents/index.md` | `references/agent-architectures-and-workflows.md`, `references/adk-core-and-setup.md`, `SKILL.md` |
-| `https://adk.dev/agents/routing/` | `https://adk.dev/agents/routing/index.md` | `references/agent-architectures-and-workflows.md`, `SKILL.md` |
 | `https://adk.dev/workflows/patterns/` | `https://adk.dev/workflows/patterns/index.md` | `references/agent-architectures-and-workflows.md`, `SKILL.md` |
 
 ### 2.3 ADK 2.0 Graph & Dynamic Workflows (`graph-and-dynamic-workflows.md`)
@@ -126,14 +123,13 @@ Every refresh pass MUST start from these two canonical seed entrypoints:
 Run this checklist quarterly or after any minor/major release of `google-adk`, `google-cloud-aiplatform`, or `google-agents-cli`:
 
 1. **`references/adk-core-and-setup.md`:**
-   - Check `https://adk.dev/2.0/index.md` and `https://adk.dev/agents/models/google-gemini/index.md` for new ADK 2.x releases, breaking changes, or regional model ID updates.
-   - Verify whether `GOOGLE_GENAI_USE_ENTERPRISE` / `GOOGLE_GENAI_USE_VERTEXAI` defaults or `agentplatform` vs `vertexai` SDK minimum versions (`>= 1.154.0`) changed.
+   - Check `https://adk.dev/2.0/index.md` and `https://adk.dev/agents/models/google-gemini/index.md` for new ADK 2.x releases, design contract updates, or regional model ID updates.
+   - Verify whether `GOOGLE_GENAI_USE_ENTERPRISE=TRUE` defaults, `from agentplatform.frameworks import AdkApp`, or `google-cloud-agentplatform` (`>= 2.0.1`) / `google-cloud-aiplatform` (`>= 1.154.0`) SDK minimum versions changed.
    - Re-check `AdkApp` method signatures and `user_id` limits (`128` chars) in `create-an-adk-agent.md.txt`.
 2. **`references/agent-architectures-and-workflows.md`:**
    - Check `https://adk.dev/agents/managed-agents/index.md` for `ManagedAgent` GA graduation, regional support beyond `global`, non-streaming/polling support, or `RemoteMcpServer` API changes.
    - Check `https://adk.dev/agents/service-registration/index.md` for new service types beyond `session`/`artifact`/`memory`/`task_store` or discovery/precedence changes (`services.yaml` vs `services.py`).
    - Check `https://adk.dev/workflows/collaboration/index.md` and `https://adk.dev/workflows/patterns/index.md` to verify whether `mode="task"` has been re-enabled in Python graph workflows, whether `Workflow` can be nested as an `LlmAgent` `sub_agent`, or whether `SecurityPlugin`/`BasePolicyEngine` expanded beyond TypeScript.
-   - Check `https://adk.dev/agents/routing/index.md` and `https://adk.dev/agents/workflow-agents/index.md` for `RoutedAgent` Python/Go availability and removal timelines for `SequentialAgent`/`ParallelAgent`/`LoopAgent`.
 3. **`references/graph-and-dynamic-workflows.md`:**
    - Check `https://adk.dev/graphs/index.md` and `https://adk.dev/graphs/routes/index.md` for graph `LlmAgent` mode rules, `JoinNode` requirements, single-terminal-output `ValueError` rules, and third-party integration compatibility updates.
    - Check `https://adk.dev/graphs/data-handling/index.md` for single-`Event(output=...)` enforcement and Python `{key}` state-only templating vs TS `{Class.field}` / `<Class.field from node>`.

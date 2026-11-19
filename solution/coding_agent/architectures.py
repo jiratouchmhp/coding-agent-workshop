@@ -1,8 +1,8 @@
 """ADK 2.0 Multi-Agent, Declarative Graph, Dynamic Workflow, and ManagedAgent builders.
 
 Reference solution track implementing the full ADK 2.0 architecture progression
-while keeping ``AGENT_ARCHITECTURE=simple`` (single ``LlmAgent``) 100% backward
-compatible with Labs 2-7 and ADK ``1.29.x``.
+while keeping ``AGENT_ARCHITECTURE=simple`` (single ``LlmAgent``) as the default
+so Labs 2-7 run unchanged.
 
 Verified ADK 2.0 Python design rules encoded in this module:
 - **Collaborative agent modes (ADK Python v2.0.0):** Set ``mode="single_turn"``
@@ -39,17 +39,29 @@ import os
 import shutil
 import sys
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from typing import Any
 
+from google.adk import Context, Event, Workflow
+from google.adk.agents import LlmAgent
+from google.adk.events import RequestInput
+from google.adk.plugins.global_instruction_plugin import GlobalInstructionPlugin
+from google.adk.workflow import JoinNode, NodeTimeoutError, RetryConfig, node
 from pydantic import BaseModel, Field
 
 from coding_agent.config import Settings, get_settings
 
-try:
-    from google.adk import Context
-except ImportError:  # ADK 1.x fallback so `AGENT_ARCHITECTURE=simple` stays importable
-    Context = Any  # type: ignore[misc, assignment]
+__all__ = [
+    "ApprovalDecision",
+    "CheckOutcome",
+    "CodeReviewReport",
+    "Context",
+    "GLOBAL_ENGINEERING_GUARDRAILS",
+    "build_collaborative_coding_team",
+    "build_dynamic_coding_workflow",
+    "build_global_instruction_plugin",
+    "build_graph_coding_workflow",
+    "build_optional_managed_agent",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -90,63 +102,6 @@ class CodeReviewReport(BaseModel):
     issues: list[str] = Field(
         default_factory=list,
         description="Concrete defects, missing tests, or security concerns to fix.",
-    )
-
-
-@dataclass(frozen=True)
-class _AdkV2Runtime:
-    """Lazy bundle of ADK 2.0+ workflow, event, and node primitives."""
-
-    Context: Any
-    Event: Any
-    JoinNode: Any
-    NodeTimeoutError: Any
-    RequestInput: Any
-    RetryConfig: Any
-    Workflow: Any
-    node: Any
-
-
-def _require_adk_v2() -> _AdkV2Runtime:
-    """Verify ADK Python >= 2.0.0 workflow primitives are installed and return them.
-
-    This lazy guard allows ``AGENT_ARCHITECTURE=simple`` to run cleanly even on
-    ADK ``1.29.x``, while raising an actionable upgrade hint whenever
-    ``collaborative``, ``graph``, or ``dynamic`` is selected on ADK ``< 2.0.0``.
-    """
-    try:
-        import google.adk
-
-        adk_version = getattr(google.adk, "__version__", "unknown")
-    except ImportError as exc:
-        raise RuntimeError(
-            "google-adk is not installed. Install ADK 2.0+ with:\n"
-            '  pip install "google-adk[a2a,agent-identity,mcp]>=2.0.0"'
-        ) from exc
-
-    try:
-        from google.adk import Context as AdkContext
-        from google.adk import Event, Workflow
-        from google.adk.events import RequestInput
-        from google.adk.workflow import JoinNode, NodeTimeoutError, RetryConfig, node
-    except ImportError as exc:
-        raise RuntimeError(
-            "ADK Python >= 2.0.0 is required for AGENT_ARCHITECTURE in "
-            "{collaborative, graph, dynamic} "
-            f"(detected google-adk=={adk_version}). Upgrade with:\n"
-            '  pip install "google-adk[a2a,agent-identity,mcp]>=2.0.0"\n'
-            "Or set AGENT_ARCHITECTURE=simple in .env to stay on ADK 1.29.x."
-        ) from exc
-
-    return _AdkV2Runtime(
-        Context=AdkContext,
-        Event=Event,
-        JoinNode=JoinNode,
-        NodeTimeoutError=NodeTimeoutError,
-        RequestInput=RequestInput,
-        RetryConfig=RetryConfig,
-        Workflow=Workflow,
-        node=node,
     )
 
 
@@ -204,29 +159,13 @@ async def _invoke_optional_after_agent_callback(
 def build_global_instruction_plugin(
     global_instruction: str = GLOBAL_ENGINEERING_GUARDRAILS,
     name: str = "enterprise_coding_guardrails",
-) -> Any | None:
+) -> GlobalInstructionPlugin:
     """Build ADK's ``GlobalInstructionPlugin`` for App-wide engineering guardrails.
 
     Applies consistent instructions across the coordinator and all subagents via
-    ``App(plugins=[...])`` (replaces the deprecated ``LlmAgent.global_instruction``).
-    Gracefully returns ``None`` if the installed ADK build does not expose
-    ``GlobalInstructionPlugin``.
+    ``App(plugins=[...])``.
     """
-    plugin_cls: Any | None = None
-    try:
-        from google.adk.plugins.global_instruction_plugin import GlobalInstructionPlugin
-
-        plugin_cls = GlobalInstructionPlugin
-    except ImportError:
-        try:
-            from google.adk.plugins import GlobalInstructionPlugin
-
-            plugin_cls = GlobalInstructionPlugin
-        except ImportError as exc:
-            logger.debug("GlobalInstructionPlugin unavailable (%s); skipping plugin.", exc)
-            return None
-
-    return plugin_cls(global_instruction=global_instruction, name=name)
+    return GlobalInstructionPlugin(global_instruction=global_instruction, name=name)
 
 
 def _pytest_command() -> list[str]:
@@ -454,8 +393,6 @@ def build_collaborative_coding_team(
         NOTE: ``mode="task"`` agents must be leaf agents and are disabled inside
         ADK Python v2.0.0 graph-based ``Workflow`` objects.
     """
-    _require_adk_v2()
-    from google.adk.agents import LlmAgent
     from google.genai import types
 
     implementer_kwargs: dict[str, Any] = {
@@ -586,8 +523,6 @@ def build_graph_coding_workflow(
       ``Event(message=..., output=..., state={"fix_attempts": 0, "latest_findings": ""})``
       (single terminal output rule + per-turn state reset for multi-turn sessions).
     """
-    adk_v2 = _require_adk_v2()
-    from google.adk.agents import LlmAgent
     from google.genai import types
 
     coder_kwargs: dict[str, Any] = {
@@ -616,13 +551,13 @@ def build_graph_coding_workflow(
     )
     coder_agent = LlmAgent(**coder_kwargs)
 
-    check_retry_config = adk_v2.RetryConfig(
+    check_retry_config = RetryConfig(
         max_attempts=3,
         initial_delay=1.0,
-        exceptions=[TimeoutError, adk_v2.NodeTimeoutError],
+        exceptions=[TimeoutError, NodeTimeoutError],
     )
 
-    @adk_v2.node(
+    @node(
         name="run_pytest_node",
         retry_config=check_retry_config,
         timeout=30.0,
@@ -638,7 +573,7 @@ def build_graph_coding_workflow(
             empty_exit_code_message="No pytest tests collected in workspace.",
         )
 
-    @adk_v2.node(
+    @node(
         name="run_ruff_node",
         retry_config=check_retry_config,
         timeout=30.0,
@@ -654,9 +589,9 @@ def build_graph_coding_workflow(
             empty_exit_code_message="ruff check passed with zero violations.",
         )
 
-    verify_join = adk_v2.JoinNode(name="verify_join")
+    verify_join = JoinNode(name="verify_join")
 
-    @adk_v2.node(name="verdict_router")
+    @node(name="verdict_router")
     async def verdict_router(
         ctx: Context,
         node_input: dict[str, Any],
@@ -677,7 +612,7 @@ def build_graph_coding_workflow(
                 f"Automated verification failed on attempt {next_attempt}/{settings.max_fix_rounds}.\n"
                 f"Fix all issues below without regressing existing functionality:\n\n{findings}"
             )
-            return adk_v2.Event(
+            return Event(
                 route="NEEDS_FIX",
                 output=fix_prompt,
                 state={
@@ -693,7 +628,7 @@ def build_graph_coding_workflow(
             "findings": findings or "All checks (pytest + ruff) passed cleanly.",
         }
         route_key = "NEEDS_APPROVAL" if settings.enable_hitl_approval else "PASS"
-        return adk_v2.Event(
+        return Event(
             route=route_key,
             output=summary_payload,
             state={
@@ -703,11 +638,11 @@ def build_graph_coding_workflow(
             },
         )
 
-    @adk_v2.node(name="request_human_approval", rerun_on_resume=False)
+    @node(name="request_human_approval", rerun_on_resume=False)
     async def request_human_approval(ctx: Context, node_input: Any):
         """Pause the graph workflow for structured human approval before finalizing."""
         del ctx
-        yield adk_v2.RequestInput(
+        yield RequestInput(
             message=(
                 "Verification completed. Review the summary payload and respond with an "
                 "ApprovalDecision (`approved`: bool, `reviewer_notes`: str) to continue."
@@ -716,7 +651,7 @@ def build_graph_coding_workflow(
             response_schema=ApprovalDecision,
         )
 
-    @adk_v2.node(name="finalize_report")
+    @node(name="finalize_report")
     async def finalize_report(
         ctx: Context,
         node_input: Any,
@@ -735,7 +670,7 @@ def build_graph_coding_workflow(
         await _invoke_optional_after_agent_callback(callbacks, ctx)
         # Reset per-turn workflow state on terminal completion so multi-turn sessions
         # start Turn 2+ fresh at `fix_attempts=0` while preserving state across HITL pauses.
-        return adk_v2.Event(
+        return Event(
             message=report,
             output=report,
             state={
@@ -744,7 +679,7 @@ def build_graph_coding_workflow(
             },
         )
 
-    return adk_v2.Workflow(
+    return Workflow(
         name="coding_agent",
         description=(
             "ADK 2.0 declarative graph workflow combining coder_agent, parallel "
@@ -789,8 +724,6 @@ def build_dynamic_coding_workflow(
        relying on ADK 2.0 automatic checkpointing to skip already-completed child
        runs upon resume.
     """
-    adk_v2 = _require_adk_v2()
-    from google.adk.agents import LlmAgent
     from google.genai import types
 
     coder_kwargs: dict[str, Any] = {
@@ -838,13 +771,13 @@ def build_dynamic_coding_workflow(
     )
     fixer_agent = LlmAgent(**fixer_kwargs)
 
-    check_retry_config = adk_v2.RetryConfig(
+    check_retry_config = RetryConfig(
         max_attempts=3,
         initial_delay=1.0,
-        exceptions=[TimeoutError, adk_v2.NodeTimeoutError],
+        exceptions=[TimeoutError, NodeTimeoutError],
     )
 
-    @adk_v2.node(
+    @node(
         name="run_pytest_node",
         retry_config=check_retry_config,
         timeout=30.0,
@@ -860,7 +793,7 @@ def build_dynamic_coding_workflow(
             empty_exit_code_message="No pytest tests collected in workspace.",
         )
 
-    @adk_v2.node(
+    @node(
         name="run_ruff_node",
         retry_config=check_retry_config,
         timeout=30.0,
@@ -876,11 +809,11 @@ def build_dynamic_coding_workflow(
             empty_exit_code_message="ruff check passed with zero violations.",
         )
 
-    @adk_v2.node(name="request_human_approval", rerun_on_resume=False)
+    @node(name="request_human_approval", rerun_on_resume=False)
     async def request_human_approval(ctx: Context, node_input: Any):
         """Leaf HITL node pausing for structured ApprovalDecision."""
         del ctx
-        yield adk_v2.RequestInput(
+        yield RequestInput(
             message=(
                 "Dynamic coding workflow completed automated checks. Submit an "
                 "ApprovalDecision (`approved`: bool, `reviewer_notes`: str) to finalize."
@@ -889,7 +822,7 @@ def build_dynamic_coding_workflow(
             response_schema=ApprovalDecision,
         )
 
-    @adk_v2.node(name="dynamic_coding_workflow", rerun_on_resume=True)
+    @node(name="dynamic_coding_workflow", rerun_on_resume=True)
     async def dynamic_coding_workflow(ctx: Context, node_input: str):
         """Programmatic ADK 2.0 orchestrator with bounded fix loop and HITL checkpointing."""
         code_summary = await ctx.run_node(coder_agent, node_input)
@@ -907,7 +840,7 @@ def build_dynamic_coding_workflow(
             attempts_used = attempt + 1
             # CRITICAL (ADK Python): `{code}` and `{findings}` in `fixer_agent.instruction`
             # are substituted from session state, NOT from `node_input`.
-            yield adk_v2.Event(
+            yield Event(
                 state={
                     "code": str(code_summary),
                     "findings": latest_findings,
@@ -945,7 +878,7 @@ def build_dynamic_coding_workflow(
         await _invoke_optional_after_agent_callback(callbacks, ctx)
         # Emit strictly ONE Event(output=...) per node execution and clear per-turn
         # fixer template keys so subsequent turns start clean.
-        yield adk_v2.Event(
+        yield Event(
             message=final_report,
             output=final_report,
             state={
@@ -955,7 +888,7 @@ def build_dynamic_coding_workflow(
             },
         )
 
-    return adk_v2.Workflow(
+    return Workflow(
         name="coding_agent",
         description=(
             "ADK 2.0 dynamic programmatic workflow using @node(rerun_on_resume=True), "
@@ -975,7 +908,7 @@ def build_optional_managed_agent(
     Connects to a Google-hosted first-party managed agent (for example,
     ``antigravity-preview-05-2026``) via the Managed Agents / Interactions API.
     With ``mode="single_turn"``, it can be added directly to a parent coordinator
-    ``LlmAgent.sub_agents`` as an inline tool (recommended over ``AgentTool``).
+    ``LlmAgent.sub_agents`` as an inline tool.
 
     Verified ADK Python v2.4.0 Preview limitations (``adk.dev/agents/managed-agents/``):
     - **Agent Platform backend is ``global``-only:** The Managed Agents API is served

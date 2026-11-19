@@ -89,9 +89,9 @@ One design principle anchors the entire workshop: **never run untrusted LLM-gene
 
 Real enterprise coding workloads rarely stay a single monolithic prompt forever. Before scaling execution to remote BYOC Sandboxes in Lab 2, **[Lab 1](01-LAB-SETUP-AND-BUILD-ADK.md)** establishes the full **Google ADK 2.0** architectural progression — controlled via a single `AGENT_ARCHITECTURE` environment variable (`simple` default so Labs 2–7 remain 100% backward compatible):
 
-1. **Simple Agent (`AGENT_ARCHITECTURE=simple` — Part A):** A single `LlmAgent` wired with `EnvironmentToolset(LocalEnvironment)`. Fast to iterate, ideal until prompt complexity, context limits, code modularity, or deterministic test/lint gates justify splitting responsibilities. *(We also contrast `LlmAgent` with ADK Python v2.4.0 Preview [`ManagedAgent`](https://adk.dev/agents/managed-agents/) and introduce ADK v1.34.0 [`services.yaml` / `services.py`](https://adk.dev/agents/service-registration/) custom backend registration.)*
+1. **Simple Agent (`AGENT_ARCHITECTURE=simple` — Part A):** A single `LlmAgent` wired with `EnvironmentToolset(LocalEnvironment)`. Fast to iterate, ideal until prompt complexity, context limits, code modularity, or deterministic test/lint gates justify splitting responsibilities. *(We also contrast `LlmAgent` with ADK Python v2.4.0 Preview [`ManagedAgent`](https://adk.dev/agents/managed-agents/) and introduce ADK 2.0+ [`services.yaml` / `services.py`](https://adk.dev/agents/service-registration/) custom backend registration.)*
 2. **Collaborative Agent Team (`AGENT_ARCHITECTURE=collaborative` — Part B):** Coordinator `LlmAgent` delegating across isolated session branches to mode-scoped subagents (`mode="single_turn"` for `code_implementer`/`code_reviewer` and leaf-only `mode="task"` for `requirements_clarifier`), governed by `GlobalInstructionPlugin`.
-3. **Declarative Graph Workflow (`AGENT_ARCHITECTURE=graph` — Part B):** Deterministic ADK 2.0 `Workflow(edges=...)` combining LLM reasoning with parallel `@node` `pytest`/`ruff` checks (`RetryConfig` + per-attempt timeout), `JoinNode` fan-in, bounded `Event(route=...)` fix loops, and `RequestInput` HITL pauses — replacing deprecated `SequentialAgent`/`ParallelAgent`/`LoopAgent`.
+3. **Declarative Graph Workflow (`AGENT_ARCHITECTURE=graph` — Part B):** Deterministic ADK 2.0 `Workflow(edges=...)` combining LLM reasoning with parallel `@node` `pytest`/`ruff` checks (`RetryConfig` + per-attempt timeout), `JoinNode` fan-in, bounded `Event(route=...)` fix loops, and `RequestInput` HITL pauses.
 4. **Dynamic Checkpointed Workflow (`AGENT_ARCHITECTURE=dynamic` — Part B):** Programmatic `@node(rerun_on_resume=True)` async Python orchestration (`for` loops, `asyncio.gather(..., use_sub_branch=True)`, and automatic checkpoint replay across HITL pauses).
 
 Because all four architectures share the **exact same `EnvironmentToolset`**, moving from `LocalEnvironment` (Lab 1) to `AgentPlatformSandboxEnvironment` (Lab 2) and deploying to Agent Runtime (Lab 3) requires **zero changes** to your workflow graph or container contract!
@@ -273,7 +273,7 @@ This repository ships with **6 modular, production-tested Antigravity skills** u
 
 Gemini Enterprise Agent Platform documentation is transitioning from the legacy Vertex AI Python SDK namespace (`vertexai.Client` in `google-cloud-aiplatform[agent_engines]`) to the dedicated Agent Platform namespace (`agentplatform.Client` in `google-cloud-agentplatform>=2.0.1`, also re-exported by `google-cloud-aiplatform>=1.154.0`).
 
-- **Environment variable:** Set `GOOGLE_GENAI_USE_ENTERPRISE=TRUE` (replaces legacy `GOOGLE_GENAI_USE_VERTEXAI=TRUE`; older ADK versions recognize the legacy variable).
+- **Environment variable:** Set `GOOGLE_GENAI_USE_ENTERPRISE=TRUE` as the standard enterprise environment configuration for Agent Platform and ADK 2.0+.
 - **Starter & Solution compatibility:** Our workshop modules default to `agentplatform.Client` with a clean compatibility fallback to `vertexai.Client` so your code runs reliably across SDK versions.
 
 ---

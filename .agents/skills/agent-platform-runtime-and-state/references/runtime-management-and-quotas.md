@@ -6,11 +6,10 @@ Operational reference for managing deployed **Agent Runtime** (`reasoningEngines
 
 ## 1. SDK & CLI Matrix
 
-- **Canonical SDK:** `agentplatform.Client(project=..., location=...)` (`google-cloud-agentplatform>=2.0.1`, also bundled in `google-cloud-aiplatform>=1.154.0`). Pass `http_options={"api_version": "v1beta1"}` for **Revisions**, **Traffic Splitting**, and **Agent Identity**.
-- **Legacy SDK (`vertexai`):** `vertexai.Client(...)` / `client.agent_engines.*` (`google-cloud-aiplatform[agent_engines,adk]>=1.144` for BYOC `container_spec`; `>=1.126.1` for console Observability toggles).
+- **Canonical SDK:** `agentplatform.Client(project=..., location=...)` (`google-cloud-agentplatform>=2.0.1`, also bundled in `google-cloud-aiplatform>=1.154.0`), supporting BYOC `container_spec`, console Observability toggles, and full runtime lifecycle CRUD via `client.runtimes.*`. Pass `http_options={"api_version": "v1beta1"}` for **Revisions**, **Traffic Splitting**, and **Agent Identity**.
 - **CLI Boundaries:** **No `gcloud` deploy CLI exists** for Agent Runtime (only `gcloud ai reasoning-engines describe` and `gcloud beta ai reasoning-engines add-iam-policy-binding`). Use Terraform, `agentplatform` SDK, REST, `adk deploy agent_engine`, `adkgo deploy agentengine`, or `agents-cli deploy`.
 
-### Six SDK/REST Deployment Modes
+### Five SDK/REST Deployment Modes
 
 | Mode | Languages | Archive / Bucket Requirement | Key `client.runtimes.create(config=...)` Fields |
 |---|---|---|---|
@@ -19,7 +18,6 @@ Operational reference for managing deployed **Agent Runtime** (`reasoningEngines
 | **3. Local Source** | Python | `<= 8 MB` inline archive, no GCS | `source_packages`, `entrypoint_module`, `entrypoint_object`, `requirements_file`, `class_methods` |
 | **4. Dockerfile (BYOD)** | Any | `<= 8 MB` archive with root `./Dockerfile`, no GCS | `source_packages: [..., "Dockerfile"]`, `image_spec: {}`, `class_methods` |
 | **5. Prebuilt Image (BYOC)** | Any | Artifact Registry image | `container_spec: {"image_uri": "..."}`, `class_methods` |
-| **6. Python Object (Pickle)** | Python | GCS `staging_bucket` | `agent=local_agent`, `requirements`, `extra_packages`, `build_options: {"installation_scripts": [...]}`, `gcs_dir_name` |
 
 > **PSC-I via SDK:** Pass `"psc_interface_config": {"network_attachment": "...", "dns_peering_configs": [{"domain": "...", "target_project": "...", "target_network": "..."}]}` in `config`.
 
@@ -101,7 +99,7 @@ client.runtimes.cancel_query_job(
 Every agent creation or update to a **versioned field** produces an immutable revision (`ACTIVE` -> `ARCHIVED`, irreversible).
 
 - **Versioned fields (create a new revision):**
-  - `PackageSpec`: `pickleObjectGcsUri`, `dependencyFilesGcsUri`, `requirementsGcsUri`, `pythonVersion`
+  - `ContainerSpec`: `imageUri`
   - `DeploymentSpec`: `env[]`, `secretEnv[]`, `firstPartyImageOverride`, `agentServerMode`, `pscInterfaceConfig`, `minInstances`, `maxInstances`, `resourceLimits`, `containerConcurrency`
   - `SourceCodeSpec`: `source`, `languageSpec`
   - Top-level `spec`: `classMethods[]`, `agentFramework`, `identityType`, `agentCard[]`

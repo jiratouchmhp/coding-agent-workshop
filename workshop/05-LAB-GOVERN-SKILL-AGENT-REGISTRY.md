@@ -280,16 +280,16 @@ Open [`starter/coding_agent/tools/registry_loader.py`](../starter/coding_agent/t
 > [!CAUTION]
 > **Mandatory Install Extra for `AgentRegistry`:** `google.adk.integrations.agent_registry` imports `a2a-sdk` and the Agent Identity auth provider at **module scope**. Importing `AgentRegistry` on bare `pip install google-adk` immediately raises **`ImportError`**! Always install:
 > ```bash
-> pip install --upgrade "google-adk[a2a,agent-identity,mcp]"   # >= 1.29.0 recommended for Auth Manager MCP
-> # Minimum required for AgentRegistry without MCP: "google-adk[a2a,agent-identity]"
+> pip install --upgrade "google-adk[a2a,agent-identity,mcp]>=2.0.0"
+> # Minimum required for AgentRegistry without MCP: "google-adk[a2a,agent-identity]>=2.0.0"
 > ```
 
 ### Step C2: Implement `build_skill_registry_toolset()` (`GCPSkillRegistry` + `SkillToolset`)
 
-`SkillToolset` (ADK v1.25.0+) implements **3-level Progressive Disclosure** (L1 metadata -> L2 `SKILL.md` instructions via `load_skill` -> L3 `references/`/`assets/`/`scripts/` via `load_skill_resource` and `run_skill_script`), exposing up to 6 built-in tools: `list_skills`, `search_skills` (added when `registry=` is supplied), `load_skill`, `unload_skill`, `load_skill_resource`, and `run_skill_script`.
+`SkillToolset` (ADK Python 2.0+) implements **3-level Progressive Disclosure** (L1 metadata -> L2 `SKILL.md` instructions via `load_skill` -> L3 `references/`/`assets/`/`scripts/` via `load_skill_resource` and `run_skill_script`), exposing up to 6 built-in tools: `list_skills`, `search_skills` (added when `registry=` is supplied), `load_skill`, `unload_skill`, `load_skill_resource`, and `run_skill_script`.
 
 Key verified rules to implement in `build_skill_registry_toolset()`:
-1. **Keyword-Only Constructor:** `GCPSkillRegistry(project_id=..., location=...)` (ADK v1.27.0+; falls back to `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` and raises `ValueError` if missing).
+1. **Keyword-Only Constructor:** `GCPSkillRegistry(project_id=..., location=...)` (ADK Python 2.0+; falls back to `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` and raises `ValueError` if missing).
 2. **Endpoint & Default-Revision Awareness:** Latest `google/adk-python` `main` (`gcp_skill_registry.py`) calls `https://agentregistry.googleapis.com/v1alpha` (overridable via the `AGENT_REGISTRY_ENDPOINT` environment variable) and automatically strips `x-goog-*` headers across 302 GCS signed-URL redirects. Ensure `private-secure-code-review` from **Part B2** has `--default-revision` and `--target-state=ACTIVE` configured—or pass `enable_remote_registry=False` to exercise local-only fallback cleanly without Agent Registry access.
 3. **Collision Prevention & Session Caching:** Local skills in `skills=[...]` automatically shadow registry skills with identical names; `load_skill` caches unpacked skill instructions in session state (`_adk_activated_skill_{agent_name}`).
 4. **Mutual Exclusivity:** `SkillToolset` accepts **`environment=`** OR **`code_executor=`**, **never both** (passing both raises `ValueError`!).
@@ -344,7 +344,7 @@ def build_skill_registry_toolset(
 
 ### Step C3: Implement `build_agent_registry_integrations()` (`AgentRegistry` + Auth Providers)
 
-`AgentRegistry` (ADK v1.26.0+) discovers registered A2A sub-agents, MCP servers, and endpoints using either short relative names (`"agents/AGENT_ID"`, `"mcpServers/SERVER_ID"`) or full resource names. Wire all **three verified authentication patterns** cleanly:
+`AgentRegistry` (ADK Python 2.0+) discovers registered A2A sub-agents, MCP servers, and endpoints using either short relative names (`"agents/AGENT_ID"`, `"mcpServers/SERVER_ID"`) or full resource names. Wire all **three verified authentication patterns** cleanly:
 
 ```python
 import google.auth

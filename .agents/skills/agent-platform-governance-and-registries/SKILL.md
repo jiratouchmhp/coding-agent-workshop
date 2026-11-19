@@ -27,7 +27,7 @@ Author, validate, register, consume, and govern **Skills**, **MCP servers**, and
 ```bash
 # ADK consumption (MUST include a2a + agent-identity extras to avoid ImportError!)
 # Use google-cloud-agentplatform>=2.0.1 (canonical Agent Platform SDK) + google-cloud-aiplatform>=1.154.0 (Skill Registry `skill_id` kwarg + re-export)
-pip install --upgrade "google-adk[a2a,agent-identity,mcp]" "google-cloud-agentplatform>=2.0.1" "google-cloud-aiplatform>=1.154.0"
+pip install --upgrade "google-adk[a2a,agent-identity,mcp]>=2.0.0" "google-cloud-agentplatform>=2.0.1" "google-cloud-aiplatform>=1.154.0"
 
 # gcloud CLI & ADC
 gcloud components update && gcloud components install alpha
@@ -51,7 +51,7 @@ What do you need to do?
 │       -> See references/agent-registry-and-discovery.md
 ├── Dynamically search/load skills or connect to A2A subagents / MCP servers from ADK code
 │   ├── Skills -> `GCPSkillRegistry` + `SkillToolset` (6 built-in tools; mind sandbox egress!)
-│   └── A2A / MCP -> `AgentRegistry` (`google-adk[a2a,agent-identity,mcp]>=1.29.0`)
+│   └── A2A / MCP -> `AgentRegistry` (`google-adk[a2a,agent-identity,mcp]>=2.0.0`)
 │       -> See references/adk-consuming-registries.md
 ├── Govern runtime behavior (intercept `load_skill` / `run_skill_script` / supply chain via NLCs),
 │   provision SPIFFE Agent Identity, or enforce Agent Gateway + IAM UAPs + Model Armor + Dry-Run
@@ -83,7 +83,7 @@ What do you need to do?
    - *Why:* The first API call asynchronously triggers ingestion of `gcp-skill-registry` (it appears starting on call #2). Deleting a `SKILL_ID` locks reuse for at least 24 hours (and Create docs warn of permanent reservation) — always use `UpdateSkill` instead.
 3. **Always use `private-SKILL_ID` after creating an Agent Registry standalone skill, and pass `-L` on REST downloads.**
    - *Why:* Agent Registry auto-assigns user skills to the `private` publisher and prepends `private-`. `?alt=media` returns a 302 redirect to a GCS signed URL (`curl -L` required; custom `httpx` clients must also strip `x-goog-*` headers on cross-origin redirect to avoid signature mismatch).
-4. **Install `google-adk[a2a,agent-identity,mcp]` (`>= 1.29.0`) — never core-only `google-adk` when importing `AgentRegistry`.**
+4. **Install `google-adk[a2a,agent-identity,mcp]>=2.0.0` — never core-only `google-adk` when importing `AgentRegistry`.**
    - *Why:* `google.adk.integrations.agent_registry` imports `a2a-sdk` and `agent-identity` at module scope and raises `ImportError` without both extras.
 5. **Authenticate `RemoteA2aAgent` via `httpx.AsyncClient(auth=...)`, NEVER via `AgentRegistry(header_provider=...)`, and call `.clone()` for shared subagents.**
    - *Why:* `header_provider` applies **only** to `McpToolset` (never Agent Registry API or `RemoteA2aAgent`). Match the bearer token to the target: OAuth + `X-Goog-User-Project` for `*.googleapis.com`, **OIDC ID token** (`fetch_id_token`) for `*.run.app` / IAP. A `RemoteA2aAgent` can only have one parent `LlmAgent` unless cloned.

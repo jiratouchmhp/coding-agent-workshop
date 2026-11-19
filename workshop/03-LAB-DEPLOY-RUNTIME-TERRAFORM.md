@@ -78,7 +78,7 @@ Verify the following values in `.env`:
 > **No `gcloud` Deploy Command for Agent Runtime:** Unlike Cloud Run, there is **no `gcloud` CLI command to deploy an Agent Runtime instance** (`gcloud ai reasoning-engines` only supports `describe` and `beta ... add-iam-policy-binding`). Deploy via **`agents-cli deploy`**, **Terraform (`google_vertex_ai_reasoning_engine`)**, or the **Python/REST SDK (`agentplatform.Client`)**.
 
 > [!NOTE]
-> **SDK Namespace Convention:** New workshop code standardizes on **`agentplatform.Client`** (`google-cloud-agentplatform>=2.0.1`, also provided by `google-cloud-aiplatform>=1.154.0`) and `from agentplatform.frameworks import AdkApp`. Legacy `vertexai.Client` / `from vertexai.agent_engines import AdkApp` examples still appear in some upstream docs (such as `package_spec` staging) and remain compatible.
+> **SDK Namespace Convention:** This workshop standardizes on **`agentplatform.Client`** (`google-cloud-agentplatform>=2.0.1`, also re-exported by `google-cloud-aiplatform>=1.154.0`) and **`from agentplatform.frameworks import AdkApp`**.
 
 ---
 
@@ -167,10 +167,7 @@ Before running `terraform plan` or `terraform apply` with `container_spec`, you 
        from coding_agent.agent import app as adk_app
        from coding_agent.agent import root_agent
 
-       try:
-           from agentplatform.frameworks import AdkApp
-       except ImportError:
-           from vertexai.agent_engines import AdkApp
+       from agentplatform.frameworks import AdkApp
 
        init_params = inspect.signature(AdkApp.__init__).parameters
        if "app" in init_params:
@@ -463,8 +460,6 @@ When you do not want a separate Artifact Registry push step in CI, Agent Runtime
 #   class_methods = jsonencode(local.adk_class_methods)
 # }
 ```
-
-*(A third Terraform option, **`package_spec`**, uploads a `cloudpickle`-serialized `AdkApp` and `requirements.txt` to GCS via `pickle_object_gcs_uri` and `requirements_gcs_uri`. Prefer `container_spec` or `source_code_spec` + `image_spec {}` for deterministic enterprise builds and non-Python portability.)*
 
 #### 4. Canonical `starter/terraform/outputs.tf` (`.id` vs. `.name` Trap!)
 

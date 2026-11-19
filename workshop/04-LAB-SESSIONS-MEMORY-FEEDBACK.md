@@ -138,7 +138,7 @@ def build_adk_session_service(
 
 > [!TIP]
 > **Combining Agent Platform Services with Custom Enterprise Stores (Lab 1 Service Registration):**
-> While this workshop uses Google-managed `VertexAiSessionService` and `VertexAiMemoryBankService` (invoked via `agentengine://`), teams migrating from existing internal databases or custom A2A task stores can plug in custom URI schemes (`mysession://`, `mymemory://`, `myartifact://`, `mytaskstore://`) using Lab 1's **ADK Python v1.34.0 [Service Registration](https://adk.dev/agents/service-registration/)** templates ([`starter/services.yaml`](../starter/services.yaml) and [`starter/services.py`](../starter/services.py)). Remember that `services.py` overrides `services.yaml` on duplicate schemes, and per the [ADK 2.0 compatibility guide](https://adk.dev/2.0/), rigid custom SQL `BaseSessionService` schemas must add columns for ADK 2.0's `node_info` and `output` `Event` fields (JSON-blob stores require no schema changes).
+> While this workshop uses Google-managed `VertexAiSessionService` and `VertexAiMemoryBankService` (invoked via `agentengine://`), teams migrating from existing internal databases or custom A2A task stores can plug in custom URI schemes (`mysession://`, `mymemory://`, `myartifact://`, `mytaskstore://`) using Lab 1's **ADK Python 2.0+ [Service Registration](https://adk.dev/agents/service-registration/)** templates ([`starter/services.yaml`](../starter/services.yaml) and [`starter/services.py`](../starter/services.py)). Remember that `services.py` overrides `services.yaml` on duplicate schemes, and per the [ADK 2.0 compatibility guide](https://adk.dev/2.0/), rigid custom SQL `BaseSessionService` schemas must add columns for ADK 2.0's `node_info` and `output` `Event` fields (JSON-blob stores require no schema changes).
 
 ### Step A2: Implement `SessionLifecycleManager` (Direct `agentplatform` SDK)
 
@@ -525,7 +525,7 @@ Open [`starter/coding_agent/callbacks/telemetry_and_feedback.py`](../starter/cod
 
 ### Step C1: OpenTelemetry (OTel) Tracing Configuration
 
-Confirm these **three** environment variables are set on your Agent Runtime deployment (replacing the deprecated `enable_tracing=True` flag for ADK):
+Configure these **three** OpenTelemetry environment variables on your Agent Runtime deployment:
 
 ```bash
 GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY="true"

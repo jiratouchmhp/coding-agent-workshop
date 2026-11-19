@@ -19,18 +19,13 @@ from pathlib import Path
 from typing import Any
 
 from google.adk.agents import LlmAgent
-from google.adk.apps import App
+from google.adk.apps import App, ResumabilityConfig
 from google.adk.environment import BaseEnvironment
 from google.adk.models import Gemini
 from google.adk.tools.environment import EnvironmentToolset
 from google.genai import types
 
 from coding_agent.config import Settings, get_settings
-
-try:
-    from google.adk.apps import ResumabilityConfig
-except ImportError:  # Fallback for minimal ADK builds without ResumabilityConfig
-    ResumabilityConfig = None  # type: ignore[assignment, misc]
 
 logger = logging.getLogger(__name__)
 
@@ -265,15 +260,13 @@ def _build_app_options(settings: Settings | None = None) -> dict[str, Any]:
     ``simple`` mode unchanged for Labs 2-7 backward compatibility.
     """
     cfg = settings or get_settings()
-    options: dict[str, Any] = {}
-    if ResumabilityConfig is not None:
-        options["resumability_config"] = ResumabilityConfig(is_resumable=True)
+    options: dict[str, Any] = {
+        "resumability_config": ResumabilityConfig(is_resumable=True),
+    }
     if cfg.agent_architecture in {"collaborative", "graph", "dynamic"}:
         from coding_agent.architectures import build_global_instruction_plugin
 
-        plugin = build_global_instruction_plugin()
-        if plugin is not None:
-            options["plugins"] = [plugin]
+        options["plugins"] = [build_global_instruction_plugin()]
     return options
 
 

@@ -369,7 +369,7 @@ for chunk in response.outputs:
         fname = (chunk.attributes or {}).get("file_name")
         print(f"output file={fname} mime={chunk.mime_type} bytes={len(chunk.data)}")
 
-# 2. ADK Agent integration (ADK Python >= v1.17.0)
+# 2. ADK Agent integration (ADK Python 2.0+)
 # Pass EITHER sandbox_resource_name (existing) OR agent_engine_resource_name (auto-creates per session)
 code_executor = AgentEngineSandboxCodeExecutor(
     agent_engine_resource_name=instance_name,
@@ -378,7 +378,7 @@ code_executor = AgentEngineSandboxCodeExecutor(
 
 ### Path D: Custom ADK `BaseEnvironment` -> `AgentPlatformSandboxEnvironment`
 
-This is the architectural crown jewel of Lab 2: subclassing ADK's `BaseEnvironment` (`v1.29.0+`) so `EnvironmentToolset` (`ReadFile`, `EditFile`, `WriteFile`, `Execute`) executes remotely inside a **per-session Managed Sandbox**!
+This is the architectural crown jewel of Lab 2: subclassing ADK's `BaseEnvironment` (ADK Python 2.0+) so `EnvironmentToolset` (`ReadFile`, `EditFile`, `WriteFile`, `Execute`) executes remotely inside a **per-session Managed Sandbox**!
 
 > [!IMPORTANT]
 > **Source-Verified `BaseEnvironment` Rules (`google/adk-python`):**

@@ -14,7 +14,7 @@ Complete the ``# TODO(lab-5)`` sections below to wire:
 
 Verified Gotchas:
 - ``google.adk.integrations.agent_registry`` imports ``a2a-sdk`` and Agent Identity at
-  module scope — requires ``pip install --upgrade "google-adk[a2a,agent-identity,mcp]>=1.29.0"``.
+  module scope — requires ``pip install --upgrade "google-adk[a2a,agent-identity,mcp]>=2.0.0"``.
 - ``SkillToolset`` accepts ``environment=`` OR ``code_executor=``, NEVER both.
 - ``header_provider`` applies ONLY to ``McpToolset``, never to ``RemoteA2aAgent``.
 - Built-in ``gcp-skill-registry`` begins async ingestion on the project's FIRST Skill
@@ -248,7 +248,7 @@ def build_agent_registry_integrations(
     """Configure ADK ``AgentRegistry`` with Auth Manager, MCP toolsets & Remote A2A agents."""
     # TODO(lab-5):
     # 1. Import ``AgentRegistry`` from ``google.adk.integrations.agent_registry`` (catching
-    #    ``ImportError`` with an install hint for ``google-adk[a2a,agent-identity,mcp]>=1.29.0``).
+    #    ``ImportError`` with an install hint for ``google-adk[a2a,agent-identity,mcp]>=2.0.0``).
     # 2. When ``register_auth_provider`` is True, call
     #    ``CredentialManager.register_auth_provider(GcpAuthProvider())``.
     # 3. Instantiate ``registry = AgentRegistry(project_id=project_id, location=location,

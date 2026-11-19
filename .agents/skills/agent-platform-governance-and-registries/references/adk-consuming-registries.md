@@ -8,9 +8,9 @@ Source-verified ADK Python (`google-adk`) and Go (`google.golang.org/adk/v2`) re
 
 | Integration | Minimum ADK Version | Install Command | Critical Dependency Note |
 |---|---|---|---|
-| Local `SkillToolset` | Python `v1.25.0+` (TS `v0.6.1`, Go `v1.2.0`, Kotlin `v0.1.0`) | `pip install google-adk` | Included in core `google-adk`. |
-| `GCPSkillRegistry` | Python `v1.27.0+` (Preview) | `pip install google-adk` | Included in core `google-adk`. |
-| **`AgentRegistry` (Python)** | Python `v1.26.0+` (Preview); **`>= 1.29.0`** for full Auth Manager + MCP | `pip install --upgrade "google-adk[a2a,agent-identity,mcp]"` *(or `uv add ...`)* | **Mandatory extras:** `google.adk.integrations.agent_registry` imports `a2a-sdk` AND `agent-identity` at **module scope**. Core-only `pip install google-adk` immediately raises **`ImportError`**! Minimum without MCP: `"google-adk[a2a,agent-identity]"`. |
+| Local `SkillToolset` | ADK Python 2.0+ (also supported in ADK TS/Go/Kotlin) | `pip install "google-adk>=2.0.0"` | Included in core `google-adk`. |
+| `GCPSkillRegistry` | ADK Python 2.0+ (Preview) | `pip install "google-adk>=2.0.0"` | Included in core `google-adk`. |
+| **`AgentRegistry` (Python)** | ADK Python 2.0+ (Preview; full Auth Manager + MCP) | `pip install --upgrade "google-adk[a2a,agent-identity,mcp]>=2.0.0"` *(or `uv add ...`)* | **Mandatory extras:** `google.adk.integrations.agent_registry` imports `a2a-sdk` AND `agent-identity` at **module scope**. Core-only `pip install google-adk` immediately raises **`ImportError`**! Minimum without MCP: `"google-adk[a2a,agent-identity]>=2.0.0"`. |
 | **`agentregistry` (Go)** | Go `v2.1.0+` (Preview) | `go get google.golang.org/adk/v2` | Package `google.golang.org/adk/v2/agentregistry` ships in core module (no extras). |
 
 **Environment Baseline:**
@@ -228,7 +228,7 @@ mcp_3lo = registry.get_mcp_toolset(
 ```
 
 > **Runtime Security & Auto-Rebind (`agent_registry.py`):**
-> - **Pickling Safety:** When an ADK app is pickled for deployment to Agent Runtime, `AgentRegistry.__getstate__` strips `_credentials` and `_session` so **deployer credentials NEVER leak** into the deployed workload.
+> - **Serialization Safety:** When an ADK app is serialized (`__getstate__`), `AgentRegistry.__getstate__` strips `_credentials` and `_session` so deployer credentials never leak.
 > - **Automatic Deployment Rebind:** Inside Agent Runtime (`GOOGLE_CLOUD_AGENT_ENGINE_ID` set), `AgentRegistrySingleMcpToolset.get_auth_config()` automatically calls `bindings:fetchAvailable` (10s timeout) scoped to the deployed agent's `RuntimeReference` URI. Deleting a binding revokes access rather than falling back to the deploy-time scheme.
 > - **Topology Span Metadata:** Every tool returned by `AgentRegistrySingleMcpToolset.get_tools()` attaches `gcp.mcp.server.destination.id` (`RuntimeReference.uri` preferred, fallback `mcpServerId`) for Agent Platform Topology tracing.
 
@@ -269,7 +269,7 @@ external_tools = registry.get_mcp_toolset("mcpServers/EXTERNAL_SERVER_ID")
 
 | Error / Symptom | Cause | Fix |
 |---|---|---|
-| `ImportError: AgentRegistry requires the 'a2a-sdk' package` | Core-only `google-adk` installed | Run `pip install --upgrade "google-adk[a2a,agent-identity,mcp]"` |
+| `ImportError: AgentRegistry requires the 'a2a-sdk' package` | Core-only `google-adk` installed | Run `pip install --upgrade "google-adk[a2a,agent-identity,mcp]>=2.0.0"` |
 | `ValueError` passing both `code_executor` and `environment` | `SkillToolset` allows only one execution backend | Remove one; use `environment` for coding agents (`BaseEnvironment`) |
 | `401`/`403` calling `RemoteA2aAgent` even though `header_provider` is set | `header_provider` does NOT apply to `RemoteA2aAgent` | Pass `httpx_client=httpx.AsyncClient(auth=GoogleApiAuth(...))` or `CloudRunOidcAuth(...)` |
 | `401` calling Cloud Run A2A agent with `GoogleApiAuth` | Cloud Run requires OIDC **ID token**, not OAuth access token | Switch to `id_token.fetch_id_token(Request(), f"https://{host}")` |

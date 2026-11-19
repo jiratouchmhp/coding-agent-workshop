@@ -1,4 +1,4 @@
-"""ADK Python v1.34.0+ Programmatic Service Registration (Starter Track).
+"""ADK Python 2.0+ Programmatic Service Registration (Starter Track).
 
 Reference: https://adk.dev/agents/service-registration/
 

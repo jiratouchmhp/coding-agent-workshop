@@ -36,7 +36,7 @@ gcloud services enable \
 
 ### ADK Agent Runtime Telemetry Environment Variables
 
-Replaces the deprecated `enable_tracing=True` flag:
+Configure OpenTelemetry tracing, logging, and GenAI semantic-convention capture via the three standard runtime environment variables:
 
 ```python
 env_vars = {
@@ -69,7 +69,7 @@ The Agent Platform Console UI automatically stitches trace spans with GCS/Loggin
 
 - **ADK Python:**
   ```text
-  google-adk>=1.16.0
+  google-adk>=2.0.0
   opentelemetry-instrumentation-google-genai>=0.4b0
   fsspec[gcs]==2025.10.0
   ```
@@ -325,7 +325,7 @@ Out-of-band behavioral security monitor that writes `AGENT_SESSION_ANOMALY` find
 - **Eligibility Requirements (all required for agent discovery):**
   - Runtime: Agent Runtime, `CLOUD_RUN_SERVICE`, `GKE_WORKLOAD` (ADK Python `>= 2.1.0`), or `AGENT_TYPE_OTHER` on AWS/Azure (ADK Python `>= 2.12.0` + Workload Identity Federation + `telemetry.googleapis.com`).
   - Matching bucket region (`US` scope allows `us` or `global` `_Default`; `EU` scope requires `eu` logging bucket) + **Log Analytics & Observability Analytics enabled**.
-  - OTel tracing/logging active (`enable_tracing` not `false`), prompt/response content capture enabled, and active traffic flowing.
+  - OTel tracing/logging active (`GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY="true"` / `otel_to_cloud=True`), prompt/response content capture enabled, and active traffic flowing.
   - Supports automatic agent enrollment on regional `AgentAnomalyDetectionScope` or manual per-agent opt-in.
 
 ---

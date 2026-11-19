@@ -28,7 +28,7 @@ Production playbook for the **Optimize pillar** of Google Cloud's **Gemini Enter
 > **Critical Package Split:** Evaluation docs say *"Agent Platform SDK"* in prose, yet **all evaluation Python code uses `google-cloud-aiplatform[adk,evaluation]` (`from vertexai import Client, types`)** — NOT `agentplatform`. Use `agentplatform.Client` (`v1beta1`) only for the **Feedback Service** harvest, **Canary `trafficSplitManual`** rollouts, and **Emergency Stop (`runtimes.delete`)**.
 
 ```bash
-pip install --upgrade "google-cloud-aiplatform[adk,evaluation]" "google-adk>=1.24.0" "google-cloud-monitoring"
+pip install --upgrade "google-cloud-aiplatform[adk,evaluation]" "google-adk>=2.0.0" "google-cloud-monitoring"
 # Optional: multimodal GCS OTel capture requires exact pinned fsspec
 pip install "opentelemetry-instrumentation-google-genai>=0.4b0" "fsspec[gcs]==2025.10.0"
 

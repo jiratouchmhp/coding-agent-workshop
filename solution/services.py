@@ -1,4 +1,4 @@
-"""ADK Python v1.34.0+ Programmatic Service Registration (Solution Track).
+"""ADK Python 2.0+ Programmatic Service Registration (Solution Track).
 
 Reference: https://adk.dev/agents/service-registration/
 

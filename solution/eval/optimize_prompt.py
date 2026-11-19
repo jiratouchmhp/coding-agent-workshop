@@ -6,7 +6,7 @@ Closes the Optimize Pillar loop by combining:
    failure labels (``inaccurate``, ``hallucination``, ``tool_error``, etc.).
 2. **Failure Cluster Triage:** Maps loss patterns from ``generate_loss_clusters``
    or ``agents-cli eval analyze`` onto targeted prompt/tool/skill fixes.
-3. **Automated ADK Prompt Optimization (``google-adk >= 1.24.0``, ``adk.dev/optimize/``):**
+3. **Automated ADK Prompt Optimization (``google-adk >= 2.0.0``, ``adk.dev/optimize/``):**
    Supports ``SimplePromptOptimizer`` (fast 4-stage Execute -> Evaluate -> Critique
    -> Rewrite loop), ``GEPARootAgentPromptOptimizer`` (default for ``adk optimize``,
    root instruction only), and ``GEPARootAgentOptimizer`` (root instruction +

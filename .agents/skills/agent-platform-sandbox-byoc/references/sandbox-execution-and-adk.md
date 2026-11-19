@@ -142,7 +142,7 @@ for chunk in response.outputs:
         print(f"output file={file_name} mime={chunk.mime_type} size={len(chunk.data)}B")
 ```
 
-### ADK `AgentEngineSandboxCodeExecutor` (ADK Python `>= v1.17.0`)
+### ADK `AgentEngineSandboxCodeExecutor` (ADK Python 2.0+)
 
 Maintains **one persistent Code Execution sandbox** across all tool calls in an ADK session. Requires `roles/aiplatform.user` on the agent's service account. Agent can run locally, on Cloud Run, GKE, or Agent Runtime.
 
@@ -236,7 +236,7 @@ Computer Use sandboxes also support live visual streaming via **VNC / noVNC over
 
 ---
 
-## 6. Path E — Custom ADK `BaseEnvironment` for `EnvironmentToolset` (ADK `>= v1.29.0`)
+## 6. Path E — Custom ADK `BaseEnvironment` for `EnvironmentToolset` (ADK Python 2.0+)
 
 ADK's `EnvironmentToolset` exposes four tools to an LLM agent (`Execute`, `ReadFile`, `EditFile`, `WriteFile`) backed by any `BaseEnvironment`. While ADK ships `LocalEnvironment` (local `asyncio` subprocesses), production coding agents should subclass `BaseEnvironment` to route every command and file operation into a per-session gVisor Scale Sandbox.
 

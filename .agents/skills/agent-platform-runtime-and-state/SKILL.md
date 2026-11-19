@@ -3,7 +3,7 @@ name: agent-platform-runtime-and-state
 description: >-
   Deploys and operates Agent Platform Runtime, Sessions, Memory Bank, and
   Feedback. Use when writing Terraform google_vertex_ai_reasoning_engine (BYOC
-  container_spec, Dockerfile source_code_spec, package_spec, Secret Manager,
+  container_spec, Dockerfile source_code_spec, Secret Manager,
   IAM depends_on, AGENT_IDENTITY/Agent Gateway TF, PSC-I), managing runtimes
   (CRUD, query jobs, bidi_stream_query, keep_alive_probe,
   container_concurrency, revisions/traffic, Runtime operational kill-switch
@@ -41,7 +41,7 @@ export GOOGLE_CLOUD_LOCATION="us-central1"
 
 | Task / Goal | Go Here |
 |---|---|
-| Declarative IaC (`google_vertex_ai_reasoning_engine`), BYOC `container_spec`, Dockerfile `source_code_spec`, `package_spec`, Secret Manager `secret_env`, service-agent IAM `depends_on`, SPIFFE `AGENT_IDENTITY`, Agent Gateway binding, PSC-I, CMEK | [Terraform Deployment](references/terraform-deployment.md) |
+| Declarative IaC (`google_vertex_ai_reasoning_engine`), BYOC `container_spec`, Dockerfile `source_code_spec`, Secret Manager `secret_env`, service-agent IAM `depends_on`, SPIFFE `AGENT_IDENTITY`, Agent Gateway binding, PSC-I, CMEK | [Terraform Deployment](references/terraform-deployment.md) |
 | List/get/update/delete deployed agents, long-running query jobs (up to 7d), `v1beta1` revisions & traffic splitting, emergency stop playbook, HTTP/NDJSON runtime contract, `keep_alive_probe`, container/concurrency tuning, regions, quotas & QPM sizing math | [Runtime Management & Quotas](references/runtime-management-and-quotas.md) |
 | Short-term turn history (`VertexAiSessionService`, `client.sessions`), long-term cross-session facts or structured profiles (`VertexAiMemoryBankService`, `client.memory_banks`), `ingest_events`, similarity retrieval, revisions/rollback/purge, TTL, IAM Conditions, prompt-injection defense, CMEK/VPC-SC | [Sessions & Memory Bank](references/sessions-and-memory-bank.md) |
 | End-user thumbs up/down reactions, standard labels, `FeedbackContext` transcript snapshots, linking `event_id` to Console Traces UI, immutable `gcp.vertex.agent.feedback` Cloud Trace spans | [Feedback Service](references/feedback-service.md) |
@@ -207,7 +207,7 @@ Read ONLY the reference file(s) matching the active subtask:
 
 | Reference File | Covers |
 |---|---|
-| [references/terraform-deployment.md](references/terraform-deployment.md) | `google_vertex_ai_reasoning_engine` BYOC `container_spec`, Dockerfile `source_code_spec` (root-of-tar 8 MB rule), `package_spec`, Secret Manager, dual service-agent IAM `depends_on`, SPIFFE `AGENT_IDENTITY`, cross-project Agent Gateway/UAP V2, PSC-I, CMEK, HCL fixes & verification |
+| [references/terraform-deployment.md](references/terraform-deployment.md) | `google_vertex_ai_reasoning_engine` BYOC `container_spec`, Dockerfile `source_code_spec` (root-of-tar 8 MB rule), Secret Manager, dual service-agent IAM `depends_on`, SPIFFE `AGENT_IDENTITY`, cross-project Agent Gateway/UAP V2, PSC-I, CMEK, HCL fixes & verification |
 | [references/runtime-management-and-quotas.md](references/runtime-management-and-quotas.md) | SDK/REST/CLI deployment matrix, deployed agent CRUD, `:query`/`:streamQuery`/`:asyncQuery` (7d jobs), `v1beta1` revisions & traffic splitting, emergency stop runbook, FastAPI HTTP/NDJSON runtime contract, `keep_alive_probe`, container concurrency tuning, supported regions, production/Express quotas & QPM sizing math |
 | [references/sessions-and-memory-bank.md](references/sessions-and-memory-bank.md) | Managed Sessions (`VertexAiSessionService`, `client.sessions`, `v1beta1` REST, TTL, IAM Conditions) & Memory Bank (setup, models, `VertexAiMemoryBankService`, `generate`/`ingest_events`, similarity & scope retrieval, structured profiles, revisions/rollback/purge, prompt-injection defense, data residency, CMEK/VPC-SC) |
 | [references/feedback-service.md](references/feedback-service.md) | Feedback Service (Preview) CRUDL + `FeedbackContext`, Python SDK & `v1beta1` REST, standard labels, `event_id` -> OTel `gcp.vertex.agent.event_id` linking, Console UI workflow, immutable `gcp.vertex.agent.feedback` Cloud Trace span schema |

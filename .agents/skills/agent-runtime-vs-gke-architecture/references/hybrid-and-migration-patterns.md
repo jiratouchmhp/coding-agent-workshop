@@ -12,7 +12,7 @@ Production blueprints for combining **Gemini Enterprise Agent Platform** with **
 
 ```python
 # Runs inside a GKE Pod (KSA bound to roles/aiplatform.user via WIF)
-# pip install "google-adk[gcp]>=1.17.0" "google-cloud-agentplatform>=2.0.1"
+# pip install "google-adk[gcp]>=2.0.0" "google-cloud-agentplatform>=2.0.1"
 import agentplatform
 from google.adk.agents.llm_agent import Agent
 from google.adk.code_executors.agent_engine_sandbox_code_executor import (

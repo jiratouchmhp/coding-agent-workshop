@@ -15,7 +15,7 @@ Production reference for closing the **Quality Flywheel** on Gemini Enterprise A
 
 ---
 
-## 2. Built-In ADK Optimizers Comparison (`google-adk >= v1.24.0`)
+## 2. Built-In ADK Optimizers Comparison (`google-adk>=2.0.0`)
 
 | Optimizer Class (`google.adk.optimization.*`) | Status | Scope Optimized | Algorithm & Default Model Config | Key Config Parameters |
 |---|---|---|---|---|

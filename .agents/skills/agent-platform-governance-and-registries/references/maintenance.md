@@ -97,7 +97,7 @@ When refreshing this skill after upstream SDK, CLI, or platform releases, re-ver
 - [ ] **`references/adk-consuming-registries.md`**
   - Re-fetch `adk.dev/integrations/skills-registry/index.md`, `adk.dev/integrations/agent-registry/index.md`, and live `adk-python` `main` (`gcp_skill_registry.py`, `agent_registry.py`, `skill_toolset.py`).
   - Re-check whether `GCPSkillRegistry` has stabilized from `agentregistry.googleapis.com/v1alpha` to `v1` and whether `POST skills:search` GET-fallback was removed.
-  - Confirm minimum `google-adk` floor (`>= 1.29.0` for `google-adk[a2a,agent-identity,mcp]`), `RemoteA2aAgent.clone()`, `header_provider` scope, and Go `agentregistry` options.
+  - Confirm minimum `google-adk` floor (`>= 2.0.0` for `google-adk[a2a,agent-identity,mcp]`), `RemoteA2aAgent.clone()`, `header_provider` scope, and Go `agentregistry` options.
 - [ ] **`references/semantic-governance-and-identity.md`**
   - Re-fetch `govern/policies/*.md.txt`, `govern/agent-identity-overview.md.txt`, `govern/gateways/*.md.txt`, and `govern/configure-model-armor.md.txt`.
   - Check whether Semantic Governance has added streaming model response support, expanded beyond 8 regions, or promoted `gcloud beta ai semantic-governance-*` to GA.

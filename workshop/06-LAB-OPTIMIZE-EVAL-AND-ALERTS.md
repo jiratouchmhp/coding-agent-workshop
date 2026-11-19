@@ -34,7 +34,7 @@ In the **3.5-hour Half-Day Fast-Track**, Lab 6 is delivered as a **15-minute ins
 ```mermaid
 flowchart LR
     subgraph Prod["Production Agent Runtime"]
-        Agent["ADK Coding Agent<br/>(OTel GenAI v1.37+)"]
+        Agent["ADK 2.0 Coding Agent<br/>(OTel GenAI SemConv)"]
         Feedback["Feedback Service<br/>(THUMBS_DOWN + Labels)"]
     end
 
@@ -97,7 +97,7 @@ gcloud services enable \
 # Install evaluation & monitoring Python extras (if not already synced via uv)
 cd starter && uv sync
 # Equivalent pip packages verified across docs:
-# pip install "google-cloud-aiplatform[adk,evaluation]" google-cloud-monitoring "google-adk>=1.24.0"
+# pip install "google-cloud-aiplatform[adk,evaluation]" google-cloud-monitoring "google-adk>=2.0.0"
 ```
 
 > [!IMPORTANT]
@@ -131,7 +131,7 @@ Both **Offline Evaluation of production traces/sessions** and **Online Evaluatio
    - `gen_ai.system_instructions` — system prompt instructions
    - `gen_ai.tool.definitions` — declared tool schemas
 
-Verify these environment variables are set on your Agent Runtime deployment (replacing the deprecated `enable_tracing=True` flag):
+Verify these three OpenTelemetry environment variables are set on your Agent Runtime deployment:
 
 ```python
 env_vars = {
@@ -177,7 +177,7 @@ env_vars = {
 For coding agents that inspect large repository diffs, logs, screenshots, or binary artifacts that exceed Cloud Logging entry size limits, offload prompt/response payloads to Cloud Storage as JSONL while keeping spans lean (`NO_CONTENT`):
 
 ```bash
-# Optional production configuration (requires google-adk>=1.16.0,
+# Optional production configuration (requires google-adk>=2.0.0,
 # opentelemetry-instrumentation-google-genai>=0.4b0, and pinned fsspec[gcs]==2025.10.0)
 OTEL_SEMCONV_STABILITY_OPT_IN='gen_ai_latest_experimental'
 OTEL_INSTRUMENTATION_GENAI_UPLOAD_FORMAT='jsonl'
@@ -674,7 +674,7 @@ gcloud monitoring policies create --policy-from-file="policy.yaml" --project="${
 
 Now feed your **Failure Clusters** (Part 4) and **Feedback Service** negative entries (Lab 4: `THUMBS_DOWN` with labels like `inaccurate`, `hallucination`, `tool_error`) into automated prompt/skill optimization.
 
-### 6.1 Choosing the Right Optimization Strategy (`google-adk >= v1.24.0`)
+### 6.1 Choosing the Right Optimization Strategy (`google-adk>=2.0.0`)
 
 | Strategy / Class | Scope Optimized | Algorithm & Config | Best For |
 |---|---|---|---|

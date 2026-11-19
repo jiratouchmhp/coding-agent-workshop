@@ -51,7 +51,7 @@ Author, provision, execute, and secure **Managed Sandboxes** (`SandboxEnvironmen
 
 ## SDK Setup & Service Agent Prerequisites
 
-- **Install:** `pip install "google-cloud-agentplatform>=2.0.1"` (preferred; also re-exported in `google-cloud-aiplatform>=1.154.0`; legacy docs use `google-cloud-aiplatform[agent_engines]`). Add `google-adk[gcp]>=1.17.0` for `AgentEngineSandboxCodeExecutor` (`>=1.29.0` for `EnvironmentToolset`/`BaseEnvironment`).
+- **Install:** `pip install "google-cloud-agentplatform>=2.0.1"` (canonical Agent Platform SDK). Add `google-adk[gcp]>=2.0.0` for `AgentEngineSandboxCodeExecutor` and `EnvironmentToolset`/`BaseEnvironment` (ADK Python 2.0+).
 - **API Version:** Always pass `http_options={"api_version": "v1beta1"}` when creating BYOC `SandboxEnvironmentTemplate` resources, configuring PSC-I/PSC-E networking, or enabling CMEK on parent instances.
 - **Payloads:** Pass plain Python `dict`s for `spec` and `config` — never import private `agentplatform._genai` modules.
 - **Caller IAM:** `roles/aiplatform.user` (grants `aiplatform.sandboxEnvironments.execute` and full lifecycle). Add `roles/iam.serviceAccountTokenCreator` on the signing SA when calling `generate_access_token()` or `generate_browser_ws_headers()`.
@@ -165,7 +165,7 @@ snap_op = client.sandboxes.snapshots.create(
 client.sandboxes.delete(name=sandbox_name)
 ```
 
-### 4. Attach Managed Code Execution to an ADK Agent (`google-adk>=1.17.0`)
+### 4. Attach Managed Code Execution to an ADK Agent (`google-adk>=2.0.0`)
 
 ```python
 from google.adk.agents.llm_agent import Agent

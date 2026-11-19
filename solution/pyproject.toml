@@ -8,10 +8,9 @@ version = "0.1.0"
 description = "Enterprise Coding Agent workshop reference solution built on Google ADK and Gemini Enterprise Agent Platform."
 requires-python = ">=3.11"
 dependencies = [
-    # ADK 2.0+ unlocks collaborative subagent modes, declarative graph workflows,
-    # dynamic workflows, and v1.34+ service registration (extras required for
+    # ADK Python 2.0+ unlocks collaborative subagent modes, declarative graph workflows,
+    # dynamic workflows, and service registration (extras required for
     # EnvironmentToolset, GCPSkillRegistry, AgentRegistry, and Auth Manager MCP).
-    # Note: `google-adk[a2a,agent-identity,mcp]~=1.29` works for `AGENT_ARCHITECTURE=simple`.
     "google-adk[a2a,agent-identity,mcp]>=2.0.0",
     # Vertex AI / Agent Platform SDK (agent_engines, evaluation, and agentplatform namespace in >=1.154.0).
     "google-cloud-aiplatform[agent_engines,evaluation]>=1.154.0",

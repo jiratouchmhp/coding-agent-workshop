@@ -108,10 +108,10 @@ rec_session_writes = rec_query_qpm                         # 750  (default: 100 
 
 ### 2. ADK `GkeCodeExecutor` & `k8s-agent-sandbox==1.0.6` Wiring
 ```python
-# Option A — ADK GkeCodeExecutor (pip install "google-adk[extensions]"; Python ADK >= v1.14.0)
+# Option A — ADK GkeCodeExecutor (pip install "google-adk[extensions]>=2.0.0"; ADK Python 2.0+)
 from google.adk.code_executors import GkeCodeExecutor
 executor = GkeCodeExecutor(namespace="agent-sandbox-system", executor_type="sandbox", sandbox_template="python-sandbox-template")
-# Pass code_executor=executor to LlmAgent (full RBAC, Gateway & legacy Job mode -> references/gke-agent-sandbox-reference.md)
+# Pass code_executor=executor to LlmAgent (full RBAC & Gateway config -> references/gke-agent-sandbox-reference.md)
 
 # Option B — Direct k8s-agent-sandbox SDK (pip install k8s-agent-sandbox==1.0.6; prod uses Direct/Gateway configs)
 from k8s_agent_sandbox import SandboxClient
@@ -142,7 +142,7 @@ Read only the specific reference file needed for your task (all links are 1-hop 
 | Reference File | Scope & Deep-Dive Contents |
 |---|---|
 | [Comparison Matrix & Limitations](references/comparison-matrix-and-limitations.md) | Full 14-dimension comparison across Agent Runtime + Managed Sandbox, GKE Agent Sandbox, GKE Agent Substrate, and `agents-cli`; exact Agent Platform production & Express Mode quotas + sizing math; gVisor vs. Cloud Hypervisor microVM vs. Kata table; PSC-I + NGFW/SWP vs. NetworkPolicy/`FQDNNetworkPolicy`/Dataplane V2 65,535 cardinality; SPIFFE vs. WIF; stdout/audit blind spots. |
-| [GKE Agent Sandbox & Substrate Reference](references/gke-agent-sandbox-reference.md) | `kubernetes-sigs/agent-sandbox` `v1.0.6` install, `v1beta1` CRD YAML (`SandboxTemplate`, `SandboxWarmPool`, `SandboxClaim`, `Sandbox`), `secure-sandbox-policy` VAP, Sandbox Router, Managed Prometheus `PodMonitoring` & PromQL, `k8s-agent-sandbox` SDK, `GkeCodeExecutor` (`sandbox` & `job`), GKE Pod Snapshots (`>= 1.35.3-gke.1234000`, `non-e2-class`, GCS/IAM, suspend/resume), Hyperdisk vs. Filestore storage limits, and Agent Substrate (`Standard >= 1.37`, `ate.dev/v1alpha1`, `kubectl ate`). |
+| [GKE Agent Sandbox & Substrate Reference](references/gke-agent-sandbox-reference.md) | `kubernetes-sigs/agent-sandbox` `v1.0.6` install, `v1beta1` CRD YAML (`SandboxTemplate`, `SandboxWarmPool`, `SandboxClaim`, `Sandbox`), `secure-sandbox-policy` VAP, Sandbox Router, Managed Prometheus `PodMonitoring` & PromQL, `k8s-agent-sandbox` SDK, `GkeCodeExecutor` (`executor_type="sandbox"`), GKE Pod Snapshots (`>= 1.35.3-gke.1234000`, `non-e2-class`, GCS/IAM, suspend/resume), Hyperdisk vs. Filestore storage limits, and Agent Substrate (`Standard >= 1.37`, `ate.dev/v1alpha1`, `kubectl ate`). |
 | [Hybrid & Migration Patterns](references/hybrid-and-migration-patterns.md) | Patterns A–D (GKE -> Managed Sandbox, Agent Runtime -> GKE via PSC-I + Gateway API, Dual-Tier GKE Sandbox + Substrate, Managed Sessions/Memory Bank/Anomaly Detection `GKE_WORKLOAD` on GKE); `adk deploy gke` vs. manual Python/Go GKE deployment; `agents-cli` `v1.15.0` multi-target graduation, target asymmetry table, rollback & OTel traps, and migration checklists. |
 | [Maintenance & Provenance](references/maintenance.md) | Canonical upstream URLs (all seed URLs + Tier-1 & Tier-2 sub-links), `.md.txt`/`.md` refresh endpoints, uncached networking doc provenance notes, upstream watchlist, and section-by-section refresh checklist. |
 

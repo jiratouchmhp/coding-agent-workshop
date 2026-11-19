@@ -8,8 +8,8 @@ architectures beyond the default ``AGENT_ARCHITECTURE=simple`` single-agent setu
 - ``dynamic``: Programmatic ``@node(rerun_on_resume=True)`` orchestrator with
   ``ctx.run_node()``, ``asyncio.gather(..., use_sub_branch=True)``, and checkpointed HITL
 
-Keep ``AGENT_ARCHITECTURE=simple`` as the default in ``.env`` so Labs 2-7 and
-ADK ``1.29.x`` continue working unchanged.
+Keep ``AGENT_ARCHITECTURE=simple`` as the default in ``.env`` so Labs 2-7
+continue working unchanged.
 """
 
 from __future__ import annotations
@@ -22,17 +22,16 @@ import os
 import shutil
 import sys
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from typing import Any
 
+from google.adk import Context, Event, Workflow  # noqa: F401
+from google.adk.agents import LlmAgent  # noqa: F401
+from google.adk.events import RequestInput  # noqa: F401
+from google.adk.plugins.global_instruction_plugin import GlobalInstructionPlugin
+from google.adk.workflow import JoinNode, NodeTimeoutError, RetryConfig, node  # noqa: F401
 from pydantic import BaseModel, Field
 
 from coding_agent.config import Settings, get_settings
-
-try:
-    from google.adk import Context
-except ImportError:  # ADK 1.x fallback so `AGENT_ARCHITECTURE=simple` stays importable
-    Context = Any  # type: ignore[misc, assignment]
 
 __all__ = [
     "ApprovalDecision",
@@ -86,63 +85,6 @@ class CodeReviewReport(BaseModel):
     issues: list[str] = Field(
         default_factory=list,
         description="Concrete defects, missing tests, or security concerns to fix.",
-    )
-
-
-@dataclass(frozen=True)
-class _AdkV2Runtime:
-    """Lazy bundle of ADK 2.0+ workflow, event, and node primitives."""
-
-    Context: Any
-    Event: Any
-    JoinNode: Any
-    NodeTimeoutError: Any
-    RequestInput: Any
-    RetryConfig: Any
-    Workflow: Any
-    node: Any
-
-
-def _require_adk_v2() -> _AdkV2Runtime:
-    """Verify ADK Python >= 2.0.0 workflow primitives are installed and return them.
-
-    This lazy guard allows ``AGENT_ARCHITECTURE=simple`` to run cleanly even on
-    ADK ``1.29.x``, while raising an actionable upgrade hint whenever
-    ``collaborative``, ``graph``, or ``dynamic`` is selected on ADK ``< 2.0.0``.
-    """
-    try:
-        import google.adk
-
-        adk_version = getattr(google.adk, "__version__", "unknown")
-    except ImportError as exc:
-        raise RuntimeError(
-            "google-adk is not installed. Install ADK 2.0+ with:\n"
-            '  pip install "google-adk[a2a,agent-identity,mcp]>=2.0.0"'
-        ) from exc
-
-    try:
-        from google.adk import Context as AdkContext
-        from google.adk import Event, Workflow
-        from google.adk.events import RequestInput
-        from google.adk.workflow import JoinNode, NodeTimeoutError, RetryConfig, node
-    except ImportError as exc:
-        raise RuntimeError(
-            "ADK Python >= 2.0.0 is required for AGENT_ARCHITECTURE in "
-            "{collaborative, graph, dynamic} "
-            f"(detected google-adk=={adk_version}). Upgrade with:\n"
-            '  pip install "google-adk[a2a,agent-identity,mcp]>=2.0.0"\n'
-            "Or set AGENT_ARCHITECTURE=simple in .env to stay on ADK 1.29.x."
-        ) from exc
-
-    return _AdkV2Runtime(
-        Context=AdkContext,
-        Event=Event,
-        JoinNode=JoinNode,
-        NodeTimeoutError=NodeTimeoutError,
-        RequestInput=RequestInput,
-        RetryConfig=RetryConfig,
-        Workflow=Workflow,
-        node=node,
     )
 
 
@@ -200,27 +142,13 @@ async def _invoke_optional_after_agent_callback(
 def build_global_instruction_plugin(
     global_instruction: str = GLOBAL_ENGINEERING_GUARDRAILS,
     name: str = "enterprise_coding_guardrails",
-) -> Any | None:
+) -> GlobalInstructionPlugin:
     """Build ADK's ``GlobalInstructionPlugin`` for App-wide engineering guardrails.
 
     Applies consistent rules across the coordinator and all subagents via
-    ``App(plugins=[...])`` (gracefully returns ``None`` if unavailable).
+    ``App(plugins=[...])``.
     """
-    plugin_cls: Any | None = None
-    try:
-        from google.adk.plugins.global_instruction_plugin import GlobalInstructionPlugin
-
-        plugin_cls = GlobalInstructionPlugin
-    except ImportError:
-        try:
-            from google.adk.plugins import GlobalInstructionPlugin
-
-            plugin_cls = GlobalInstructionPlugin
-        except ImportError as exc:
-            logger.debug("GlobalInstructionPlugin unavailable (%s); skipping plugin.", exc)
-            return None
-
-    return plugin_cls(global_instruction=global_instruction, name=name)
+    return GlobalInstructionPlugin(global_instruction=global_instruction, name=name)
 
 
 def _pytest_command() -> list[str]:
@@ -445,7 +373,6 @@ def build_collaborative_coding_team(
     - Coordinator ``LlmAgent(name="coding_agent", sub_agents=[...])`` — NEVER set
       ``mode`` on the root coordinator agent!
     """
-    _require_adk_v2()
     del settings, tools, callbacks, code_executor
     # TODO(lab-1): Construct `code_implementer` (mode="single_turn"),
     # `code_reviewer` (mode="single_turn", output_schema=CodeReviewReport),
@@ -487,7 +414,6 @@ def build_graph_coding_workflow(
       so per-turn workflow state resets cleanly for Turn 2+ while remaining intact
       across intermediate HITL pauses.
     """
-    _require_adk_v2()
     del settings, tools, callbacks, code_executor
     # TODO(lab-1): Define `coder_agent`, parallel `run_pytest_node` / `run_ruff_node`
     # (using `_run_workspace_check` + `@node(retry_config=..., timeout=30.0)`),
@@ -528,7 +454,6 @@ def build_dynamic_coding_workflow(
       ONE terminal ``Event(message=..., output=..., state={"code": "", "findings": "", "fix_attempts": 0})``
     - Wraps in ``Workflow(name="coding_agent", edges=[("START", dynamic_coding_workflow)])``
     """
-    _require_adk_v2()
     del settings, tools, callbacks, code_executor
     # TODO(lab-1): Implement `coder_agent`, `fixer_agent`, parallel check nodes,
     # `request_human_approval` (`rerun_on_resume=False`), and the

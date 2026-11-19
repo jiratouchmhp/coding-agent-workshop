@@ -14,7 +14,7 @@ Production observability reference for deployed **Agent Runtime** (`aiplatform.g
 
 ### ADK (`AdkApp`) Deployment Environment Variables
 
-Use environment variables instead of the deprecated `enable_tracing=True` flag on `AdkApp`:
+Configure OpenTelemetry tracing, logging, and GenAI semantic-convention capture via the three standard runtime environment variables:
 
 ```python
 env_vars = {
@@ -30,8 +30,7 @@ env_vars = {
 ```
 
 - **May 22, 2026 `user.id` Cutoff:** Logging `user.id` with prompt/response capture requires **ADK `>= 2.1`** effective **May 22, 2026**. Agents opted in prior to May 22, 2026 must be **redeployed and opted in again** for `user.id` to appear. Ensure appropriate end-user notices/consents before enabling message content capture.
-- **Console Telemetry Toggle Prerequisite:** Configuring Observability toggles via **Deployments -> Telemetry configuration -> Configure** requires deploying with SDK `google-cloud-aiplatform >= 1.126.1` (or `google-cloud-agentplatform >= 2.0.1`).
-- **Non-ADK Frameworks:** `LangchainAgent(..., enable_tracing=True)`, `LanggraphAgent(..., enable_tracing=True)`, and `LlamaIndexQueryPipelineAgent(..., enable_tracing=True)` (`vertexai.preview.reasoning_engines`).
+- **Console Telemetry Toggle Prerequisite:** Configuring Observability toggles via **Deployments -> Telemetry configuration -> Configure** requires deploying with `google-cloud-agentplatform >= 2.0.1` (also bundled in `google-cloud-aiplatform >= 1.154.0`).
 - **Viewing Traces:** **Google Cloud Console -> Agent Platform -> Deployments -> `<agent>` -> Traces** (**Session view** or **Span view** for span DAG, inputs/outputs, and metadata). Note that large span attributes may truncate under Cloud Trace quotas.
 
 ---

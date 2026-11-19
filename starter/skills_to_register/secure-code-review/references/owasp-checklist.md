@@ -10,7 +10,7 @@ Top 10 and CWE categories. Use alongside [`SKILL.md`](../SKILL.md).
 | **OS Command Injection (CWE-78)** | `subprocess.run(f"pytest {user_arg}", shell=True)` or Node `child_process.exec(...)` with concatenated input | Pass an argument list with `shell=False` (`subprocess.run(["pytest", target], shell=False)`) or Node `execFile(cmd, args)` after validating inputs against an allowlist. |
 | **SQL Injection (CWE-89)** | Building SQL statements with f-strings, `%` formatting, or `+` concatenation | Use parameterized queries / prepared statements with bound parameters (`cursor.execute("SELECT id FROM items WHERE name = %s", (name,))`). |
 | **Code Evaluation (CWE-94)** | Calling `eval()`, `exec()`, or `new Function(...)` on external strings | Parse structured data with `json.loads()` or `ast.literal_eval()`, or use an explicit dispatch table. |
-| **XSS / Template Injection (CWE-79)** | Rendering raw HTML (`dangerouslySetInnerHTML`, `innerHTML`, unescaped Jinja2 `| safe`) from user input | Rely on framework auto-escaping, sanitize rich HTML with an allowlisted sanitizer, and set a strict Content-Security-Policy header. |
+| **XSS / Template Injection (CWE-79)** | Rendering raw HTML (`dangerouslySetInnerHTML`, `innerHTML`, unescaped Jinja2 `safe` filter) from user input | Rely on framework auto-escaping, sanitize rich HTML with an allowlisted sanitizer, and set a strict Content-Security-Policy header. |
 
 ## 2. Broken Access Control & Path Traversal (OWASP A01)
 

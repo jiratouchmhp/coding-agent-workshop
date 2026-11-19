@@ -1,14 +1,14 @@
-# Google ADK Python Core, Setup & ADK 2.0 Reference
+# Google ADK Python 2.0+ Core & Setup Reference
 
-Deep-dive reference for building production coding agents in **Google ADK Python** (v1.x and v2.0), covering SDK namespaces, authentication, `LlmAgent`/`App`/`AdkApp`, Gemini model configuration, tools, callbacks, state, artifacts, ADK 2.0 graph `Workflow`s, and 1.x-to-2.0 migration.
+Deep-dive reference for building production coding agents in **Google ADK Python 2.0+**, covering SDK namespaces, authentication, `LlmAgent`/`App`/`AdkApp`, Gemini model configuration, tools, callbacks, state, artifacts, ADK 2.0 graph `Workflow`s, and the ADK 2.0 Native Design Contract.
 
 ---
 
 ## 1. Python Prerequisites, SDK Namespaces & Version Milestones
 
 ### Python & Package Prerequisites
-- **ADK Python 1.x:** Python **3.10+** (`pip install "google-adk~=1.0"` to pin 1.x).
-- **ADK Python 2.0 Graph Workflow API & `google/agents-cli`:** Python **3.11+**.
+- **ADK Python 2.0+ & `google/agents-cli`:** Python **3.11+**.
+- **Canonical Install:** `pip install "google-adk[a2a,agent-identity,mcp]>=2.0.0"` (or `uv add "google-adk[a2a,agent-identity,mcp]>=2.0.0"`).
 
 ### SDK Namespace Divergence Matrix
 
@@ -16,26 +16,19 @@ Google Cloud and ADK documentation span **five Python package/import namespaces*
 
 | Namespace / Package | Install Command | Canonical Imports / Client Init | Primary Use & Verified Gotchas |
 |---|---|---|---|
-| **`google.adk`** (`google-adk`) | `pip install google-adk` (core)<br>`pip install "google-adk[a2a,agent-identity]"`<br>`pip install "google-adk[a2a,agent-identity,mcp]>=1.29.0"` | `from google.adk import Agent, Workflow, Event`<br>`from google.adk.agents import Agent, LlmAgent`<br>`from google.adk.agents.context import Context`<br>`from google.adk.apps import App`<br>`from google.adk.models import Gemini`<br>`from google.adk.tools import ToolContext`<br>`from google.adk.environment import BaseEnvironment, EnvironmentScope, ExecutionResult, LocalEnvironment`<br>`from google.adk.tools.environment import EnvironmentToolset`<br>`from google.adk.tools.bash_tool import ExecuteBashTool, BashToolPolicy` | Core ADK framework. `Agent` and `LlmAgent` are interchangeable aliases. Scaffolded `agents-cli` projects ship `google-adk[gcp,otel-gcp]`; add `mcp` extra before using `McpToolset`. |
-| **`vertexai`** (`google-cloud-aiplatform`) | `pip install "google-cloud-aiplatform[agent_engines,adk,langchain,ag2,llama_index]>=1.112.0"` | `import vertexai`<br>`from vertexai.agent_engines import AdkApp`<br>`client = vertexai.Client(project="PROJECT_ID", location="LOCATION")` | `AdkApp` runtime wrapper and Reasoning Engine client. **Known bug:** `google-cloud-aiplatform <= 1.128.0` causes `"Session not found"` after `publish gemini` registration — upgrade before deploying/publishing. |
-| **`agentplatform`** (`google-cloud-agentplatform >= 2.0.1` / `google-cloud-aiplatform >= 1.154.0`) | `pip install "google-cloud-agentplatform>=2.0.1"` (canonical)<br>or `pip install "google-cloud-aiplatform>=1.154.0"` (re-export) | `import agentplatform`<br>`from agentplatform import types`<br>`client = agentplatform.Client(project="PROJECT_ID", location="LOCATION")` | Canonical Gemini Enterprise Agent Platform client namespace: `google-cloud-agentplatform>=2.0.1` for Runtime, Sessions, Memory Bank, Feedback Service, and Scale Sandboxes; `google-cloud-aiplatform>=1.154.0` re-exports `agentplatform` and promotes Skill Registry `skill_id` to a top-level kwarg. |
+| **`google.adk`** (`google-adk`) | `pip install "google-adk>=2.0.0"` (core)<br>`pip install "google-adk[a2a,agent-identity,mcp]>=2.0.0"` (recommended full coding-agent set) | `from google.adk import Agent, Workflow, Event`<br>`from google.adk.agents import Agent, LlmAgent`<br>`from google.adk.agents.context import Context`<br>`from google.adk.apps import App`<br>`from google.adk.models import Gemini`<br>`from google.adk.tools import ToolContext`<br>`from google.adk.environment import BaseEnvironment, EnvironmentScope, ExecutionResult, LocalEnvironment`<br>`from google.adk.tools.environment import EnvironmentToolset`<br>`from google.adk.tools.bash_tool import ExecuteBashTool, BashToolPolicy` | Core ADK 2.0+ framework. `Agent` and `LlmAgent` are interchangeable aliases. Scaffolded `agents-cli` projects ship `google-adk[gcp,otel-gcp]`; include the `mcp` extra before using `McpToolset`. |
+| **`vertexai`** (`google-cloud-aiplatform`) | `pip install "google-cloud-aiplatform[agent_engines,adk,langchain,ag2,llama_index]>=1.154.0"` | `import vertexai`<br>`client = vertexai.Client(project="PROJECT_ID", location="LOCATION")` | Companion Reasoning Engine client (`google-cloud-aiplatform >= 1.154.0` re-exports `agentplatform`). **Known bug:** `google-cloud-aiplatform <= 1.128.0` causes `"Session not found"` after `publish gemini` registration — upgrade before deploying/publishing. |
+| **`agentplatform`** (`google-cloud-agentplatform >= 2.0.1` / `google-cloud-aiplatform >= 1.154.0`) | `pip install "google-cloud-agentplatform>=2.0.1"` (canonical)<br>or `pip install "google-cloud-aiplatform>=1.154.0"` (re-export) | `import agentplatform`<br>`from agentplatform import types`<br>`from agentplatform.frameworks import AdkApp`<br>`client = agentplatform.Client(project="PROJECT_ID", location="LOCATION")` | Canonical Gemini Enterprise Agent Platform client & `AdkApp` runtime wrapper namespace: `google-cloud-agentplatform>=2.0.1` for `AdkApp`, Runtime, Sessions, Memory Bank, Feedback Service, and Scale Sandboxes; `google-cloud-aiplatform>=1.154.0` re-exports `agentplatform` and promotes Skill Registry `skill_id` to a top-level kwarg. |
 | **`google.genai`** (`google-genai`) | Installed with `google-adk` / `google-cloud-aiplatform` | `from google import genai`<br>`from google.genai import types`<br>`client = genai.Client(vertexai=True, project="PROJECT_ID", location="global")` | `GenerateContentConfig`, `HttpOptions`, `HttpRetryOptions`, `SafetySetting`, `Part`/`Blob`, model discovery (`client.models.list()`), and Managed Agents API (`client.agents.*`). |
 | **`google.cloud.*`** | e.g., `pip install google-cloud-secret-manager` | `from google.cloud import secretmanager, storage` | Direct GCP clients for Secret Manager, Cloud Storage, Cloud Monitoring (`monitoring_v3`), and Cloud Trace (`trace_v2`). |
 
-### Verified ADK Python Version Milestones
+### Verified ADK Python 2.0+ Version Milestones
 
-| Version | Key Capability Introduced |
+| Version | Key Capability |
 |---|---|
-| `v1.17.0` | `AgentEngineSandboxCodeExecutor` (`google.adk.code_executors.agent_engine_sandbox_code_executor`) |
-| `v1.21.0` | Gemini Interactions API (`Gemini(model=..., use_interactions_api=True)`) |
-| `v1.25.0` | `SkillToolset` (`google.adk.skills`, `google.adk.tools.skill_toolset`) |
-| `v1.26.0` | `AgentRegistry` (`google.adk.integrations.agent_registry`; Go v2.1.0+) |
-| `v1.27.0` | `GCPSkillRegistry` & `ExecuteBashTool` / `BashToolPolicy` (`google.adk.tools.bash_tool`) |
-| `v1.29.0` | `EnvironmentToolset`, `LocalEnvironment`, `BaseEnvironment`, `EnvironmentScope`; minimum recommended version for `AgentRegistry` + Auth Manager MCP bindings |
-| `v1.34.0` | Service Registration (`services.yaml` / `services.py`) for custom `session`, `artifact`, `memory`, and `task_store` URI schemes (`adk run` / `adk web` / `adk api_server`) |
-| `v2.0.0` | Graph-based Workflow Runtime (`google.adk.workflow.Workflow`) — GA May 19, 2026 (Python), June 30, 2026 (Go), August 21, 2026 (TypeScript) |
+| `v2.0.0+` | Graph-based & Dynamic Workflow Runtime (`google.adk.workflow.Workflow`, `@node`, `JoinNode`, `RequestInput`, `RetryConfig`) — GA May 19, 2026 (Python), June 30, 2026 (Go), August 21, 2026 (TypeScript); collaborative subagent modes (`chat`/`task`/`single_turn`); `EnvironmentToolset`/`LocalEnvironment`/`BaseEnvironment`/`EnvironmentScope`; `ExecuteBashTool`/`BashToolPolicy`; `SkillToolset`/`GCPSkillRegistry`; `AgentRegistry`; Service Registration (`services.yaml`/`services.py`); Gemini Interactions API (`use_interactions_api=True`); and `AgentEngineSandboxCodeExecutor` |
 | `v2.1.0+` / `v2.12.0+` | Agent Anomaly Detection (Preview): `2.1.0+` for GKE/Agent Runtime/Cloud Run; `2.12.0+` for multi-cloud OTel export via `telemetry.googleapis.com` |
-| `v2.4.0+` | `ManagedAgent` (`from google.adk.agents import ManagedAgent`) wrapping Google's first-party server-hosted agents |
+| `v2.4.0+` | `ManagedAgent` (`from google.adk.agents import ManagedAgent`, Preview) wrapping Google's first-party server-hosted agents |
 
 ---
 
@@ -45,14 +38,14 @@ Google Cloud and ADK documentation span **five Python package/import namespaces*
 
 | Mode | Required Environment Variables | Notes & Gotchas |
 |---|---|---|
-| **Google Cloud / Agent Platform (ADC — Recommended)** | `GOOGLE_GENAI_USE_ENTERPRISE=TRUE`<br>`GOOGLE_CLOUD_PROJECT=<project-id>`<br>`GOOGLE_CLOUD_LOCATION=<region-or-global>` | Run `gcloud auth application-default login` locally. `GOOGLE_GENAI_USE_ENTERPRISE` replaces legacy `GOOGLE_GENAI_USE_VERTEXAI` (equivalent; set both if supporting older ADK releases). ADC credentials expire after **1 hour** by default. |
-| **Google AI Studio (Local Dev)** | `GEMINI_API_KEY=<key>` (or `GOOGLE_API_KEY=<key>`) | **Comment out** `GOOGLE_GENAI_USE_ENTERPRISE`, `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_LOCATION` in `.env` so the SDK does not route to Vertex AI. |
+| **Google Cloud / Agent Platform (ADC — Recommended)** | `GOOGLE_GENAI_USE_ENTERPRISE=TRUE`<br>`GOOGLE_CLOUD_PROJECT=<project-id>`<br>`GOOGLE_CLOUD_LOCATION=<region-or-global>` | Run `gcloud auth application-default login` locally. `GOOGLE_GENAI_USE_ENTERPRISE=TRUE` is the canonical ADK 2.0 enterprise authentication switch. ADC credentials expire after **1 hour** by default. |
+| **Google AI Studio (Local Dev)** | `GEMINI_API_KEY=<key>` (or `GOOGLE_API_KEY=<key>`) | **Comment out** `GOOGLE_GENAI_USE_ENTERPRISE`, `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_LOCATION` in `.env` so the SDK routes to Google AI Studio. |
 | **Agent Platform Express Mode (Prototyping)** | `GOOGLE_GENAI_USE_ENTERPRISE=TRUE`<br>`GOOGLE_GENAI_API_KEY=<express-key>` | Rapid API-key prototyping only; standard GCP billing project is required for production runtime, IAM, and sandboxes. |
 | **External Service Account** | `GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json` | Not needed on Agent Runtime, Cloud Run, or GKE (Workload Identity / runtime SA / Agent Identity provides credentials automatically). Never commit key files or `.env`. |
 
 ### Baseline GCP Setup (APIs & Minimum Roles)
 - **Required APIs:** `aiplatform.googleapis.com`, `cloudbuild.googleapis.com`, `secretmanager.googleapis.com`, `run.googleapis.com`, `artifactregistry.googleapis.com` (plus `telemetry.googleapis.com` for multi-cloud OTel anomaly export). Enabling APIs requires `roles/serviceusage.serviceUsageAdmin`.
-- **Developer / Deployer Roles:** `roles/aiplatform.user` (minimum to use/deploy Agent Runtime & sandboxes), `roles/iam.serviceAccountUser` (to attach a custom SA), `roles/storage.admin` (only when deploying from pickled Python object rather than source files).
+- **Developer / Deployer Roles:** `roles/aiplatform.user` (minimum to use/deploy Agent Runtime & sandboxes) and `roles/iam.serviceAccountUser` (to attach a custom SA).
 - **Agent Runtime Identities:**
   - **Agent Identity (Recommended):** Per-agent principal with default `roles/aiplatform.agentDefaultAccess` (logging + model calls) and `roles/aiplatform.agentContextEditor` (own sessions, memories, sandboxes).
   - **Reasoning Engine Service Agent:** `service-PROJECT_NUMBER@gcp-sa-aiplatform-re.iam.gserviceaccount.com` (`roles/aiplatform.reasoningEngineServiceAgent`). Pre-provision before granting AR/Secret Manager roles via:
@@ -121,18 +114,18 @@ app = App(
 2. **`App.name` Directory Match:** `App(name=...)` **must** equal the basename of the folder holding `agent.py` (e.g., `app` for `app/`, `coding_agent` for `coding_agent/`, `my_agent` for `src/my_agent/`). Any mismatch triggers `"Session not found"` during `adk` / `agents-cli eval` execution.
 3. **`output_schema` with `tools` (Python Behavior & Reliability Best Practice):** In ADK Python, `output_schema` and `tools` **can** be combined on the same `LlmAgent` — tools stay available while the agent works, and `output_schema` applies only to the final response. Gemini models on Google Cloud (and `LiteLlm` providers supporting response schemas) accept both in a single request, whereas other models fall back to an injected `set_model_response` function tool that may behave unreliably. For cross-model reliability, prefer separating tool execution from structured formatting in a dedicated sub-agent or downstream `Workflow` node.
 4. **429 `RESOURCE_EXHAUSTED` Client Retries:** Configure `types.HttpRetryOptions(initial_delay=1, attempts=2)` either on `Gemini(retry_options=...)` (adapter object) OR via `GenerateContentConfig(http_options=types.HttpOptions(retry_options=...))` (when `model` is a string).
-5. **Gemini Interactions API (`v1.21.0+`):** `Gemini(model=..., use_interactions_api=True)` chains turns server-side via `previous_interaction_id`, but **cannot** mix custom function tools with built-in tools like `google_search` unless wrapped via `GoogleSearchTool(bypass_multi_tools_limit=True)`.
+5. **Gemini Interactions API (ADK Python 2.0+):** `Gemini(model=..., use_interactions_api=True)` chains turns server-side via `previous_interaction_id`, but **cannot** mix custom function tools with built-in tools like `google_search` unless wrapped via `GoogleSearchTool(bypass_multi_tools_limit=True)`.
 6. **Non-Gemini Models via LiteLLM:** `from google.adk.models.lite_llm import LiteLlm` supports `LiteLlm(model="anthropic/claude-sonnet-4-20250514")`, `LiteLlm(model="openai/gpt-4o")`, and `LiteLlm(model="ollama_chat/llama3:instruct")`.
 7. **Sub-Agent Factory Functions:** Never reuse the same module-level `Agent` instance across multiple parents (raises `"agent already has a parent"`). Define factory functions (`def create_reviewer() -> Agent: ...`) and **call** them (`sub_agents=[create_reviewer()]`, not `[create_reviewer]`).
 
-### `AdkApp` Wrapper for Agent Runtime (`vertexai.agent_engines`)
+### `AdkApp` Wrapper for Agent Runtime (`agentplatform.frameworks`)
 
 ```python
-from vertexai.agent_engines import AdkApp
+from agentplatform.frameworks import AdkApp
 
 adk_app = AdkApp(
-    app=app,  # Preferred when supported: preserves App.name, ResumabilityConfig, and plugins (e.g., GlobalInstructionPlugin)
-    # Fallback for older SDKs (do not pass both `app=` and `agent=`/`plugins=`):
+    app=app,  # Preferred: preserves App.name, ResumabilityConfig, and plugins (e.g., GlobalInstructionPlugin)
+    # Alternative when wrapping a standalone agent (do not pass both `app=` and `agent=`/`plugins=`):
     # agent=root_agent,
     # Optional overrides (omit in prod to use managed Sessions & Memory Bank):
     # session_service_builder=lambda: InMemorySessionService(),
@@ -276,7 +269,7 @@ async def save_patch_artifact(patch_bytes: bytes, tool_context: ToolContext) -> 
 
 ---
 
-## 6. ADK 2.0 Graph Workflows & 1.x-to-2.0 Breaking Changes
+## 6. ADK 2.0 Graph Workflows & Native Design Contract
 
 ### Minimal Graph-Based Coding Loop (`google-adk >= 2.0.0`, Python `3.11+`)
 
@@ -346,15 +339,19 @@ coding_workflow = Workflow(
 - **HITL (`RequestInput`) & Checkpointing:** Leaf HITL nodes default to `rerun_on_resume=False` (handoff: the user's reply flows directly to the successor node), while dynamic orchestrators calling `await ctx.run_node(...)` must set `@node(rerun_on_resume=True)` to replay completed child checkpoints on resume (see `references/graph-and-dynamic-workflows.md`).
 - **Collaborative Subagent Modes:** Attach `mode="single_turn"` or leaf-only `mode="task"` on subagents (never on the root agent; `mode="task"` is disabled inside Python v2.0.0 graph `Workflow`s). ADK auto-injects delegation tools **named directly after each subagent**, and `mode="task"` subagents return to the parent via `finish_task` (see `references/agent-architectures-and-workflows.md`).
 
-### ADK Python 1.x -> 2.0 Breaking Changes
+### ADK 2.0 Native Design Contract
 
-| Breaking Change | Failure Symptom if Ignored | Mandatory Migration Action |
+Follow these positive architectural invariants across all ADK Python 2.0+ agents and workflows:
+
+| Contract Area | Native ADK 2.0 Rule | Why It Matters |
 |---|---|---|
-| **1. `Event` adds `node_info` & `output`** | Rigid SQL/NoSQL custom `BaseSessionService` or JSON schemas with `additionalProperties: false` reject 2.0 events. | Add `node_info` and `output` columns/fields (JSON-blob stores are unaffected). |
-| **2. `BaseAgent` now subclasses `BaseNode`** | Legacy overrides of `_run_async_impl()` or `generate_content()` are **silently bypassed** by the Workflow Graph engine. | Move telemetry/state logic into `before_agent_callback` / `after_agent_callback` or `BasePlugin`. |
-| **3. No direct event appending** | `context.session.events.append(...)` or `enqueue_event` breaks graph determinism, routing, and streaming. | Yield `Event(...)` from nodes/agents so the runtime persists and routes natively. |
-| **4. Broad `except` masks retries & HITL** | `except Exception:` disables `RetryConfig` auto-retries; `except BaseException:` traps `NodeInterruptedError` and **breaks HITL pauses**. | Let retryable exceptions propagate; NEVER catch `BaseException` without re-raising. |
-| **5. Template workflow agents deprecated** | `SequentialAgent`, `ParallelAgent`, and `LoopAgent` are deprecated in **Python 2.0 and TypeScript 2.0** (constructing one emits a deprecation warning; scheduled for removal) and superseded in Go/Kotlin. | Express new pipelines as ADK 2.0 Graph `Workflow`s (`edges=[...]`) or Dynamic `@node(rerun_on_resume=True)` workflows (note: a `Workflow` cannot yet be used as an `LlmAgent` `sub_agent`). |
+| **Lifecycle Callbacks & Plugins** | Implement cross-cutting telemetry, guardrails, and state initialization via typed lifecycle callbacks (`BeforeAgentCallback`, `AfterAgentCallback`, `before/after_model_callback`, `before/after_tool_callback`) or `BasePlugin` subclasses on `App`. | Keeps instrumentation and state hooks integrated natively with the ADK 2.0 Workflow Graph engine across all nodes and sub-agents. |
+| **Explicit Event Yielding** | Emit node outputs, user-facing messages, routes, and state deltas exclusively by yielding `Event(...)` (e.g., `yield Event(output=..., message=..., route=..., state=...)`). | Allows the ADK 2.0 runtime to persist, stream, checkpoint, and route events deterministically across graph and dynamic execution. |
+| **Exception Propagation (`RetryConfig`)** | Let transient errors propagate out of `@node` functions so `RetryConfig` handles exponential backoff and retries, and **never** swallow `BaseException`. | Broad `except Exception:` disables automatic retries; catching `BaseException` without re-raising traps `NodeInterruptedError` and breaks HITL pauses. |
+| **Global Instructions (`GlobalInstructionPlugin`)** | Register shared system-level rules once via `GlobalInstructionPlugin(global_instruction=...)` on `App(plugins=[...])`. | Applies consistent behavior across coordinators, isolated sub-agent branches, and workflow graph agents without duplicating prompt text. |
+| **Resumability (`ResumabilityConfig`)** | Enable `App(..., resumability_config=ResumabilityConfig(is_resumable=True))` whenever using `RequestInput` HITL pauses, `FunctionTool(require_confirmation=True)`, `ExecuteBashTool`, or dynamic `@node(rerun_on_resume=True)` orchestrators. | Guarantees durable pause/resume checkpoints across human approvals and replica restarts. |
+| **`Event` Schema (`node_info` & `output`)** | Ensure custom `BaseSessionService` storage schemas and strict JSON validators permit ADK 2.0 `Event` fields `node_info` and `output` (standard JSON-blob stores accept them automatically). | Rigid SQL/NoSQL tables or `additionalProperties: false` validators reject workflow events unless both fields are supported. |
+| **Workflow-First Orchestration** | Model deterministic pipelines, fan-out/`JoinNode` barriers, conditional branches, and bounded loops with ADK 2.0 Graph `Workflow(edges=[...])` and Dynamic `@node(rerun_on_resume=True)` (`ctx.run_node`). | Provides typed `Event(output=...)` passing, automatic child checkpointing, per-node `RetryConfig`/timeouts, and deterministic HITL pauses (note: make `Workflow` the root graph rather than an `LlmAgent` `sub_agent`). |
 
 ---
 

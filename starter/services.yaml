@@ -1,5 +1,5 @@
 # =============================================================================
-# ADK Python v1.34.0+ Declarative Service Registration (Starter Track)
+# ADK Python 2.0+ Declarative Service Registration (Starter Track)
 # Reference: https://adk.dev/agents/service-registration/
 # =============================================================================
 # ADK CLI tools auto-discover `services.yaml` (or `.yml`) and `services.py`:

@@ -2,7 +2,7 @@
 # Mirrors runtime dependencies in `starter/pyproject.toml` so both Option 1 (`container_spec`
 # via `Dockerfile`) and Option 2 (`source_code_spec` + `image_spec {}`) install identically.
 
-# ADK 2.0+ for collaborative/graph/dynamic workflows (`~=1.29` works for AGENT_ARCHITECTURE=simple).
+# ADK Python 2.0+ for simple, collaborative, graph, and dynamic workflows.
 google-adk[a2a,agent-identity,mcp]>=2.0.0
 google-cloud-aiplatform[agent_engines,evaluation]>=1.154.0
 google-cloud-logging>=3.11.0

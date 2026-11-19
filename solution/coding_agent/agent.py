@@ -7,7 +7,7 @@ Supports all four execution modes via ``SANDBOX_MODE``:
 - ``code_execution`` (Lab 2): ADK ``AgentEngineSandboxCodeExecutor``.
 
 And four ADK 2.0 architectures via ``AGENT_ARCHITECTURE`` (default: ``simple``):
-- ``simple`` (default; 100% compatible with Labs 2-7 and ADK 1.29.x): Single ``LlmAgent``.
+- ``simple`` (default; 100% compatible with Labs 2-7): Single ``LlmAgent``.
 - ``collaborative``: ADK 2.0 Coordinator + ``single_turn``/``task`` subagents + ``GlobalInstructionPlugin``.
 - ``graph``: ADK 2.0 declarative ``Workflow`` graph with parallel checks, ``JoinNode``, and HITL.
 - ``dynamic``: ADK 2.0 programmatic ``@node(rerun_on_resume=True)`` workflow orchestrator.
@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from google.adk.agents import LlmAgent
-from google.adk.apps import App
+from google.adk.apps import App, ResumabilityConfig
 from google.adk.environment import BaseEnvironment, LocalEnvironment
 from google.adk.models import Gemini
 from google.adk.tools.environment import EnvironmentToolset
@@ -37,11 +37,6 @@ from coding_agent.tools.sandbox_execution import (
     AgentPlatformSandboxEnvironment,
     build_code_execution_executor,
 )
-
-try:
-    from google.adk.apps import ResumabilityConfig
-except ImportError:  # Fallback for minimal ADK builds without ResumabilityConfig
-    ResumabilityConfig = None  # type: ignore[assignment, misc]
 
 logger = logging.getLogger(__name__)
 
@@ -371,15 +366,13 @@ def _build_app_options(settings: Settings | None = None) -> dict[str, Any]:
     ``simple`` mode unchanged for Labs 2-7 backward compatibility.
     """
     cfg = settings or get_settings()
-    options: dict[str, Any] = {}
-    if ResumabilityConfig is not None:
-        options["resumability_config"] = ResumabilityConfig(is_resumable=True)
+    options: dict[str, Any] = {
+        "resumability_config": ResumabilityConfig(is_resumable=True),
+    }
     if cfg.agent_architecture in {"collaborative", "graph", "dynamic"}:
         from coding_agent.architectures import build_global_instruction_plugin
 
-        plugin = build_global_instruction_plugin()
-        if plugin is not None:
-            options["plugins"] = [plugin]
+        options["plugins"] = [build_global_instruction_plugin()]
     return options
 
 

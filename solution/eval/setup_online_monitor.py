@@ -88,7 +88,7 @@ def validate_otel_prerequisites(env: dict[str, str] | None = None) -> TelemetryC
     if enable_telemetry.lower() != "true":
         errors.append(
             "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY must be 'true' "
-            f"(observed: {enable_telemetry!r}). Replaces deprecated enable_tracing=True."
+            f"(observed: {enable_telemetry!r})."
         )
 
     if semconv_opt_in != "gen_ai_latest_experimental":

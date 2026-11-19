@@ -1,27 +1,25 @@
 ---
 name: adk-coding-agent-build
 description: >-
-  Builds ADK Python coding agents with agents-cli. Use when implementing
-  EnvironmentToolset (ReadFile/EditFile/WriteFile/Execute), LocalEnvironment
-  Path, BaseEnvironment (EnvironmentScope/Context/SkillToolset),
-  ExecuteBashTool/BashToolPolicy, LlmAgent/App/AdkApp, FunctionTool
-  (require_confirmation), McpToolset,
+  Builds ADK Python 2.0+ coding agents with google/agents-cli. Use when
+  implementing Simple/Managed/Collaborative/Graph/Dynamic architectures,
+  EnvironmentToolset (ReadFile/EditFile/WriteFile/Execute), LocalEnvironment,
+  BaseEnvironment (EnvironmentScope/Context/SkillToolset),
+  ExecuteBashTool/BashToolPolicy, LlmAgent/App/AdkApp, FunctionTool/McpToolset,
   callbacks/BasePlugin/GlobalInstructionPlugin, state/artifacts/.env,
-  ManagedAgent, services.yaml/services.py, collaborative mode
-  (chat/task/single_turn), deprecated template workflows, RoutedAgent, ADK 2.0
-  Workflow/JoinNode/Event(route/output), RequestInput,
-  RetryConfig/NodeTimeoutError, dynamic ctx.run_node/rerun_on_resume, 1.x
-  migration, or agents-cli run/lint/extensions/adk-recipes. Don't use for
-  sandboxes (agent-platform-sandbox-byoc), Runtime
-  (agent-platform-runtime-and-state), registries
-  (agent-platform-governance-and-registries), evals
+  ManagedAgent, Service Registration (services.yaml/services.py), subagent mode
+  (chat/task/single_turn), Workflow/JoinNode/Event(route/output), RequestInput,
+  RetryConfig/NodeTimeoutError, ctx.run_node/rerun_on_resume, or agents-cli
+  run/lint/extensions/adk-recipes. Don't use for sandboxes
+  (agent-platform-sandbox-byoc), Runtime (agent-platform-runtime-and-state),
+  registries (agent-platform-governance-and-registries), evals
   (agent-platform-optimize-and-eval), GKE (agent-runtime-vs-gke-architecture),
   or google-agents-cli-{scaffold,adk-code,deploy,eval,publish}.
 ---
 
 # ADK Coding Agent Build Guide (`adk-coding-agent-build`)
 
-Build reliable, confined **Google ADK Python** coding agents (`v1.29.0+` / `v2.0+`) and integrate them cleanly with **`google/agents-cli`** (`~= 1.15.0`). This skill owns coding-agent toolsets, verified source contracts, ADK 2.0 agent/workflow architectures (collaborative teams, static graphs, dynamic orchestrators), service registration, and build-time `agents-cli` boundaries—without duplicating the 7 global `google-agents-cli-*` built-in skills.
+Build reliable, confined **Google ADK Python 2.0+** coding agents (`v2.0+`) and integrate them cleanly with **`google/agents-cli`** (`~= 1.15.0`). This skill owns coding-agent toolsets, verified source contracts, ADK 2.0 agent/workflow architectures (Simple, Managed, Collaborative, Graph, Dynamic), Service Registration, and build-time `agents-cli` boundaries—without duplicating the 7 global `google-agents-cli-*` built-in skills.
 
 ---
 
@@ -39,11 +37,11 @@ What are you building or configuring?
 │   ├── Implement BaseEnvironment subclass here (scope=EnvironmentScope.SESSION, *, ctx: Context | None = None)
 │   │   [See references/coding-agent-toolsets.md]
 │   └── Provision BYOC Dockerfile, SandboxEnvironmentTemplate & egress -> `agent-platform-sandbox-byoc`
-├── Multi-agent coordinator team, custom backend services, routing, or template migration
+├── Multi-agent coordinator team, custom backend services, or deterministic routing
 │   ├── Open-ended delegation -> LlmAgent coordinator + subagent mode="single_turn" / "task" + GlobalInstructionPlugin
-│   ├── Custom session/artifact/memory/task_store backends -> services.yaml / services.py (v1.34.0+)
+│   ├── Custom session/artifact/memory/task_store backends -> services.yaml / services.py (ADK Python 2.0+)
 │   ├── Server-hosted zero-ops prototype (no client Python tools, global-only) -> ManagedAgent (v2.4.0 Preview) + RemoteMcpServer
-│   └── Legacy SequentialAgent/ParallelAgent/LoopAgent or TS RoutedAgent -> migrate/map to ADK 2.0
+│   └── Deterministic & dynamic routing / failover -> Graph Event(route=...) or Dynamic @node if/elif + RetryConfig
 │       [See references/agent-architectures-and-workflows.md]
 ├── Deterministic pipelines, conditional branches, parallel fan-out/JoinNode, HITL, or retries
 │   └── ADK 2.0 Graph Workflow (`Workflow`, `Event(route/output)`, `JoinNode`, `RequestInput`, `RetryConfig`)
@@ -73,7 +71,7 @@ What are you building or configuring?
 | Set explicit `BashToolPolicy(allowed_command_prefixes=(...), blocked_operators=(...))` | Using default `BashToolPolicy()` | Default `allowed_command_prefixes=("*",)` permits **every** command; POSIX-only with mandatory HITL approval. |
 | Set `App(name="<folder_basename>", root_agent=root_agent)` + explicit versioned model ID (`gemini-2.5-flash`) | Arbitrary `App.name` or `gemini-flash-latest` on regional endpoints | Name mismatch causes `"Session not found"`; `gemini-flash-latest` can 404 on regional endpoints like `us-central1`. |
 | Isolate `output_schema` in a formatter subagent/node for non-Gemini models; never set `mode` on root agent | Assuming `output_schema` + `tools=[...]` works reliably on every model, setting `mode` on root, or using `mode="task"` in Python v2.0.0 graphs | Python ADK supports `output_schema` + `tools` directly on Gemini on GCP, but other models fall back to an unreliable `set_model_response` tool; `task` mode must be a leaf agent and is disabled in Python v2.0.0 graph `Workflow`s. |
-| Migrate `SequentialAgent`/`ParallelAgent`/`LoopAgent` to `Workflow` / dynamic `ctx.run_node` | New orchestration on deprecated template agents, or nesting `Workflow` in `LlmAgent.sub_agents` | Template agents are deprecated in Py/TS/Go/Kt; `Workflow` cannot yet be used as an `LlmAgent` `sub_agent`. |
+| Use ADK 2.0 Workflow / @node and GOOGLE_GENAI_USE_ENTERPRISE=TRUE | Never generate deprecated SequentialAgent, ParallelAgent, or LoopAgent classes, and never use GOOGLE_GENAI_USE_VERTEXAI | ADK 2.0 standardizes orchestration on Workflow / @node and enterprise auth on GOOGLE_GENAI_USE_ENTERPRISE=TRUE. |
 | Emit **at most ONE** `Event(output=...)` per Python node; merge parallel leaves with `JoinNode` | Multiple `Event(output=...)` yields, silent `JoinNode` feeders, or >=2 terminal outputs | Multiple `Event(output=...)` raises a Python runtime error; >=2 terminal outputs raise `ValueError`; every `JoinNode` feeder must output. |
 | Put Python `{key}` templates in `state` first; bound graph cycles or use dynamic `for`/`while` | Writing `{Class.field}` in Python instructions or assuming graph cycles auto-bound | Python `{key}` reads session state only (not `node_input`); graph cycles require >=1 routed edge and are never auto-bounded. |
 | Check **both** `tool_confirmation` & `.confirmed`; parse `RequestInput` via UI/post-node; set `@node(rerun_on_resume=True)` on `ctx.run_node` orchestrators | Expecting `RequestInput(response_schema=...)` to reformat text, skipping `.confirmed`, or numeric `run_id="1"` | `response_schema` does not reformat replies; manual `request_confirmation()` does not auto-reject; custom `run_id` needs >=1 non-numeric char. |
@@ -204,12 +202,12 @@ Load the specific reference file matching your task (all references are 1-hop fr
 
 | Reference File | Deep-Dive Contents |
 |---|---|
-| [references/adk-core-and-setup.md](references/adk-core-and-setup.md) | 5-namespace SDK divergence (`google.adk` / `vertexai` / `agentplatform` / `google.genai`), `.env` & auth modes (`GOOGLE_GENAI_USE_ENTERPRISE` vs `VERTEXAI`), ADK version milestones, `LlmAgent`/`App`/`AdkApp`, Gemini regional retries & Interactions API, `FunctionTool`/`McpToolset`, exact callback signatures, `BasePlugin`, state prefixes, Artifacts, and all 5 ADK 1.x->2.0 breaking changes. |
-| [references/agent-architectures-and-workflows.md](references/agent-architectures-and-workflows.md) | Single-agent evolution triggers, `ManagedAgent` (Python v2.4.0 Preview: Gemini API vs Agent Platform `global`-only, `RemoteMcpServer`, `mode="single_turn"`, remote state vs `interaction_id`/`environment_id`), `services.yaml` vs `services.py` (v1.34.0 discovery & precedence), ADK 2.0 collaborative teams (`chat`/`task`/`single_turn`, `GlobalInstructionPlugin`, isolated branches), deprecated template workflows (`SequentialAgent`/`ParallelAgent`/`LoopAgent`), TS `RoutedAgent` + Python equivalents, and all 7 multi-agent patterns mapped to ADK 2.0. |
+| [references/adk-core-and-setup.md](references/adk-core-and-setup.md) | 5-namespace SDK divergence (`google.adk` / `vertexai` / `agentplatform` / `google.genai`), `.env` & auth modes (`GOOGLE_GENAI_USE_ENTERPRISE=TRUE` & `GEMINI_API_KEY`), ADK 2.0+ version milestones, `LlmAgent`/`App`/`AdkApp` (`agentplatform.frameworks`), Gemini regional retries & Interactions API, `FunctionTool`/`McpToolset`, exact callback signatures, `BasePlugin`, state prefixes, Artifacts, and the ADK 2.0 Native Design Contract. |
+| [references/agent-architectures-and-workflows.md](references/agent-architectures-and-workflows.md) | Single-agent evolution triggers, `ManagedAgent` (Python v2.4.0 Preview: Gemini API vs Agent Platform `global`-only, `RemoteMcpServer`, `mode="single_turn"`, remote state vs `interaction_id`/`environment_id`), `services.yaml` vs `services.py` (discovery & precedence), ADK 2.0 collaborative teams (`chat`/`task`/`single_turn`, `GlobalInstructionPlugin`, isolated branches), Python ADK 2.0 deterministic & dynamic routing/failover, and all 7 multi-agent patterns in native ADK 2.0. |
 | [references/graph-and-dynamic-workflows.md](references/graph-and-dynamic-workflows.md) | Complete ADK 2.0 Graph & Dynamic Workflow deep dive: `Workflow(edges=[...])`, conditional/multi-route `Event(route=...)` & `DEFAULT_ROUTE`, `JoinNode` fan-out/fan-in & single terminal output `ValueError`, bounded back-edge cycles, `Event(output/message/state)` & Python single-output / `{key}`-from-state rules vs TS/Go/Kotlin, `RequestInput` HITL vs `FunctionTool` confirmation, `RetryConfig` / `NodeTimeoutError` / `ctx.attempt_count`, and dynamic `@node(rerun_on_resume=True)` / `ctx.run_node` / `asyncio.gather(..., use_sub_branch=True)` / custom `run_id` rules. |
 | [references/coding-agent-toolsets.md](references/coding-agent-toolsets.md) | Source-verified `EnvironmentToolset` internals, `LocalEnvironment` `Path` bug & subprocess teardown, complete 9-member `BaseEnvironment` ABC contract (`EnvironmentScope`, `ExecutionResult`, `ctx` inspection), `SkillToolset` shared-environment rules, `ExecuteBashTool` + `BashToolPolicy` hardening (`RLIMIT_*`, whole-token matching, mandatory HITL), Pre-GA `ManagedAgent` contrast, and pytest verification harness. |
 | [references/agents-cli-lifecycle.md](references/agents-cli-lifecycle.md) | Complete `google/agents-cli` (`~= 1.15.0`) command & flag matrices (`setup`, `create`, `scaffold enhance/upgrade`, `run`, `playground`, `lint`, `eval`, `infra`, `deploy`, `publish`), `agents-cli-extension.yaml` (`v1alpha1`) schema & override rules, all 11 curated `google/adk-recipes` (`long-horizon-harness`), and the 7-skill `google-agents-cli-*` anti-shadowing map. |
-| [references/maintenance.md](references/maintenance.md) | Upstream seed URLs (`adk.dev/get-started/`, `github.com/google/agents-cli`), complete Tier-1/Tier-2 `.md`/`.md.txt`/raw GitHub refresh endpoints (including all 14 ADK architecture & graph docs), verification date (`2026-11-19`), and section-by-section refresh checklist. |
+| [references/maintenance.md](references/maintenance.md) | Upstream seed URLs (`adk.dev/get-started/`, `github.com/google/agents-cli`), complete Tier-1/Tier-2 `.md`/`.md.txt`/raw GitHub refresh endpoints (including all active ADK 2.0 architecture & graph docs), verification date (`2026-11-19`), and section-by-section refresh checklist. |
 
 ---
 

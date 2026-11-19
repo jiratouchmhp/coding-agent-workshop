@@ -235,12 +235,24 @@ verify_lab_1() {
   check_pattern "${TRACK}/coding_agent/agent.py" "ResumabilityConfig" "Configures ResumabilityConfig on App"
   check_pattern "${TRACK}/coding_agent/agent.py" 'App\(.*name="coding_agent"' "App.name matches coding_agent directory"
 
-  check_pattern "${TRACK}/coding_agent/architectures.py" "def _require_adk_v2\(" "Defines ADK 2.0 import guard _require_adk_v2()"
+  check_pattern "${TRACK}/coding_agent/architectures.py" "^from google\.adk import Context, Event, Workflow\b" "Uses direct ADK 2.0 top-level import (Context, Event, Workflow)"
+  check_pattern "${TRACK}/coding_agent/architectures.py" "^from google\.adk\.workflow import JoinNode, NodeTimeoutError, RetryConfig, node\b" "Uses direct ADK 2.0 workflow imports (JoinNode, NodeTimeoutError, RetryConfig, node)"
   check_pattern "${TRACK}/coding_agent/architectures.py" "def build_global_instruction_plugin\(" "Defines GlobalInstructionPlugin builder"
   check_pattern "${TRACK}/coding_agent/architectures.py" "def build_collaborative_coding_team\(" "Defines collaborative coordinator team builder"
   check_pattern "${TRACK}/coding_agent/architectures.py" "def build_graph_coding_workflow\(" "Defines declarative graph Workflow builder"
   check_pattern "${TRACK}/coding_agent/architectures.py" "def build_dynamic_coding_workflow\(" "Defines dynamic workflow builder"
   check_pattern "${TRACK}/coding_agent/architectures.py" "def build_optional_managed_agent\(" "Defines optional ManagedAgent builder"
+
+  # Anti-regression check: forbid deprecated ADK 1.x workflow agents and legacy _require_adk_v2 wrapper
+  for adk_file in "${TRACK}/coding_agent/architectures.py" "${TRACK}/coding_agent/agent.py"; do
+    if [[ -f "${adk_file}" ]]; then
+      if grep -Eq "\b(SequentialAgent|ParallelAgent|LoopAgent|_require_adk_v2)\b" "${adk_file}"; then
+        fail "Deprecated ADK 1.x symbol (SequentialAgent/ParallelAgent/LoopAgent/_require_adk_v2) found in ${adk_file}"
+      else
+        pass "Zero deprecated SequentialAgent/ParallelAgent/LoopAgent/_require_adk_v2 references (${adk_file})"
+      fi
+    fi
+  done
 
   if ! has_todo_markers "${TRACK}/coding_agent/architectures.py" "lab-1"; then
     check_pattern "${TRACK}/coding_agent/architectures.py" 'mode="single_turn"' "Collaborative team uses mode=\"single_turn\" on subagents"

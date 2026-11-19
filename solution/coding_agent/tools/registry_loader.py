@@ -28,7 +28,7 @@ Verified Architecture & SDK Rules:
     ``AGENT_REGISTRY_ENDPOINT``) and strips ``x-goog-*`` headers on 302 GCS redirects.
 - **ImportError Trap:** ``google.adk.integrations.agent_registry`` imports ``a2a-sdk``
   and the Agent Identity provider at module scope — requires
-  ``pip install --upgrade "google-adk[a2a,agent-identity,mcp]>=1.29.0"``.
+  ``pip install --upgrade "google-adk[a2a,agent-identity,mcp]>=2.0.0"``.
 - **Mutual Exclusivity:** ``SkillToolset`` accepts ``environment=`` OR ``code_executor=``,
   never both (passing both raises ``ValueError``).
 - **Single-Parent Reuse:** Fetch ``RemoteA2aAgent`` once and call ``.clone()`` when
@@ -138,7 +138,7 @@ def build_skill_registry_toolset(
         try:
             from google.adk.integrations.skill_registry import GCPSkillRegistry
 
-            # Keyword-only constructor in ADK Python v1.27.0+
+            # Keyword-only constructor in ADK Python 2.0+
             registry = GCPSkillRegistry(project_id=project_id, location=location)
         except Exception as exc:
             # Isolated sandboxes without outbound Google API egress fall back to local skills
@@ -329,7 +329,7 @@ def build_agent_registry_integrations(
         raise ImportError(
             "Importing google.adk.integrations.agent_registry requires the `a2a` and "
             "`agent-identity` extras (they are imported at module scope). Install with: "
-            '`pip install --upgrade "google-adk[a2a,agent-identity,mcp]>=1.29.0"`.'
+            '`pip install --upgrade "google-adk[a2a,agent-identity,mcp]>=2.0.0"`.'
         ) from exc
 
     if register_auth_provider:

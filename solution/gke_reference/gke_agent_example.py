@@ -6,7 +6,7 @@ Sandbox Mode (``executor_type="sandbox"``), backed by Kubernetes SIG Apps
 ``agent-sandbox`` (``v1.0.6``, ``v1beta1`` CRDs) on GKE with gVisor isolation.
 
 Verified against:
-- https://adk.dev/integrations/gke-code-executor/ (ADK Python >= v1.14.0)
+- https://adk.dev/integrations/gke-code-executor/ (ADK Python 2.0+)
 - https://docs.cloud.google.com/kubernetes-engine/docs/how-to/agent-sandbox
 
 Optional dependencies (not installed by default in ``solution/pyproject.toml``):
@@ -64,7 +64,7 @@ def build_gke_code_executor(settings: GkeSandboxSettings) -> Any:
     """Instantiate ADK ``GkeCodeExecutor`` in Sandbox Mode.
 
     Prerequisites:
-    - ``pip install "google-adk[extensions]"`` (ADK Python >= v1.14.0).
+    - ``pip install "google-adk[extensions]"`` (ADK Python 2.0+).
     - ``rbac.yaml``, ``sandbox_template.yaml``, and ``sandbox_warmpool.yaml``
       applied in ``settings.namespace``.
     """

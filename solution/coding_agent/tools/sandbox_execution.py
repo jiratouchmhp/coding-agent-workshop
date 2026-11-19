@@ -16,7 +16,7 @@ Covers ALL FOUR verified execution adapters on Gemini Enterprise Agent Platform:
 - **Path C — Code Execution Sandbox (`execute_code()` & ADK `AgentEngineSandboxCodeExecutor`):**
   Safe ``Chunk`` response parsing (avoiding the doc quickstart ``b64decode`` bug)
   plus ADK ``AgentEngineSandboxCodeExecutor(sandbox_resource_name=... | agent_engine_resource_name=...)``.
-- **Path D — `AgentPlatformSandboxEnvironment(BaseEnvironment)` (ADK v1.29.0+):**
+- **Path D — `AgentPlatformSandboxEnvironment(BaseEnvironment)` (ADK Python 2.0+):**
   Implements the 3 exact ``BaseEnvironment`` abstract methods (``execute``,
   ``read_file``, ``write_file``) with ``EnvironmentScope.SESSION`` and mandatory
   ``*, ctx: Context | None = None`` so ADK ``EnvironmentToolset`` (including
@@ -361,7 +361,7 @@ def build_code_execution_executor(
     sandbox_resource_name: str | None = None,
     agent_engine_resource_name: str | None = None,
 ) -> Any:
-    """Build ADK's ``AgentEngineSandboxCodeExecutor`` (ADK Python >= v1.17.0).
+    """Build ADK's ``AgentEngineSandboxCodeExecutor`` (ADK Python 2.0+).
 
     Pass EITHER:
     - ``sandbox_resource_name``: reuse a specific pre-created Code Execution sandbox, OR
@@ -384,7 +384,7 @@ def build_code_execution_executor(
 
 
 # ---------------------------------------------------------------------------
-# Path D: Custom ADK BaseEnvironment for Remote Managed Sandboxes (v1.29.0+)
+# Path D: Custom ADK BaseEnvironment for Remote Managed Sandboxes (ADK Python 2.0+)
 # ---------------------------------------------------------------------------
 
 

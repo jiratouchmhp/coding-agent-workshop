@@ -15,7 +15,6 @@ Declarative Infrastructure-as-Code (IaC) reference for provisioning **Gemini Ent
   - `roles/aiplatform.user` or `roles/aiplatform.admin` (`CreateReasoningEngine`, `UpdateReasoningEngine`, `DeleteReasoningEngine`)
   - `roles/iam.serviceAccountUser` on any attached custom runtime service account
   - `roles/artifactregistry.writer` (for pushing BYOC images)
-  - `roles/storage.objectAdmin` or `roles/storage.objectViewer` (for `package_spec` GCS staging)
 - **Authentication:** `gcloud auth application-default login` (or Workload Identity Federation in CI/CD).
 - **Do NOT mix imperative `agents-cli deploy` and Terraform on the same instance:** Terraform owns the full `ReasoningEngine` spec (SA, `deployment_spec`, env vars). Either manage the engine entirely in Terraform or keep imperative `agents-cli deploy --update-env-vars`.
 
@@ -321,47 +320,7 @@ resource "google_vertex_ai_reasoning_engine" "dockerfile_agent" {
 
 ---
 
-## 5. Path 3 — Python `package_spec` (GCS Pickle Staging)
-
-Use `package_spec` for serialized Python SDK objects (`AdkApp`, LangChain, custom Python) staged in GCS.
-
-```python
-import cloudpickle
-from google.adk.agents import Agent
-from google.cloud import storage
-from vertexai.agent_engines import AdkApp  # Legacy package_spec doc pattern
-
-root_agent = Agent(model="gemini-3.1-flash-lite", name="weather_agent", description="Packaged ADK agent.")
-local_app = AdkApp(agent=root_agent)
-
-bucket = storage.Client(project="PROJECT_ID").bucket("BUCKET_NAME")
-with bucket.blob("agents/weather_agent/agent.pkl").open("wb") as f:
-    cloudpickle.dump(local_app, f)
-bucket.blob("agents/weather_agent/requirements.txt").upload_from_string(
-    "google-cloud-aiplatform[agent_engines,adk]>=1.144\ncloudpickle==3.0.0\n"
-)
-```
-
-```hcl
-resource "google_vertex_ai_reasoning_engine" "package_agent" {
-  display_name = "weather_agent_package_tf"
-  project      = var.project_id
-  region       = var.location
-
-  spec {
-    agent_framework = "google-adk"
-    package_spec {
-      python_version        = "3.11"
-      pickle_object_gcs_uri = "gs://${var.bucket_name}/agents/weather_agent/agent.pkl"
-      requirements_gcs_uri  = "gs://${var.bucket_name}/agents/weather_agent/requirements.txt"
-    }
-  }
-}
-```
-
----
-
-## 6. Agent Identity (SPIFFE), Cross-Project Agent Gateway & UAP V2
+## 5. Agent Identity (SPIFFE), Cross-Project Agent Gateway & UAP V2
 
 ### SPIFFE Agent Identity Rules
 
@@ -455,7 +414,7 @@ resource "google_iam_projects_policy_binding" "egress_binding" {
 
 ---
 
-## 7. PSC-I, VPC-SC & CMEK Configuration Rules
+## 6. PSC-I, VPC-SC & CMEK Configuration Rules
 
 - **Private Service Connect Interface (PSC-I):**
   - Requires minimum `/28` subnet per project; supports RFC 1918 and non-RFC 1918 EXCEPT `100.64.0.0/20`, `192.0.0.0/24`, `192.0.2.0/24`, `198.18.0.0/15`, `198.51.100.0/24`, `203.0.113.0/24`, `240.0.0.0/4`.
@@ -463,7 +422,6 @@ resource "google_iam_projects_policy_binding" "egress_binding" {
   - **Shared VPC:** Grant service project's `gcp-sa-aiplatform` `roles/compute.networkUser` on the host project; place the network attachment in the **service project** (recommended) and grant `roles/compute.networkAdmin` (or custom role with `compute.networkAttachments.{get,update}`, `compute.regionOperations.get`). If placed in the host project, enable `aiplatform.googleapis.com` and create its service identity via `gcloud beta services identity create --service=aiplatform.googleapis.com --project=HOST_PROJECT`.
   - **Internet egress with PSC-I / VPC-SC:** PSC-I routes traffic into your VPC with no default internet path; configure a proxy VM + Cloud NAT inside the VPC if outbound internet is required.
 - **VPC-SC Perimeter Ingress Rules for `gcp-sa-aiplatform-re`:**
-  - `package_spec` (pickle): ingress to `storage.googleapis.com` and `artifactregistry.googleapis.com`.
   - Source / Git / Dockerfile: ingress to `artifactregistry.googleapis.com`.
   - BYOC `container_spec`: no additional ingress rule required.
 - **CMEK (`encryption_spec` / `kms_key_name`):**
@@ -473,7 +431,7 @@ resource "google_iam_projects_policy_binding" "egress_binding" {
 
 ---
 
-## 8. Execution, Troubleshooting & Verification
+## 7. Execution, Troubleshooting & Verification
 
 ```bash
 cd terraform

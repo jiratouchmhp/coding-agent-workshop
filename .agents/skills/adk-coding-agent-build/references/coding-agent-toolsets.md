@@ -10,14 +10,14 @@ Choose the execution primitive that matches your trust boundary and target envir
 
 | Primitive | ADK Version | Tools / Interface | Isolation & Security Model | Best Used For |
 |---|---|---|---|---|
-| **`EnvironmentToolset(environment=LocalEnvironment(...))`** | `v1.29.0+` | `Execute`, `ReadFile`, `EditFile`, `WriteFile` | Local `asyncio.create_subprocess_shell`; file I/O confined via `_resolve_path()`, **no OS/container isolation** for shell commands | Local dev & Lab prototyping inside a dedicated workspace directory; works in ADK 1.0 & 2.0 |
-| **`EnvironmentToolset(environment=CustomBaseEnvironment)`** | `v1.29.0+` | `Execute`, `ReadFile`, `EditFile`, `WriteFile` | Custom remote isolation (e.g., Agent Platform Managed Shell or BYOC Sandbox) with `EnvironmentScope.SESSION` | **Production coding agents** running untrusted code/tests per user or per session |
-| **`ExecuteBashTool(workspace=..., policy=BashToolPolicy(...))`** | `v1.27.0+` | `execute_bash` only (no file tools) | **POSIX-only**, no-shell `create_subprocess_exec`, whole-token allowlist, `setrlimit` (`RLIMIT_AS`/`FSIZE`/`NPROC`/`CORE=0`), **mandatory HITL confirmation** | Local POSIX interactive CLI assistants needing strict command allowlists + per-command approval |
+| **`EnvironmentToolset(environment=LocalEnvironment(...))`** | `ADK Python 2.0+` | `Execute`, `ReadFile`, `EditFile`, `WriteFile` | Local `asyncio.create_subprocess_shell`; file I/O confined via `_resolve_path()`, **no OS/container isolation** for shell commands | Local dev & Lab prototyping inside a dedicated workspace directory |
+| **`EnvironmentToolset(environment=CustomBaseEnvironment)`** | `ADK Python 2.0+` | `Execute`, `ReadFile`, `EditFile`, `WriteFile` | Custom remote isolation (e.g., Agent Platform Managed Shell or BYOC Sandbox) with `EnvironmentScope.SESSION` | **Production coding agents** running untrusted code/tests per user or per session |
+| **`ExecuteBashTool(workspace=..., policy=BashToolPolicy(...))`** | `ADK Python 2.0+` | `execute_bash` only (no file tools) | **POSIX-only**, no-shell `create_subprocess_exec`, whole-token allowlist, `setrlimit` (`RLIMIT_AS`/`FSIZE`/`NPROC`/`CORE=0`), **mandatory HITL confirmation** | Local POSIX interactive CLI assistants needing strict command allowlists + per-command approval |
 | **`ManagedAgent`** (Pre-GA Preview) | `v2.4.0+` | First-party server-hosted Antigravity harness (`antigravity-preview-05-2026`) | Google-managed sandbox (`global` only, default zero network, 4 GiB RAM); **client-side Python/MCP tools raise `NotImplementedError`** | Rapid non-confidential prototyping without operating your own runtime or sandbox |
 
 ---
 
-## 2. `EnvironmentToolset` Internals & Contract (`v1.29.0+`)
+## 2. `EnvironmentToolset` Internals & Contract (`ADK Python 2.0+`)
 
 ### Exact Constructor & Imports
 
@@ -208,7 +208,7 @@ class AgentPlatformSandboxEnvironment(BaseEnvironment):
 
 ---
 
-## 5. Sharing `BaseEnvironment` with `SkillToolset` (`v1.25.0+` / `v1.29.0+`)
+## 5. Sharing `BaseEnvironment` with `SkillToolset` (`ADK Python 2.0+`)
 
 A coding agent can pass the **same** `BaseEnvironment` instance to both `EnvironmentToolset` and `SkillToolset` so `run_skill_script` runs inside the exact same confined workspace or remote sandbox:
 
@@ -237,7 +237,7 @@ tools = [
 
 ---
 
-## 6. `ExecuteBashTool` & `BashToolPolicy` Hardening (`v1.27.0+`)
+## 6. `ExecuteBashTool` & `BashToolPolicy` Hardening (`ADK Python 2.0+`)
 
 ### Exact Signatures & Dangerous Defaults (`bash_tool.py`)
 
@@ -280,7 +280,7 @@ When evaluating whether to build a custom ADK `LlmAgent` + `EnvironmentToolset` 
 
 - **Backend:** Control plane (`Agents API`) + data plane (`Interactions API`) via `genai.Client(vertexai=True, project=..., location="global")` (**`global` location only**).
 - **`base_agent`:** Only `antigravity-preview-05-2026` is supported (first agent in a project takes 2–3 min to provision; subsequent agents take 2–3 sec).
-- **ADK Wrapper (`google-adk >= 2.4.0`):** `ManagedAgent(name=..., mode="single_turn", agent_id=..., environment={"type": "remote"}, tools=[google_search])` implements `BaseAgent` (usable standalone, in a `Workflow`, or — **recommended over `AgentTool`** — added with `mode="single_turn"` directly to a parent `LlmAgent`'s `sub_agents` so ADK exposes it as an inline single-turn tool).
+- **ADK Wrapper (`google-adk >= 2.4.0`):** `ManagedAgent(name=..., mode="single_turn", agent_id=..., environment={"type": "remote"}, tools=[google_search])` implements `BaseAgent` (usable standalone, in a `Workflow`, or added with `mode="single_turn"` directly to a parent `LlmAgent`'s `sub_agents` so ADK exposes it as an inline single-turn tool).
 - **Hard Limitations:**
   - Pre-GA: **do NOT use with proprietary, confidential, or production data**.
   - Client-side tools (Python functions, client-side `McpToolset`) and raw `types.Tool.mcp_servers` configs raise **`NotImplementedError`** — only server-side built-in tools (e.g., `google_search`, `types.Tool(code_execution=...)`) and server-side remote MCP servers declared as **`google.adk.tools.RemoteMcpServer`** in `tools` (`Streamable HTTP`; `roles/mcp.toolUser`; deprecated HTTP+SSE `GET /sse` unsupported; Google-hosted MCPs require `X-Goog-User-Project`) work.

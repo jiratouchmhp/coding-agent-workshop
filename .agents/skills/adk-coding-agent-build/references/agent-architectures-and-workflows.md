@@ -1,6 +1,6 @@
 # ADK Agent Architectures, Collaboration & Multi-Agent Patterns
 
-Source-verified reference covering all 8 official ADK Simple Agent, Service Registration, Collaborative Team, Template Deprecation, Routing, and Multi-Agent Workflow Pattern guides (`adk.dev/agents/*`, `adk.dev/workflows/*`, and `adk.dev/2.0/`).
+Source-verified reference covering ADK 2.0+ Simple Agents, `ManagedAgent`, Service Registration, Collaborative Agent Teams, Deterministic & Dynamic Routing, and Multi-Agent Workflow Patterns (`adk.dev/agents/*`, `adk.dev/workflows/*`, `adk.dev/graphs/*`, and `adk.dev/2.0/`).
 
 > **Model ID Note:** Upstream `adk.dev` snippets often use `"gemini-flash-latest"`, which can return `404` on regional Agent Platform endpoints (such as `us-central1`). The Python examples below use explicit versioned IDs (e.g., `"gemini-2.5-flash"`) for regional compatibility.
 
@@ -16,7 +16,7 @@ A standalone **`Agent`** (alias for **`LlmAgent`**) combines an AI model, task i
 |---|---|---|
 | **1. Instruction-following degradation** | Long multi-step procedures are skipped, reordered, or completed with inconsistent quality/latency. | **Graph-based `Workflow`** (explicit nodes/edges) or **Collaborative Team** (focused specialist subagents). |
 | **2. Context window limits** | Files, logs, search results, or history required for the full task exceed model context capacity. | **Isolated subagent branches** (`mode="single_turn"` / `mode="task"`), **Artifacts**, or **Agent Skills** (`SkillToolset`). |
-| **3. Agent code modularity** | Prompt and tool sprawl hinder testing, ownership, or cross-project reuse. | Reusable **nested `Workflow`s**, subagent factory functions, or `AgentTool`-wrapped specialists. |
+| **3. Agent code modularity** | Prompt and tool sprawl hinder testing, ownership, or cross-project reuse. | Reusable **nested `Workflow`s**, subagent factory functions, or `mode="single_turn"` specialist subagents. |
 | **4. Mixing deterministic & non-deterministic steps** | Prompting an LLM to enforce strict branching, retries, linting, or approval gates is brittle. | **Graph-based `Workflow`** or **Dynamic workflow** (`@node` + `ctx.run_node`) interleaving Python code with `LlmAgent` nodes. |
 
 ### Eight Official ADK Agent Feature Extensions
@@ -29,7 +29,7 @@ Extend a single agent *before* adding orchestration overhead whenever the bottle
 5. **Agent Skills (`agentskills.io`):** Progressive-disclosure instructions and scripts loaded within context budgets.
 6. **Plugins:** Runner-wide cross-cutting behaviors (`BasePlugin`, `GlobalInstructionPlugin`).
 7. **Callbacks:** Lifecycle hooks (`before/after_agent`, `before/after_model`, `before/after_tool`) for telemetry, guardrails, and state initialization.
-8. **Service registration (`v1.34.0+`):** Plug custom backends for sessions, artifacts, memory, and A2A task stores via `services.yaml` / `services.py`.
+8. **Service registration (ADK Python 2.0+):** Plug custom backends for sessions, artifacts, memory, and A2A task stores via `services.yaml` / `services.py`.
 
 ---
 
@@ -82,7 +82,7 @@ managed_code_agent = ManagedAgent(
     mode="single_turn",
 )
 
-# 3. Recommended composition: add with mode="single_turn" to sub_agents (preferred over AgentTool)
+# 3. Recommended composition: add with mode="single_turn" to sub_agents
 coordinator = LlmAgent(
     name="research_coordinator",
     model="gemini-2.5-flash",
@@ -103,7 +103,7 @@ coordinator = LlmAgent(
 
 ## 3. Service Registration (`services.yaml` & `services.py`)
 
-*Source: `https://adk.dev/agents/service-registration/` (Supported: ADK Python **v1.34.0**)*
+*Source: `https://adk.dev/agents/service-registration/` (Supported: **ADK Python 2.0+**)*
 
 Register custom runtime backends for **four service types** — `session`, `artifact`, `memory`, and `task_store` (Agent2Agent / A2A task stores) — automatically discovered by `adk run`, `adk web`, and `adk api_server`.
 
@@ -179,8 +179,6 @@ registry.register_memory_service("mymemory", my_memory_factory)
 | **Graph-based workflows** | Python/TS/Go `v2.0.0+` (Kotlin `v1.5.0` Exp.) | Declarative `Workflow(edges=[...])` | Deterministic pipelines, conditional branches, fan-out/`JoinNode`, retries, HITL |
 | **Dynamic workflows** | Python/TS/Go `v2.0.0+` | `@node(rerun_on_resume=True)` + `ctx.run_node` | Bounded edit-test-fix loops, runtime-sized parallel fan-out, complex conditionals |
 | **Collaborative workflows** | Python/Go `v2.0.0+` | Coordinator `LlmAgent` + subagent `mode` | Open-ended tasks where an LLM coordinator delegates dynamically to specialists |
-| **Template workflows** | `v0.1.0+` (**Deprecated** in Py/TS/Go/Kt) | `SequentialAgent`, `ParallelAgent`, `LoopAgent` | Legacy 1.x code only — migrate new code to Graph or Dynamic workflows |
-| **Agent Routing (`RoutedAgent`)** | TypeScript `v1.0.0` (**Experimental**) | Code router fn selecting 1 agent + failover | TS failover, planning-mode toggle, classifier complexity routing |
 
 ### Collaborative Agent Teams (`mode` + Auto-Injected Delegation Tools)
 
@@ -256,164 +254,165 @@ app = App(
   1. **NEVER set `mode` on a root agent** — `mode` is exclusively for subagents invoked by a coordinator parent.
   2. **`task` mode agents MUST be leaf agents** — they cannot declare `sub_agents`.
   3. **`task` mode is DISABLED in graph-based workflows in ADK Python v2.0.0** — use `single_turn` inside Python v2.0.0 `Workflow` graphs until `task` mode is re-enabled in a future release.
+  4. **`Workflow` as Root Graph:** A `Workflow` cannot yet be attached as an `LlmAgent` `sub_agent`. To combine conversational triage with deterministic multi-step pipelines, make `Workflow` the root graph (with a `chat`-mode `LlmAgent` immediately after `"START"` if needed) or orchestrate specialist agents from a Dynamic `@node(rerun_on_resume=True)` workflow.
 
 ---
 
-## 5. Template Workflow Agents: Official Deprecation & 2.0 Migration
+## 5. Python ADK 2.0 Deterministic & Dynamic Routing
 
-*Sources: `https://adk.dev/agents/workflow-agents/`, `https://adk.dev/workflows/patterns/`, `https://adk.dev/2.0/`*
+*Sources: `https://adk.dev/graphs/routes/`, `https://adk.dev/graphs/dynamic/`, `https://adk.dev/graphs/retry/` (Supported: **ADK Python 2.0+**)*
 
-`SequentialAgent`, `ParallelAgent`, and `LoopAgent` are **deprecated / superseded** in ADK Python, TypeScript, Go, and Kotlin:
-- In **Python and TypeScript 2.0**, constructing any of these three classes emits a deprecation warning (once per class per process in TS 2.0), and the classes are scheduled for removal in a future release.
-- **Important 2.0 Interop Caveat:** A `Workflow` **cannot yet be used as an `LlmAgent` `sub_agent`**. If you need a deterministic multi-step pipeline alongside conversational triage, make `Workflow` the root graph (with a `chat` agent immediately after `"START"` if needed) or keep delegation inside a dynamic orchestrator / `AgentTool` boundary.
+In ADK Python 2.0+, express deterministic dispatch, complexity-based agent selection, and resilient failover natively with **Graph conditional `Event(route=...)`**, **Dynamic `@node` `if`/`elif` routing**, and **`RetryConfig` + narrow try/fallback** — keeping routing logic type-checked, testable, and checkpoint-safe.
 
-### Legacy Template -> ADK 2.0 Migration Matrix
+### Pattern A: Graph Conditional Routing (`Event(route=...)` + `DEFAULT_ROUTE`)
 
-| Deprecated Template Class | Legacy Mechanism & Quirks | ADK 2.0 Replacement |
-|---|---|---|
-| **`SequentialAgent`** | Fixed `sub_agents=[a, b, c]`; shares `InvocationContext` & `temp:` state; communicates via `output_key`. | `Workflow(edges=[("START", a, b, c)])` passing typed `Event(output=...)` directly. |
-| **`ParallelAgent`** (+ outer `SequentialAgent`) | Concurrent branches with isolated history but shared state; interleaves events non-deterministically without collecting a list. | `Workflow` fan-out edges into **`JoinNode`** -> gather node, or Dynamic **`asyncio.gather(*[ctx.run_node(..., use_sub_branch=True)])`**. |
-| **`LoopAgent`** | Repeats `sub_agents`; **`max_iterations` defaults to `None` in Python** (infinite unless `EventActions(escalate=True)` or `exit_loop` fires). | Dynamic **`@node(rerun_on_resume=True)`** bounded `for`/`while` loop with `ctx.run_node(...)`, or a conditional graph back-edge with explicit exit route. |
-
----
-
-## 6. Agent Routing: `RoutedAgent` (TS Experimental) & Python Equivalents
-
-*Source: `https://adk.dev/agents/routing/` (Supported: **ADK TypeScript v1.0.0 Experimental ONLY**)*
-
-`RoutedAgent` (sharing its core utility with `RoutedLlm`) lets a TypeScript router function choose **one** agent per invocation without an LLM transfer call.
-
-### TypeScript `RoutedAgent` Contract & Failover Semantics
-
-```typescript
-import { BaseAgent, Gemini, InvocationContext, LlmAgent, RoutedAgent } from '@google/adk';
-
-type AgentRouter = (
-  agents: Readonly<Record<string, BaseAgent>>,
-  context: InvocationContext,
-  errorContext?: { failedKeys: ReadonlySet<string>; lastError: unknown },
-) => Promise<string | undefined> | string | undefined;
-
-// 1. Pre-event failover using errorContext.failedKeys
-const failoverAgent = new RoutedAgent({
-  name: 'failover_router',
-  agents: { primary: primaryAgent, fallback: fallbackAgent }, // Or array (keyed by agent.name)
-  router: (_agents, _ctx, errorContext) => {
-    if (!errorContext) return 'primary';
-    if (errorContext.failedKeys.has('primary')) return 'fallback';
-    return undefined; // Stop routing and rethrow lastError
-  },
-});
-
-// 2. Planning-mode toggle (read-only planner vs. read/write executor)
-let planningMode = false;
-const modeRouted = new RoutedAgent({
-  name: 'coding_mode_router',
-  agents: { basic: readWriteAgent, planning: readOnlyPlannerAgent },
-  router: () => (planningMode ? 'planning' : 'basic'),
-});
-
-// 3. Async classifier complexity routing (simple vs. complex)
-const classifierModel = new Gemini({ model: 'gemini-2.5-flash' });
-const complexityRouted = new RoutedAgent({
-  name: 'complexity_router',
-  agents: { simple: simpleAgent, complex: complexAgent },
-  router: async (_agents, context) => {
-    const text = context.userContent?.parts?.[0]?.text || '';
-    if (!text) return 'simple';
-    let label = '';
-    for await (const resp of classifierModel.generateContentAsync({
-      contents: [{ role: 'user', parts: [{ text: `Classify as 'simple' or 'complex': ${text}` }] }],
-      toolsDict: {},
-      liveConnectConfig: {},
-    })) {
-      label += resp.content?.parts?.[0]?.text ?? '';
-    }
-    return label.toLowerCase().includes('complex') ? 'complex' : 'simple';
-  },
-});
-```
-
-**Five Strict Failover Rules in `RoutedAgent`:**
-1. Initial call omits `errorContext`.
-2. If the selected agent throws **before yielding any events**, the router is invoked again with `{ failedKeys, lastError }`.
-3. If the selected agent throws **after yielding events**, failover does **not** happen — the error propagates directly because partial output was already emitted.
-4. Returning a key already in `errorContext.failedKeys` propagates the error immediately.
-5. Returning `undefined` halts routing and throws `lastError`.
-
-### Exact Python ADK 2.0 Equivalents (No `RoutedAgent` in ADK Python)
-
-In ADK Python, implement the exact same routing patterns with **Graph `Event(route=...)`** or **Dynamic `if`/`elif`**:
+Use a deterministic router function node with a routing dictionary `(router_node, {key: target, DEFAULT_ROUTE: fallback})` for mode toggles (such as read-only planning vs. read/write editing) or multi-branch dispatch without an extra LLM transfer call:
 
 ```python
 from google.adk import Context, Event, Workflow
-from google.adk.workflow import node
+from google.adk.workflow import DEFAULT_ROUTE
 
-# Pattern A: Static Graph Planning-Mode / Complexity Router
-def route_mode(ctx: Context, node_input: str):
-    if ctx.state.get("planning_mode", False):
+def route_coding_mode(ctx: Context, node_input: str):
+    mode = ctx.state.get("coding_mode", "basic")
+    if mode == "planning":
         return Event(route="planning", output=node_input)
-    return Event(route="basic", output=node_input)
+    if mode == "basic":
+        return Event(route="basic", output=node_input)
+    return Event(route="unknown", output=node_input)
 
-graph_router = Workflow(
+coding_mode_workflow = Workflow(
     name="coding_mode_workflow",
     edges=[
-        ("START", route_mode),
-        (route_mode, {"planning": read_only_planner, "basic": read_write_coder}),
+        ("START", route_coding_mode),
+        (
+            route_coding_mode,
+            {
+                "planning": read_only_planner_agent,
+                "basic": read_write_coder_agent,
+                DEFAULT_ROUTE: read_only_planner_agent,
+            },
+        ),
     ],
 )
-
-# Pattern B: Dynamic Workflow Async Complexity Router + Explicit Failover
-@node(rerun_on_resume=True)
-async def dynamic_router(ctx: Context, node_input: str) -> str:
-    label = await ctx.run_node(classifier_agent, node_input)
-    target = complex_agent if "complex" in str(label).lower() else simple_agent
-    try:
-        return await ctx.run_node(target, node_input)
-    except RuntimeError:  # Narrow transient error only — NEVER catch BaseException!
-        return await ctx.run_node(fallback_agent, node_input)
 ```
+
+### Pattern B: Dynamic `@node` `if`/`elif` Routing & Resilient Failover
+
+Use `@node(rerun_on_resume=True)` when routing depends on an async classifier call or requires ordered failover after per-node `RetryConfig` retries are exhausted:
+
+```python
+from google.adk import Context, Event, Workflow
+from google.adk.workflow import NodeTimeoutError, RetryConfig, node
+
+class BackendUnavailableError(RuntimeError):
+    """Transient model or tool backend failure."""
+
+@node(
+    retry_config=RetryConfig(
+        max_attempts=3,
+        initial_delay=1.0,
+        exceptions=[BackendUnavailableError, NodeTimeoutError],
+    ),
+    timeout=20.0,
+)
+async def call_primary_specialist(ctx: Context, node_input: str) -> str:
+    return await ctx.run_node(primary_complex_agent, node_input)
+
+@node(rerun_on_resume=True)
+async def dynamic_router_with_failover(ctx: Context, node_input: str):
+    label = str(await ctx.run_node(classifier_agent, node_input)).strip().lower()
+    if "complex" in label:
+        try:
+            result = await ctx.run_node(call_primary_specialist, node_input)
+        except (BackendUnavailableError, NodeTimeoutError):
+            # Catch ONLY narrow expected failures — NEVER catch BaseException (breaks HITL pauses)!
+            yield Event(message="Primary specialist unavailable; switching to fallback agent.")
+            result = await ctx.run_node(fallback_agent, node_input)
+    elif "docs" in label:
+        result = await ctx.run_node(docs_agent, node_input)
+    else:
+        result = await ctx.run_node(simple_agent, node_input)
+    yield Event(output=result)
+
+routed_workflow = Workflow(
+    name="dynamic_routed_workflow",
+    edges=[("START", dynamic_router_with_failover)],
+)
+```
+
+**Three ADK 2.0 Routing & Failover Rules:**
+1. **Always Include `DEFAULT_ROUTE` on Partial Route Maps:** Prevents unmatched keys from silently stalling a conditional graph branch.
+2. **Layer `RetryConfig` Before Fallback:** Attach `RetryConfig(..., exceptions=[..., NodeTimeoutError])` to the primary node first so brief transient glitches recover before invoking the fallback agent.
+3. **Narrow `except` Clauses Only:** Never catch `BaseException` (which traps `NodeInterruptedError` and breaks HITL pauses) and avoid catching broad `Exception` inside nodes that rely on `RetryConfig`.
 
 ---
 
-## 7. Seven Multi-Agent Workflow Patterns Mapped to ADK 2.0
+## 6. Seven Multi-Agent Workflow Patterns in ADK 2.0
 
 *Source: `https://adk.dev/workflows/patterns/` (Python, TypeScript, Go, Java, Kotlin)*
 
-The official patterns page demonstrates all 7 canonical patterns (some snippets still show legacy template classes for backward compatibility). Use this ADK 2.0 mapping for all new Python code:
+Use these native ADK 2.0 implementations for all 7 canonical multi-agent patterns in Python:
 
 | # | Pattern | Goal & Structure | ADK 2.0 Recommended Implementation |
 |---|---|---|---|
-| **1** | **Coordinator / Dispatcher** | Central `LlmAgent` routes incoming requests to specialist subagents. | Root `LlmAgent(sub_agents=[billing, support])` with subagent `mode="single_turn"` or `mode="task"` (auto-injected delegation tools), or explicit `AgentTool` in `tools=[...]`. |
-| **2** | **Sequential Pipeline** | Fixed multi-step pipeline (`Validate -> Process -> Report`). | `Workflow(edges=[("START", validator, processor, reporter)])` passing `Event(output=...)` directly (replaces `SequentialAgent` + `output_key`). |
-| **3** | **Parallel Fan-Out & Gather** | Run independent workers concurrently, then synthesize results. | `Workflow` fan-out edges (`("START", w1, join)`, `("START", w2, join)`, `(join, synthesizer)`) with **`JoinNode`**, or dynamic `asyncio.gather(..., use_sub_branch=True)` (replaces `ParallelAgent` + `SequentialAgent`). |
-| **4** | **Hierarchical Task Decomposition** | Multi-level tree breaking complex goals into sub-tasks (`ReportWriter -> ResearchAssistant -> [WebSearch, Summarizer]`). | Wrap child specialists with `agent_tool.AgentTool(agent=...)` in `tools=[...]` (or `mode="single_turn"` subagents) so results return up each tier cleanly. |
+| **1** | **Coordinator / Dispatcher** | Central `LlmAgent` routes incoming requests to specialist subagents. | Root `LlmAgent(sub_agents=[billing, support])` with subagent `mode="single_turn"` or `mode="task"` (ADK auto-injects delegation tools named after each subagent). |
+| **2** | **Sequential Pipeline** | Fixed multi-step pipeline (`Validate -> Process -> Report`). | `Workflow(edges=[("START", validator, processor, reporter)])` passing typed `Event(output=...)` directly between nodes. |
+| **3** | **Parallel Fan-Out & Gather** | Run independent workers concurrently, then synthesize results. | `Workflow` fan-out edges (`("START", w1, join)`, `("START", w2, join)`, `(join, synthesizer)`) with **`JoinNode`**, or dynamic `asyncio.gather(..., use_sub_branch=True)`. |
+| **4** | **Hierarchical Task Decomposition** | Multi-level tree breaking complex goals into sub-tasks (`ReportWriter -> ResearchAssistant -> [WebSearch, Summarizer]`). | Multi-level `LlmAgent(sub_agents=[...])` hierarchy with `mode="single_turn"` on intermediate and leaf specialists so isolated results return cleanly up each tier, combined with nested `Workflow` composition for deterministic sub-pipelines. |
 | **5** | **Generate & Review (Generator-Critic)** | Separate generator (`DraftWriter`) and evaluator (`FactChecker`). | `Workflow(edges=[("START", draft_writer, fact_checker)])` using typed `output_schema`/`input_schema` (or add a router after `fact_checker` to branch on pass/fail). |
-| **6** | **Iterative Refinement** | Repeat refine + check until quality passes or max rounds reached. | Dynamic `@node(rerun_on_resume=True)` bounded `for` loop calling `ctx.run_node(refiner)` + `ctx.run_node(checker)` (replaces deprecated `LoopAgent` + custom `_run_async_impl` `EventActions(escalate=True)`). |
+| **6** | **Iterative Refinement** | Repeat refine + check until quality passes or max rounds reached. | Dynamic `@node(rerun_on_resume=True)` bounded `for`/`while` loop calling `ctx.run_node(refiner)` + `ctx.run_node(checker)`, or a conditional graph back-edge with an explicit state attempt cap. |
 | **7** | **Human-in-the-Loop (HITL)** | Pause for human oversight, approval, or structured input. | ADK has **no "Human Agent" type**. Use (a) Graph `RequestInput` nodes, (b) `FunctionTool(require_confirmation=True)` / `tool_context.request_confirmation()`, or (c) **TypeScript Policy-Based HITL** (`SecurityPlugin` + `BasePolicyEngine`). |
 
-### Pattern 4 Snippet: Hierarchical Task Decomposition (`AgentTool`)
+### Pattern 4 Snippet: Hierarchical Task Decomposition (ADK 2.0 Multi-Level `sub_agents` + Nested `Workflow`)
 
 ```python
+from google.adk import Workflow
 from google.adk.agents import LlmAgent
-from google.adk.tools import agent_tool
 
-web_searcher = LlmAgent(name="WebSearch", model="gemini-2.5-flash", description="Performs web searches.")
-summarizer = LlmAgent(name="Summarizer", model="gemini-2.5-flash", description="Summarizes text.")
+# 1. Dynamic multi-level collaborative hierarchy (never set `mode` on root_agent!)
+web_searcher = LlmAgent(
+    name="web_search",
+    model="gemini-2.5-flash",
+    mode="single_turn",  # Isolated branch; can run concurrently with sibling specialists
+    description="Searches documentation and returns raw findings.",
+)
+summarizer = LlmAgent(
+    name="summarizer",
+    model="gemini-2.5-flash",
+    mode="single_turn",
+    description="Condenses evidence into structured bullet points.",
+)
 
 research_assistant = LlmAgent(
-    name="ResearchAssistant",
+    name="research_assistant",
     model="gemini-2.5-flash",
-    description="Finds and summarizes information on a topic.",
-    tools=[agent_tool.AgentTool(agent=web_searcher), agent_tool.AgentTool(agent=summarizer)],
+    mode="single_turn",  # Auto-returns synthesized findings up to report_writer
+    description="Coordinates web_search and summarizer for a research sub-task.",
+    instruction="Gather evidence with web_search and condense it with summarizer.",
+    sub_agents=[web_searcher, summarizer],
 )
 
 report_writer = LlmAgent(
-    name="ReportWriter",
+    name="report_writer",
     model="gemini-2.5-flash",
-    instruction="Write a report using ResearchAssistant to gather evidence.",
-    tools=[agent_tool.AgentTool(agent=research_assistant)],
+    instruction="Write the final report using research_assistant to collect evidence.",
+    sub_agents=[research_assistant],
 )
+
+# 2. Deterministic sub-pipeline composition via nested Workflow (use fresh agent instances per parent)
+def build_deterministic_report_workflow() -> Workflow:
+    search_node = LlmAgent(name="search_step", model="gemini-2.5-flash", instruction="Collect source facts.")
+    summarize_node = LlmAgent(name="summarize_step", model="gemini-2.5-flash", instruction="Summarize source facts.")
+    writer_node = LlmAgent(name="write_step", model="gemini-2.5-flash", instruction="Draft final report from summary.")
+
+    research_subworkflow = Workflow(
+        name="research_subworkflow",
+        edges=[("START", search_node, summarize_node)],
+    )
+    return Workflow(
+        name="report_workflow",
+        edges=[("START", research_subworkflow, writer_node)],
+    )
 ```
 
 ### Pattern 7 Contrast: TypeScript Policy-Based HITL (`SecurityPlugin` + `BasePolicyEngine`)
@@ -426,7 +425,7 @@ In **ADK TypeScript**, policy-based HITL is the **recommended** governance patte
 
 ---
 
-## 8. Architecture Pitfalls ("Do This, Not That")
+## 7. Architecture Pitfalls ("Do This, Not That")
 
 | Do This | Not That | Why (Doc-Verified) |
 |---|---|---|
@@ -434,5 +433,5 @@ In **ADK TypeScript**, policy-based HITL is the **recommended** governance patte
 | Keep `mode="task"` subagents as **leaf** agents outside Python v2.0.0 graph `Workflow`s | Giving a `task` agent `sub_agents` or using `mode="task"` inside a Python v2.0.0 `Workflow` | `task` agents cannot have subagents, and `task` mode is disabled in Python v2.0.0 graph workflows. |
 | Compose `ManagedAgent` via `mode="single_turn"` in `sub_agents` + `RemoteMcpServer` | Passing local Python functions or `types.Tool(mcp_servers=...)` to `ManagedAgent` | Client-side tools and raw `types.Tool.mcp_servers` raise `NotImplementedError`; Agent Platform backend is `global`-only. |
 | Place `services.yaml`/`services.py` in the agent dir for `adk run` and the agents root dir for `adk web`/`adk api_server` | Placing `services.yaml` in the wrong folder or expecting YAML to override Python | Wrong folder prevents auto-discovery; `services.yaml` loads first and `services.py` always takes precedence on colliding schemes. |
-| Migrate `SequentialAgent`/`ParallelAgent`/`LoopAgent` to `Workflow` graphs or dynamic `ctx.run_node` | Building new Python/TS 2.0 orchestrations on template workflow agents | Template workflows are deprecated in Python/TS/Go/Kotlin and scheduled for removal; note `Workflow` cannot yet be an `LlmAgent` `sub_agent`. |
-| Use Graph `Event(route=...)` or Dynamic `if`/`elif` in Python for runtime agent selection | Trying to import `RoutedAgent` in ADK Python | `RoutedAgent` is TypeScript v1.0.0 Experimental only; failover only triggers if failure occurs before any event is yielded. |
+| Make `Workflow` the root graph (and nest child `Workflow`s in `edges`) | Passing a `Workflow` inside `LlmAgent.sub_agents` | A `Workflow` cannot yet be attached as an `LlmAgent` `sub_agent`; place a `chat` agent immediately after `"START"` or orchestrate from a Dynamic `@node(rerun_on_resume=True)`. |
+| Use Graph `Event(route=...)` (+ `DEFAULT_ROUTE`) or Dynamic `@node` `if`/`elif` + narrow exception failover | Catching `BaseException` in a failover router or omitting `DEFAULT_ROUTE` on partial route maps | Catching `BaseException` traps `NodeInterruptedError` and breaks HITL pauses; omitting `DEFAULT_ROUTE` leaves unmatched keys unhandled. |

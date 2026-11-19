@@ -191,43 +191,28 @@ result = sandbox.commands.run("python3 -c 'print(2 + 2)'")
 print(result.stdout)
 ```
 
-### 2.2 ADK `GkeCodeExecutor` (`google-adk[extensions]`, Python ADK `>= v1.14.0`)
+### 2.2 ADK `GkeCodeExecutor` (`google-adk[extensions]>=2.0.0`, ADK Python 2.0+)
 
-| Parameter | Type | Default | Mode / Notes |
+| Parameter | Type | Default | Notes |
 |---|---|---|---|
-| `namespace` | `str` | `"default"` | Namespace where `SandboxClaim`s or `Job`s are created. |
-| `executor_type` | `Literal["job", "sandbox"]` | `"job"` | **`"sandbox"` recommended** (uses `k8s-agent-sandbox` + warm pool); `"job"` is legacy ephemeral K8s Job + ConfigMap. |
-| `sandbox_template` | `str \| None` | `"python-sandbox-template"` | Sandbox Mode: `SandboxTemplate` name. |
-| `sandbox_gateway_name` | `str \| None` | `None` | Sandbox Mode: optional GKE Gateway API name for out-of-cluster routing. |
-| `image` | `str` | `"python:3.11-slim"` | Job Mode: execution container image. |
-| `timeout_seconds` | `int` | `300` | Job Mode: execution timeout. |
-| `cpu_requested` / `cpu_limit` | `str` | `"200m"` / `"500m"` | Job Mode: Pod CPU request & limit. |
-| `mem_requested` / `mem_limit` | `str` | `"256Mi"` / `"512Mi"` | Job Mode: Pod memory request & limit. |
+| `namespace` | `str` | `"default"` | Namespace where `SandboxClaim` and `Sandbox` resources are created. |
+| `executor_type` | `str` | *(set `"sandbox"`)* | Always set **`"sandbox"`** to execute via GKE Agent Sandbox CRDs (`Sandbox`, `SandboxTemplate`, `SandboxClaim`, `SandboxWarmPool`). |
+| `sandbox_template` | `str \| None` | `"python-sandbox-template"` | `SandboxTemplate` name in `namespace`. |
+| `sandbox_gateway_name` | `str \| None` | `None` | Optional GKE Gateway API name for out-of-cluster routing. |
 | `kubeconfig_path` / `kubeconfig_context` | `str` | `None` | Optional explicit kubeconfig; falls back to in-cluster config or default local kubeconfig. |
 
-- **Required Kubernetes RBAC:**
-  - **Sandbox Mode (`executor_type="sandbox"`):** `create`, `get`, `watch`, `delete` on `SandboxClaim` (`extensions.agents.x-k8s.io`) and `Sandbox` (`agents.x-k8s.io`) in `namespace`.
-  - **Job Mode (`executor_type="job"`):** `create`, `watch`, `delete` on `Jobs`; manage `ConfigMaps`; `list` `Pods`; read `Pods/log`.
+- **Required Kubernetes RBAC (`executor_type="sandbox"`):** `create`, `get`, `watch`, `delete` on `SandboxClaim` (`extensions.agents.x-k8s.io`) and `Sandbox` (`agents.x-k8s.io`) in `namespace`.
 
 ```python
 from google.adk.agents import LlmAgent
 from google.adk.code_executors import GkeCodeExecutor
 
-# Sandbox Mode (Recommended — warm-pool latency)
+# GKE Agent Sandbox Mode (CRD-backed warm-pool latency)
 sandbox_executor = GkeCodeExecutor(
     namespace="agent-sandbox-system",
     executor_type="sandbox",
     sandbox_template="python-sandbox-template",
     sandbox_gateway_name="your-gateway-name",  # Optional
-)
-
-# Legacy Job Mode (ephemeral gVisor Job + ConfigMap per call)
-job_executor = GkeCodeExecutor(
-    namespace="agent-ns",
-    executor_type="job",
-    timeout_seconds=600,
-    cpu_limit="1000m",
-    mem_limit="1Gi",
 )
 
 agent = LlmAgent(
