@@ -1,0 +1,119 @@
+# GKE Agent Sandbox Reference Overlay — SandboxTemplate (Solution Track)
+#
+# Install Kubernetes SIG Apps `agent-sandbox` v1.0.6 first (CRDs + controller + router):
+#   export AGENT_SANDBOX_VERSION="v1.0.6"
+#   kubectl apply -f \
+#     "https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${AGENT_SANDBOX_VERSION}/sandbox-with-extensions.yaml"
+#
+# Recommended cluster security policy (`secure-sandbox-policy` ValidatingAdmissionPolicy):
+#   kubectl apply -f \
+#     "https://raw.githubusercontent.com/kubernetes-sigs/agent-sandbox/${AGENT_SANDBOX_VERSION}/examples/policy/vap/secure-sandbox-policy.yaml"
+#   kubectl apply -f \
+#     "https://raw.githubusercontent.com/kubernetes-sigs/agent-sandbox/${AGENT_SANDBOX_VERSION}/examples/policy/vap/secure-sandbox-binding.yaml"
+#
+# Verified CRD version: `extensions.agents.x-k8s.io/v1beta1` (`v1.0.0` removed `v1alpha1`).
+#
+# -----------------------------------------------------------------------------
+# NETWORK ISOLATION & EGRESS POLICY NOTES (VERIFIED)
+# -----------------------------------------------------------------------------
+# 1. Auto-Generated Managed NetworkPolicy (`networkPolicyManagement: Managed`):
+#    Because this manifest uses `SandboxTemplate` (NOT a direct `Sandbox` CR),
+#    the controller automatically creates a default-deny NetworkPolicy per template:
+#      - Ingress: blocked from all sources EXCEPT Pods labeled `app: sandbox-router`
+#        in namespace `agent-sandbox-system`.
+#      - Egress: public internet allowed, while private LAN (RFC 1918), internal
+#        cluster DNS (CoreDNS), and Cloud Provider Metadata Server (`169.254.0.0/16`
+#        / `169.254.169.254`) are explicitly BLOCKED.
+#    WIF Gotcha: If sandbox code must call Google Cloud APIs via Workload Identity
+#    Federation (WIF), you must customize the template's NetworkPolicy to allow
+#    metadata server traffic (and review `automountServiceAccountToken` / VAP rules).
+#
+# 2. Optional L7 Domain Allowlisting with GKE `FQDNNetworkPolicy`:
+#    Requires GKE Dataplane V2 + `kube-dns` or Cloud DNS (no Cloud Service Mesh,
+#    no ClusterIP/Headless targets, max 50 resolved IPs per policy, max 100 IPs
+#    per hostname; list all domain aliases queried directly by Pods).
+#
+#    Example (apply as a separate manifest on Dataplane V2 clusters with
+#    `--enable-fqdn-network-policy`):
+#      apiVersion: networking.gke.io/v1alpha1
+#      kind: FQDNNetworkPolicy
+#      metadata:
+#        name: coding-sandbox-egress-allowlist
+#        namespace: agent-sandbox-system
+#      spec:
+#        podSelector:
+#          matchLabels:
+#            sandbox: coding-sandbox
+#        egress:
+#          - matches:
+#              - name: "pypi.org"
+#              - pattern: "*.pythonhosted.org"
+#            ports:
+#              - protocol: "TCP"
+#                port: 443
+#
+# 3. Safe Teardown Warning:
+#    Delete ONLY your namespace manifests (`kubectl delete -f solution/gke_reference/`).
+#    NEVER run `kubectl delete -f sandbox-with-extensions.yaml` on a shared cluster —
+#    it deletes the CRDs and cascading-deletes ALL sandboxes across ALL namespaces!
+
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: coding-sandbox-template
+  namespace: agent-sandbox-system
+  labels:
+    app.kubernetes.io/part-of: gemini-coding-agent-workshop
+spec:
+  podTemplate:
+    metadata:
+      labels:
+        sandbox: coding-sandbox
+    spec:
+      # Kernel isolation via GKE Sandbox (gVisor, <100 ms container start).
+      # Compliant with `secure-sandbox-policy` ValidatingAdmissionPolicy (VAP).
+      # Note: `secure-sandbox-policy` rejects `microvm` and Istio/Envoy
+      # `istio-init` NET_ADMIN/NET_RAW unless explicitly exempted.
+      runtimeClassName: gvisor
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      nodeSelector:
+        sandbox.gke.io/runtime: gvisor
+      tolerations:
+        - key: "sandbox.gke.io/runtime"
+          value: "gvisor"
+          effect: "NoSchedule"
+      containers:
+        - name: python-runtime
+          # Official verified Agent Sandbox runtime image (port 8888 for sandbox-router).
+          # Replace with your own Artifact Registry BYOC image once compatible with
+          # the Agent Sandbox router HTTP protocol on port 8888.
+          image: registry.k8s.io/agent-sandbox/python-runtime-sandbox:v0.1.0
+          ports:
+            - containerPort: 8888
+          readinessProbe:
+            httpGet:
+              path: "/"
+              port: 8888
+            initialDelaySeconds: 0
+            periodSeconds: 1
+          # Dual-stack IPv6 Gotcha: if your GKE VPC lacks IPv6 NAT/IGW, Node.js
+          # runtimes can stall up to 2 minutes before IPv4 fallback. Uncomment:
+          # env:
+          #   - name: NODE_OPTIONS
+          #     value: "--dns-result-order=ipv4first --no-network-family-autoselection"
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      restartPolicy: OnFailure

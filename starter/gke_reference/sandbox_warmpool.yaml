@@ -1,0 +1,35 @@
+# GKE Agent Sandbox Reference Overlay — SandboxWarmPool (Starter Track)
+#
+# Pre-warms gVisor Sandbox Pods from `coding-sandbox-template` so incoming
+# `SandboxClaim` requests bind to an initialized Pod in < 1 second instead of
+# waiting on cold Pod scheduling and container startup.
+#
+# Verified operational checks:
+# 1. Wait for warm-pool readiness before issuing claims (claiming early falls
+#    back to cold Sandbox creation; Autopilot node scale-up may take minutes):
+#      kubectl wait sandboxwarmpool coding-sandbox-warmpool \
+#        -n agent-sandbox-system \
+#        --for=jsonpath='{.status.readyReplicas}'=2 \
+#        --timeout=600s
+# 2. Verify whether a Sandbox is idle or in-use via `metadata.ownerReferences[*].kind`:
+#      - `SandboxWarmPool` -> idle / unclaimed in the warm pool
+#      - `SandboxClaim`    -> claimed / actively bound to an agent session
+# 3. Multi-tenant identity warning:
+#    All Pods in a single `SandboxWarmPool` share one KSA / WIF identity bound
+#    at Pod creation. Isolate tenants with separate warm pools or direct Sandboxes.
+
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: coding-sandbox-warmpool
+  namespace: agent-sandbox-system
+  labels:
+    app: coding-sandbox-warmpool
+    app.kubernetes.io/part-of: gemini-coding-agent-workshop
+spec:
+  # TODO(lab-7): Increase `replicas` (e.g., to 2) to maintain pre-warmed gVisor
+  # Pods for <1s SandboxClaim assignment, and verify `sandboxTemplateRef.name`
+  # matches `starter/gke_reference/sandbox_template.yaml`.
+  replicas: 1
+  sandboxTemplateRef:
+    name: coding-sandbox-template

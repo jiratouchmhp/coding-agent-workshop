@@ -1,0 +1,5 @@
+# Python testing, linting, and static security analysis tools baked into the BYOC sandbox.
+# (The HTTP runner itself uses Python standard library only to minimize attack surface.)
+pytest>=8.3.0
+ruff>=0.8.0
+bandit>=1.7.10

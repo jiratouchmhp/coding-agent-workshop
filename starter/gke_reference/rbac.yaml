@@ -1,0 +1,99 @@
+# GKE Agent Sandbox Reference Overlay — RBAC for ADK `GkeCodeExecutor` (Starter Track)
+#
+# Verified against:
+#   https://adk.dev/integrations/gke-code-executor/
+#   https://docs.cloud.google.com/kubernetes-engine/docs/how-to/how-install-agent-sandbox
+#
+# CRITICAL API GROUP SPLIT:
+# Kubernetes SIG Apps `agent-sandbox` (`v1.0.6`, `v1beta1`) splits its CRDs across
+# TWO distinct API groups:
+#   1. `extensions.agents.x-k8s.io`: `sandboxclaims`, `sandboxtemplates`, `sandboxwarmpools`
+#   2. `agents.x-k8s.io`:            `sandboxes`
+#
+# ADK `GkeCodeExecutor(executor_type="sandbox")` requires `create`, `get`, `watch`,
+# and `delete` permissions on BOTH `SandboxClaim` and `Sandbox` resources in the
+# target namespace.
+#
+# Workload Identity Federation (WIF) Note:
+# `adk deploy gke` binds Pods to the `default/default` KSA unless overridden, which
+# returns `403 PERMISSION_DENIED` on Vertex AI calls until bound via WIF to a GSA
+# holding `roles/aiplatform.user`. Prefer this dedicated KSA for production deploys.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: coding-agent-orchestrator-sa
+  namespace: agent-sandbox-system
+  labels:
+    app.kubernetes.io/part-of: gemini-coding-agent-workshop
+  # Uncomment and replace PROJECT_ID when enabling Workload Identity Federation for GKE:
+  # annotations:
+  #   iam.gke.io/gcp-service-account: "coding-agent-runtime-sa@PROJECT_ID.iam.gserviceaccount.com"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: coding-agent-sandbox-role
+  namespace: agent-sandbox-system
+  labels:
+    app.kubernetes.io/part-of: gemini-coding-agent-workshop
+rules:
+  # Extension CRDs (`extensions.agents.x-k8s.io/v1beta1`):
+  # Allows ADK `GkeCodeExecutor(executor_type="sandbox")` and `SandboxClient` to
+  # claim, inspect, watch, and clean up `SandboxClaim` resources.
+  - apiGroups:
+      - extensions.agents.x-k8s.io
+    resources:
+      - sandboxclaims
+    verbs:
+      - create
+      - get
+      - list
+      - watch
+      - delete
+  - apiGroups:
+      - extensions.agents.x-k8s.io
+    resources:
+      - sandboxtemplates
+      - sandboxwarmpools
+    verbs:
+      - get
+      - list
+      - watch
+  # TODO(lab-7): Add the second RBAC rule for the core Agent Sandbox API group
+  # `agents.x-k8s.io` granting `create`, `get`, `list`, `watch`, and `delete`
+  # on `sandboxes` (required by `GkeCodeExecutor(executor_type="sandbox")`).
+  #
+  # - apiGroups:
+  #     - agents.x-k8s.io
+  #   resources:
+  #     - sandboxes
+  #   verbs:
+  #     - create
+  #     - get
+  #     - list
+  #     - watch
+  #     - delete
+  #
+  # Optional Legacy Job Mode (`executor_type="job"`) Reference:
+  # If you use backward-compatible Job Mode instead of Sandbox Mode, also grant:
+  #   - apiGroups: ["batch"], resources: ["jobs"], verbs: ["create", "get", "list", "watch", "delete"]
+  #   - apiGroups: [""],      resources: ["configmaps"], verbs: ["create", "get", "list", "watch", "delete"]
+  #   - apiGroups: [""],      resources: ["pods"], verbs: ["get", "list", "watch"]
+  #   - apiGroups: [""],      resources: ["pods/log"], verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: coding-agent-sandbox-rolebinding
+  namespace: agent-sandbox-system
+  labels:
+    app.kubernetes.io/part-of: gemini-coding-agent-workshop
+subjects:
+  - kind: ServiceAccount
+    name: coding-agent-orchestrator-sa
+    namespace: agent-sandbox-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: coding-agent-sandbox-role

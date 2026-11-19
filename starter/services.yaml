@@ -1,0 +1,32 @@
+# =============================================================================
+# ADK Python v1.34.0+ Declarative Service Registration (Starter Track)
+# Reference: https://adk.dev/agents/service-registration/
+# =============================================================================
+# ADK CLI tools auto-discover `services.yaml` (or `.yml`) and `services.py`:
+#   - `adk web` / `adk api_server`: discovered in the agents root directory (`starter/`)
+#   - `adk run`: discovered in the agent directory (`starter/coding_agent/`)
+#
+# Loading order and precedence:
+#   1. `services.yaml` is loaded first.
+#   2. `services.py` is loaded second; if the same `scheme` is registered in both
+#      files, the definition in `services.py` takes precedence (overrides YAML).
+#
+# Keep `services: []` active while custom third-party class paths remain commented
+# out so `adk web`, `adk api_server`, and `adk run` start cleanly out-of-the-box.
+services: []
+
+# Uncomment and replace with real importable classes whose constructors accept
+# `MyService(uri="...", **kwargs)` to register custom URI schemes declaratively:
+# services:
+#   - scheme: mysession
+#     type: session
+#     class: my_custom_package.modules.MyCustomSessionService
+#   - scheme: myartifact
+#     type: artifact
+#     class: my_custom_package.storage.MyCustomArtifactService
+#   - scheme: mymemory
+#     type: memory
+#     class: my_custom_package.modules.MyCustomMemoryService
+#   - scheme: mytaskstore
+#     type: task_store
+#     class: my_custom_package.tasks.MyCustomTaskStore

@@ -1,0 +1,233 @@
+{
+  "started_at": "2026-11-19T08:17:23.750076+00:00",
+  "output_dir": "<repo_root>",
+  "rounds": [
+    {
+      "round": 1,
+      "tracks": [
+        {
+          "files_modified": [
+            "<repo_root>/.env.example",
+            "<repo_root>/starter/coding_agent/config.py",
+            "<repo_root>/solution/coding_agent/config.py",
+            "<repo_root>/starter/coding_agent/architectures.py",
+            "<repo_root>/solution/coding_agent/architectures.py",
+            "<repo_root>/starter/coding_agent/agent.py",
+            "<repo_root>/solution/coding_agent/agent.py",
+            "<repo_root>/starter/services.yaml",
+            "<repo_root>/solution/services.yaml",
+            "<repo_root>/starter/services.py",
+            "<repo_root>/solution/services.py",
+            "<repo_root>/starter/pyproject.toml",
+            "<repo_root>/solution/pyproject.toml",
+            "<repo_root>/starter/requirements.txt",
+            "<repo_root>/solution/requirements.txt",
+            "<repo_root>/scripts/verify_lab.sh"
+          ],
+          "summary": "Completed Round 1 \u2014 Track 1 (ADK 2.0 Codebase Upgrade) across both starter/ and solution/ tracks while preserving 100% backward compatibility with Labs 2-7 (AGENT_ARCHITECTURE=simple default):\n\n1. Configuration (.env.example & {starter,solution}/coding_agent/config.py): Added AGENT_ARCHITECTURE=simple (valid: simple|collaborative|graph|dynamic), MAX_FIX_ROUNDS=3, ENABLE_HITL_APPROVAL=false, and optional commented MANAGED_AGENT_ID=antigravity-preview-05-2026 with typed Settings fields and __post_init__ validation.\n2. ADK 2.0 Architectures ({starter,solution}/coding_agent/architectures.py): Added lazy _require_adk_v2() guard (preserving ADK 1.29.x compatibility for simple mode), build_global_instruction_plugin(), build_collaborative_coding_team() (Coordinator without root mode + single_turn code_implementer/code_reviewer + leaf-only task requirements_clarifier), build_graph_coding_workflow() (declarative Workflow with coder_agent, parallel pytest/ruff @node steps using RetryConfig + timeout=30.0, JoinNode verify_join, max_fix_rounds-bounded verdict_router, rerun_on_resume=False RequestInput HITL gate with Pydantic ApprovalDecision, and single terminal finalize_report), build_dynamic_coding_workflow() (@node(rerun_on_resume=True) orchestrator using ctx.run_node, asyncio.gather(..., use_sub_branch=True), Event(state=...) before fixer_agent, and checkpointed HITL), and build_optional_managed_agent() (ADK v2.4.0 Preview ManagedAgent documenting global-only Agent Platform backend and server-side tools only). Starter includes 3 clear # TODO(lab-1) checkpoints; solution has zero TODO(lab-) markers.\n3. Root Agent & App Dispatch ({starter,solution}/coding_agent/agent.py): Kept build_coding_agent() and all existing Lab 1-6 hooks intact, added build_root_agent() dispatching on cfg.agent_architecture, preserved root_agent = build_root_agent() and app = App(root_agent=root_agent, name=\"coding_agent\", ...) with ResumabilityConfig(is_resumable=True) and collaborative GlobalInstructionPlugin attachment.\n4. ADK v1.34.0 Service Registration ({starter,solution}/services.yaml & services.py): Added declarative services.yaml (safe services: [] default + commented session/artifact/memory/task_store examples) and programmatic services.py guarded behind ENABLE_CUSTOM_SERVICE_REGISTRY=true documenting services.py override precedence.\n5. Dependencies & Verification: Updated google-adk[a2a,agent-identity,mcp]>=2.0.0 across starter/solution pyproject.toml and requirements.txt (noting ~=1.29 compatibility for AGENT_ARCHITECTURE=simple), extended verify_lab_1() in scripts/verify_lab.sh, and verified with bash -n, PYTHONPYCACHEPREFIX=/tmp/pycache_chk python3 -m py_compile on all touched Python files, AST/hygiene checks (0 stray __pycache__ dirs), and verify_lab.sh all --track solution (PASS=172, FAIL=0) plus Lab 7 (PASS=11, FAIL=0).",
+          "track": "Round 1 \u2014 Track 1 (Codebase Upgrade)"
+        },
+        {
+          "files_modified": [
+            "<repo_root>/.agents/skills/adk-coding-agent-build/references/agent-architectures-and-workflows.md",
+            "<repo_root>/.agents/skills/adk-coding-agent-build/references/graph-and-dynamic-workflows.md",
+            "<repo_root>/.agents/skills/adk-coding-agent-build/SKILL.md",
+            "<repo_root>/.agents/skills/adk-coding-agent-build/references/maintenance.md"
+          ],
+          "summary": "Upgraded .agents/skills/adk-coding-agent-build with two new modular 1-hop reference files (agent-architectures-and-workflows.md covering all 8 Simple Agents & Multi-Agent Workflows docs, and graph-and-dynamic-workflows.md covering all 6 ADK 2.0 Graph & Dynamic Workflows docs + 2.0 compatibility), updated SKILL.md (217 lines, 997-char YAML folded description preserving all anti-shadowing Don't use for clauses, enhanced Decision Tree, Critical Gotchas, Dynamic Loop quick-start, and Modular References table), and updated references/maintenance.md with all 14 canonical adk.dev URLs, index.md refresh endpoints, and refresh checklists. Verified 6/6 PASS via validate_skills.py with zero orphan references, zero 2-hop links, zero hardcoded workstation paths, and zero CitC workspace modifications.",
+          "track": "Round 1 \u2014 Track 2 (Production Modular Skill Upgrade)"
+        },
+        {
+          "files_modified": [
+            "<repo_root>/workshop/01-LAB-SETUP-AND-BUILD-ADK.md",
+            "<repo_root>/workshop/00-WORKSHOP-OVERVIEW.md",
+            "<repo_root>/workshop/03-LAB-DEPLOY-RUNTIME-TERRAFORM.md",
+            "<repo_root>/workshop/04-LAB-SESSIONS-MEMORY-FEEDBACK.md",
+            "<repo_root>/workshop/FACILITATOR-GUIDE.md",
+            "<repo_root>/README.md",
+            "<repo_root>/automation/harvest_corpus.py"
+          ],
+          "summary": "Completed Round 1 Track 3 whole-workshop curriculum alignment for ADK 2.0 Agent Architectures, Multi-Agent Workflows, Graph & Dynamic Workflows, ManagedAgent, and Service Registration: upgraded Lab 1 into Part A (30m: setup, skills, ADK architecture spectrum & design decisions, EnvironmentToolset, simple LlmAgent) and Part B (30m Full-Day / 5m Half-Day walkthrough: collaborative, graph, and dynamic implementations in starter/coding_agent/architectures.py plus services.yaml/services.py) citing all 14 new ADK URLs; added the Build Pillar architecture progression and rebalanced Full-Day (420m: 370m labs + 50m breaks) and Half-Day (210m: 200m labs/demos + 10m break) schedules identically across 00-WORKSHOP-OVERVIEW.md, 01-LAB-SETUP-AND-BUILD-ADK.md, FACILITATOR-GUIDE.md, and README.md; added env-var architecture portability callout in Lab 3 and ADK v1.34.0 service-registration cross-reference in Lab 4; updated README repository map, Lab 1 cutover commands, and expanded FACILITATOR-GUIDE troubleshooting to Top-20 with 5 verified ADK 2.0 architecture entries; and added all 14 ADK URLs into automation/harvest_corpus.py USER_SEED_URLS (34 total unique seeds). Verified 34/34 seed URLs across workshop/*.md, 14/14 new ADK URLs in Lab 1, zero broken markdown links, clean py_compile on harvest_corpus.py, and zero __pycache__ artifacts.",
+          "track": "Track 3: Workshop Curriculum & Whole-Workshop Alignment"
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "static_checks": {
+        "passed": true,
+        "errors": [],
+        "warnings": [],
+        "metrics": {
+          "python_files": 46,
+          "starter_arch_todos": 6,
+          "validate_skills_exit": 0,
+          "package_skill_exit": 0,
+          "verify_lab_solution_all_exit": 0,
+          "urls_in_skills": "34/34",
+          "urls_in_workshop": "34/34"
+        }
+      },
+      "critique": {
+        "blocking_issues": [
+          "[API/Code Accuracy & Skill Quality \u2014 Static Syntax Error + ADK 2.0 Contradictions] `.agents/skills/adk-coding-agent-build/references/adk-core-and-setup.md` Section 6 (lines 282-352) contains a stale pre-alignment ADK 2.0 snippet and rules that both fail at runtime and contradict the verified ADK docs and sibling references (`agent-architectures-and-workflows.md`, `graph-and-dynamic-workflows.md`): (a) lines 325-327 use invalid 3-tuple routed edges `(verify_tests, planner, \"retry\")`, `(verify_tests, finish_node, \"pass\")`, `(verify_tests, fallback_node, \"__DEFAULT__\")` \u2014 `Workflow` edge tuples parse chains of `NodeLike` objects and raise `WorkflowConfigurationError` on string route elements (must use `(verify_tests, {\"retry\": planner, \"pass\": finish_node, DEFAULT_ROUTE: fallback_node})` or explicit `Edge(from_node=..., to_node=..., route=...)`, per `graphs_routes.md`); (b) lines 298 & 337 falsely claim `output_schema` is mandatory on `LlmAgent` workflow nodes to avoid `types.Content` errors (contradicting `graphs.md`, `graph-and-dynamic-workflows.md`, and `solution/coding_agent/architectures.py`, where `LlmAgent` nodes without `output_schema` pass `str` to downstream `FunctionNode`s); (c) line 306 stores `ctx.attempt_count` as a workflow loop iteration counter, even though `ctx.attempt_count` is `RetryConfig`'s per-node retry counter and resets on pauses/re-entries (`graphs_retry.md`); (d) line 341 misnames `mode=\"task\"` delegation tools as `request_task_{name}` (per `workflows_collaboration.md`, delegation tools are named directly after each subagent, while `finish_task` completes the leaf task); (e) line 339 recommends raw `Event(content=types.Content(...))` instead of Python's `Event(message=\"...\")` (`graphs_data-handling.md`); (f) line 340 makes ungrounded `interrupt_id`/`ctx.resume_inputs` claims contradicting `graphs_human-input.md` (handoff `rerun_on_resume=False` vs orchestrator `rerun_on_resume=True` + `ctx.run_node()`); (g) line 351 omits Python 2.0 deprecation warnings for `SequentialAgent`/`ParallelAgent`/`LoopAgent` (`workflows_patterns.md`). Replace Section 6's duplicated prose/snippet with a concise, accurate summary (using valid dict-routed edges and `Event(message=...)`) that defers deep patterns to `references/agent-architectures-and-workflows.md` and `references/graph-and-dynamic-workflows.md`.",
+          "[Doc Coverage & API/Code Accuracy \u2014 Outdated `output_schema` + `tools` Contradiction] Five locations still assert that setting `output_schema` disables tool calling on a Python `LlmAgent`: `workshop/01-LAB-SETUP-AND-BUILD-ADK.md:375`, `.agents/skills/adk-coding-agent-build/SKILL.md:75`, `.agents/skills/adk-coding-agent-build/references/adk-core-and-setup.md:121, 362`, `starter/coding_agent/agent.py:186`, and `solution/coding_agent/agent.py:290-291`. This directly contradicts `adk_arch_docs/agents_llm-agents.md:477-480, 510` (in Python, ADK supports `output_schema` and `tools` together \u2014 Gemini models on Google Cloud accept both in one request, while other models fall back to an injected `set_model_response` tool that can be unreliable, so separating formatting into a sub-agent/downstream node is a reliability best practice rather than a hard ban) AND directly contradicts `.agents/skills/adk-coding-agent-build/references/agent-architectures-and-workflows.md:210-218` (`flight_agent` uses both `output_schema=FlightResult` and `tools=[search_flights, book_flight]`). Update all 5 locations to reflect the accurate Python ADK rule.",
+          "[Whole-Workshop Alignment & API/Code Accuracy \u2014 Lab 1 Part B Diverges from `starter/` & `solution/coding_agent/architectures.py`] `workshop/01-LAB-SETUP-AND-BUILD-ADK.md` Part B does not match the actual starter/solution implementation and includes a loop bug: (a) Graph workflow diagram & prose (`01-LAB-SETUP-AND-BUILD-ADK.md:475-496`) depict a separate `fixer_agent` target on `NEEDS_FIX`, state `verdict_router` reads `ctx.state.get(\"fix_attempts\", 0)`, and emit `state={\"fix_attempts\": attempts + 1, \"code\": ..., \"findings\": ...}`, whereas `starter/coding_agent/architectures.py:321-342` and `solution/coding_agent/architectures.py:465-676` have no `fixer_agent` (routing `NEEDS_FIX` back directly to `coder_agent`), inject `fix_attempts: int = 0` via ADK state parameter binding, and emit `state={\"fix_attempts\": next_attempt, \"latest_findings\": findings, \"checks_passed\": False}`; (b) Dynamic workflow snippet (`01-LAB-SETUP-AND-BUILD-ADK.md:519-542`) calls a non-existent `_combine_findings(...)` helper (actual helper is `_format_check_findings`), runs pytest/ruff before `fixer_agent` inside `for attempt in range(settings.max_fix_rounds):` so the final fix round is never re-verified (unlike `solution/coding_agent/architectures.py:806-835` which runs initial checks before the loop and re-runs checks after every `fixer_agent` fix), and passes `str(code_summary)` instead of the structured payload dict to `request_human_approval`; (c) Collaborative snippet (`01-LAB-SETUP-AND-BUILD-ADK.md:434-440`) omits `output_schema=CodeReviewReport` on `code_reviewer`, which both `starter/coding_agent/architectures.py:302` and `solution/coding_agent/architectures.py:405` require. Align Lab 1 Part B's Mermaid diagram, code snippets, and bullet points with `starter/` and `solution/coding_agent/architectures.py`."
+        ],
+        "improvements": [
+          "Propagate `App` plugins (`GlobalInstructionPlugin`) and `ResumabilityConfig` cleanly across all modes and runtime deployment: (1) in `starter/` and `solution/coding_agent/agent.py` (`_build_app_options`), consider attaching `GlobalInstructionPlugin` to `graph` and `dynamic` workflows as well as `collaborative` (per `adk_arch_docs/graphs.md:572`), and (2) note in Lab 3 (`03-LAB-DEPLOY-RUNTIME-TERRAFORM.md:138`) or update `starter/main.py` & `solution/main.py` so `AdkApp` either forwards `app` (when supported by the installed `vertexai.agent_engines.AdkApp` signature) or explicitly notes that `main.py` wraps `root_agent` directly (so `ResumabilityConfig` / `GlobalInstructionPlugin` on `coding_agent.agent.app` require passing `app` or configuring plugins on `AdkApp` when deploying HITL/collaborative workflows remotely).",
+          "Preserve Lab 4 Memory Bank `after_agent_callback` (`persist_turn_to_memory_callback`) in `graph` and `dynamic` architectures in `solution/coding_agent/architectures.py` (currently `include_agent_callbacks=False` on `coder_agent`/`fixer_agent` and no `after_agent_callback` is attached to the returned `Workflow`, so `ENABLE_MEMORY_BANK=true` registers `PreloadMemoryTool` without persisting turns in `graph`/`dynamic` modes).",
+          "Update `build_optional_managed_agent()` in `starter/coding_agent/architectures.py` and `solution/coding_agent/architectures.py` to read `get_settings().managed_agent_id` (instead of raw `os.environ.get(\"MANAGED_AGENT_ID\")`) so `.env`-configured `MANAGED_AGENT_ID` values work even when `get_settings()` has not been called first.",
+          "Add `# ENABLE_CUSTOM_SERVICE_REGISTRY=false` to `.env.example` so every env var referenced in `starter/services.py`, `solution/services.py`, and Lab 1 Step 8 is documented in `.env.example`.",
+          "Minor reference polish in `.agents/skills/adk-coding-agent-build/references/`: (a) add `v1.34.0` (Service Registration `services.yaml`/`services.py`) to the Version Milestones table in `adk-core-and-setup.md:25-37` to match `maintenance.md:4`; (b) update `coding-agent-toolsets.md:283-286` to note that `ManagedAgent` is recommended via `mode=\"single_turn\"` in `sub_agents` (rather than `AgentTool`) and supports `google.adk.tools.RemoteMcpServer`; (c) consider trimming `graph-and-dynamic-workflows.md` (currently 556 lines) slightly for scannability if convenient.",
+          "Add a defensive check in `starter/eval/optimize_prompt.py` and `solution/eval/optimize_prompt.py` around `getattr(root_agent, \"instruction\", \"\")` so running prompt optimization while `AGENT_ARCHITECTURE` is `graph` or `dynamic` (where `root_agent` is a `Workflow` with no top-level `.instruction`) logs a clear hint to use `AGENT_ARCHITECTURE=simple` (or targets `coder_agent`)."
+        ],
+        "overall_score": 85,
+        "round": 2,
+        "scores": {
+          "api_code_accuracy": 84,
+          "doc_coverage": 86,
+          "skill_production_quality": 85,
+          "whole_workshop_alignment": 87
+        }
+      },
+      "fix": {
+        "files_modified": [
+          "<repo_root>/.agents/skills/adk-coding-agent-build/SKILL.md",
+          "<repo_root>/.agents/skills/adk-coding-agent-build/references/adk-core-and-setup.md",
+          "<repo_root>/.agents/skills/adk-coding-agent-build/references/coding-agent-toolsets.md",
+          "<repo_root>/.agents/skills/adk-coding-agent-build/references/graph-and-dynamic-workflows.md",
+          "<repo_root>/.env.example",
+          "<repo_root>/workshop/01-LAB-SETUP-AND-BUILD-ADK.md",
+          "<repo_root>/workshop/03-LAB-DEPLOY-RUNTIME-TERRAFORM.md",
+          "<repo_root>/starter/coding_agent/agent.py",
+          "<repo_root>/solution/coding_agent/agent.py",
+          "<repo_root>/starter/coding_agent/architectures.py",
+          "<repo_root>/solution/coding_agent/architectures.py",
+          "<repo_root>/starter/main.py",
+          "<repo_root>/solution/main.py",
+          "<repo_root>/starter/eval/optimize_prompt.py",
+          "<repo_root>/solution/eval/optimize_prompt.py"
+        ],
+        "summary": "Completed Round 2 Targeted Fix Pass addressing all 3 blocking issues and all 6 improvements across skills, workshop guides, config templates, and starter/solution tracks: (1) Replaced stale Section 6 of references/adk-core-and-setup.md with an accurate ADK 2.0 summary and runnable dict-routed Workflow example using Event(message=...), session-state fix_attempts tracking (clarifying ctx.attempt_count is RetryConfig's per-node counter), optional output_schema on LlmAgent nodes, accurate mode=\"task\" delegation naming/finish_task, RequestInput rerun_on_resume=False vs True semantics, Python+TS 2.0 template workflow deprecation warnings, and 1-hop-safe references to sibling docs; (2) Corrected all 5 outdated output_schema+tools claims (Lab 1, SKILL.md, adk-core-and-setup.md, starter & solution agent.py) to reflect ADK Python support on Gemini on GCP vs set_model_response fallback; (3) Aligned Lab 1 Part B Mermaid graph diagram, verdict_router state-binding details, collaborative code_reviewer output_schema=CodeReviewReport, and dynamic workflow loop (_format_check_findings, initial checks + post-fix re-checks, structured HITL payload, _build_final_report) with starter/ and solution/coding_agent/architectures.py; (4) Propagated GlobalInstructionPlugin across collaborative/graph/dynamic modes in _build_app_options and updated starter/main.py, solution/main.py, and Lab 3 to forward AdkApp(app=adk_app) when supported (with agent/plugins fallback); (5) Preserved Lab 4 Memory Bank after_agent_callback once at terminal workflow completion in graph and dynamic modes in solution/coding_agent/architectures.py via _invoke_optional_after_agent_callback; (6) Updated build_optional_managed_agent() in starter/ and solution/ to read get_settings().managed_agent_id; (7) Documented ENABLE_CUSTOM_SERVICE_REGISTRY=false in .env.example and Lab 1; (8) Polished references (v1.34.0 milestone in adk-core-and-setup.md, ManagedAgent mode=\"single_turn\"/RemoteMcpServer in coding-agent-toolsets.md, trimmed graph-and-dynamic-workflows.md to 501 lines); (9) Added defensive .instruction guard and graph/dynamic architecture hint in starter/ and solution/eval/optimize_prompt.py. Verified with validate_skills.py (6/6 PASS), verify_lab.sh all --track solution (172 PASS, 0 FAIL), package_registry_skill.py --dry-run (16/16 PASS), py_compile on all 8 touched .py files, behavioral unit checks, and zero __pycache__ artifacts left behind.",
+        "track": "round2-targeted-fix"
+      },
+      "converged": false
+    },
+    {
+      "round": 3,
+      "static_checks": {
+        "passed": true,
+        "errors": [],
+        "warnings": [],
+        "metrics": {
+          "python_files": 46,
+          "starter_arch_todos": 6,
+          "validate_skills_exit": 0,
+          "package_skill_exit": 0,
+          "verify_lab_solution_all_exit": 0,
+          "urls_in_skills": "34/34",
+          "urls_in_workshop": "34/34"
+        }
+      },
+      "critique": {
+        "blocking_issues": [
+          "[API/Code Accuracy & Whole-Workshop Alignment \u2014 Attendee Runtime `NameError` Between Lab 1 Part B Step 7 & `starter/coding_agent/architectures.py`] `workshop/01-LAB-SETUP-AND-BUILD-ADK.md:568` (inside Step 7: \"Implement `# TODO(lab-1)` in `starter/coding_agent/architectures.py`\") instructs attendees to call `_build_final_report(code_summary=str(code_summary), findings=latest_findings, fix_attempts=attempts_used, approval_note=approval_note)`, and `starter/coding_agent/architectures.py:333, 370` instructs attendees to invoke optional Lab 4 `callbacks[\"after_agent_callback\"]` on completion, yet `starter/coding_agent/architectures.py` NEVER defines `_build_final_report` (nor `_attach_optional_callbacks`, `_invoke_optional_after_agent_callback`, or `_coerce_check_outcome` \u2014 all of which exist only in `solution/coding_agent/architectures.py:163-201, 307-358`). An attendee following Lab 1 Part B Step 7 verbatim hits `NameError: name '_build_final_report' is not defined` at runtime. Fix: add `_build_final_report` (and `_attach_optional_callbacks`, `_invoke_optional_after_agent_callback`, plus `import inspect, shutil, sys` if helpful for the `pytest`/`ruff` check commands) as pre-provided helpers in `starter/coding_agent/architectures.py` so Lab 1 Step 7's starter snippets execute cleanly with zero missing symbols.",
+          "[API/Code Accuracy \u2014 Multi-Turn Session State Leak (`fix_attempts`) in `solution/coding_agent/architectures.py:586-675` (`build_graph_coding_workflow`)] In `build_graph_coding_workflow()`, `verdict_router(ctx, node_input, fix_attempts: int = 0)` reads session-scoped `fix_attempts` (not `temp:`), increments it via `Event(state={\"fix_attempts\": next_attempt, ...})` on `\"NEEDS_FIX\"`, and preserves `\"fix_attempts\": fix_attempts` when routing to `\"PASS\"` or `\"NEEDS_APPROVAL\"` so `finalize_report` can read it across HITL pauses. However, `finalize_report` (`solution/coding_agent/architectures.py:674`) returns `adk_v2.Event(message=report, output=report)` WITHOUT resetting `fix_attempts` or `latest_findings` in session state. Consequently, in any multi-turn session under `AGENT_ARCHITECTURE=graph` (such as Lab 1's own two-turn `adk web` test), Turn 2 enters `verdict_router` with Turn 1's stale `fix_attempts` value \u2014 if Turn 1 hit `MAX_FIX_ROUNDS=3`, Turn 2 executes zero fix rounds on failing checks and misreports Turn 1's attempt count in Turn 2's report. Fix: reset per-turn workflow state on terminal completion in `finalize_report` (`return adk_v2.Event(message=report, output=report, state={\"fix_attempts\": 0, \"latest_findings\": \"\"})`) \u2014 keeping state intact across HITL pauses while guaranteeing Turn 2 starts fresh at `fix_attempts=0` \u2014 and note the reset cleanly in `starter/coding_agent/architectures.py:334` and `workshop/01-LAB-SETUP-AND-BUILD-ADK.md:500`."
+        ],
+        "improvements": [
+          "[solution/coding_agent/architectures.py:654-665, 868-873] Normalize HITL `RequestInput` approval responses consistently between `graph` and `dynamic` modes: `finalize_report` in `build_graph_coding_workflow()` cleanly formats `ApprovalDecision`, `Mapping` (deserialized JSON dict with `\"approved\"`), and plain `str`, whereas `dynamic_coding_workflow()` only checks `isinstance(decision, ApprovalDecision)` and falls back to raw dict `str` representation when ADK deserializes the reply as a `dict`. Extract a shared `_format_approval_note(decision: Any) -> str` helper used by both workflows (and expose it in `starter/coding_agent/architectures.py` as well).",
+          "[solution/coding_agent/architectures.py:276 & starter/coding_agent/architectures.py:224] Prevent orphan `pytest`/`ruff` subprocesses if ADK's `@node(..., timeout=30.0)` cancels `_run_workspace_check` mid-execution: wrap `await proc.communicate()` in `try: ... except BaseException: proc.kill(); await proc.wait(); raise` (still re-raising `BaseException` immediately so `asyncio.CancelledError`, `NodeTimeoutError`, and `NodeInterruptedError` propagate unmodified to ADK's retry/HITL runtime).",
+          "[.agents/skills/adk-coding-agent-build/SKILL.md:161-170] Align Quick-Start Pattern #3 (`coding_loop`) with the verified pattern in `adk_arch_docs/graphs_dynamic.md:583-590`, `references/graph-and-dynamic-workflows.md:420-427`, and `solution/coding_agent/architectures.py:826-856` by running the initial `await ctx.run_node(run_checks, code)` before the bounded `for` loop and re-running `run_checks` after each `fixer_agent` turn so the final fix iteration is also verified.",
+          "[starter/terraform/main.tf:226 & solution/terraform/main.tf:226] Add a brief commented optional `deployment_spec` block showing `# env { name = \"AGENT_ARCHITECTURE\"; value = \"simple\" }` alongside `MAX_FIX_ROUNDS` and `ENABLE_HITL_APPROVAL` so Lab 3's environment-variable portability callout (`workshop/03-LAB-DEPLOY-RUNTIME-TERRAFORM.md:138`) is directly discoverable inside `terraform/main.tf` while keeping default Terraform plans unchanged (`AGENT_ARCHITECTURE=simple`)."
+        ],
+        "overall_score": 91,
+        "round": 3,
+        "scores": {
+          "api_code_accuracy": 87,
+          "doc_coverage": 95,
+          "skill_production_quality": 95,
+          "whole_workshop_alignment": 88
+        }
+      },
+      "fix": {
+        "files_modified": [
+          "<repo_root>/solution/coding_agent/architectures.py",
+          "<repo_root>/starter/coding_agent/architectures.py",
+          "<repo_root>/workshop/01-LAB-SETUP-AND-BUILD-ADK.md",
+          "<repo_root>/.agents/skills/adk-coding-agent-build/SKILL.md",
+          "<repo_root>/starter/terraform/main.tf",
+          "<repo_root>/solution/terraform/main.tf"
+        ],
+        "summary": "Completed Round 3 Targeted Fix Pass resolving both blocking issues and all four improvements: (1) added pre-provided helpers (_attach_optional_callbacks, _invoke_optional_after_agent_callback, _pytest_command, _ruff_command, _coerce_check_outcome, _coerce_bool, _format_approval_note, _build_final_report, plus inspect/json/shutil/sys imports) to starter/coding_agent/architectures.py and aligned workshop/01-LAB-SETUP-AND-BUILD-ADK.md Step 7 snippets so attendees hit zero missing symbols while preserving all 6 TODO(lab-1) markers; (2) fixed the multi-turn session state leak in build_graph_coding_workflow()'s finalize_report by resetting state={\"fix_attempts\": 0, \"latest_findings\": \"\"} on terminal completion (and clearing temporary fixer template keys on dynamic_coding_workflow completion) while keeping state intact across HITL pauses, documented across solution, starter, and Lab 1; (3) extracted shared _format_approval_note() normalizing ApprovalDecision, deserialized JSON Mapping dicts, JSON strings, and plain-text replies identically across graph and dynamic workflows; (4) wrapped await proc.communicate() in _run_workspace_check (starter and solution) with try/except BaseException subprocess kill+wait cleanup while re-raising unmodified so CancelledError/NodeTimeoutError/NodeInterruptedError propagate to ADK's retry/HITL runtime; (5) aligned Quick-Start Pattern #3 (coding_loop) in .agents/skills/adk-coding-agent-build/SKILL.md to run initial checks before the bounded loop and re-verify after every fix round; and (6) added commented optional AGENT_ARCHITECTURE / MAX_FIX_ROUNDS / ENABLE_HITL_APPROVAL env blocks in starter/terraform/main.tf and solution/terraform/main.tf while preserving default AGENT_ARCHITECTURE=simple. All verification checks passed (validate_skills.py 6/6, verify_lab.sh all --track solution 172/172 PASS / 0 FAIL, package_registry_skill.py --dry-run 16/16, py_compile clean, and runtime behavioral tests covering multi-turn state reset, HITL dict normalization, and subprocess cancellation cleanup).",
+        "track": "round-3-targeted-fix-pass"
+      },
+      "converged": false
+    },
+    {
+      "round": 4,
+      "static_checks": {
+        "passed": true,
+        "errors": [],
+        "warnings": [],
+        "metrics": {
+          "python_files": 46,
+          "starter_arch_todos": 6,
+          "validate_skills_exit": 0,
+          "package_skill_exit": 0,
+          "verify_lab_solution_all_exit": 0,
+          "urls_in_skills": "34/34",
+          "urls_in_workshop": "34/34"
+        }
+      },
+      "critique": {
+        "blocking_issues": [],
+        "improvements": [
+          "Add a matching __all__ export list to solution/coding_agent/architectures.py to achieve 100% symbol-export symmetry with starter/coding_agent/architectures.py (lines 37-48).",
+          "Keep a 40-60 character safety buffer under the 1,024-char frontmatter description cap during future refreshes (current lengths are 997 chars for adk-coding-agent-build and 1,005-1,017 chars across the five sibling skills).",
+          "Optionally add a fast stdlib/mocked unit test in verify_lab.sh 1 (when pydantic/uv venv is active) exercising _format_check_findings, _format_approval_note, and _build_final_report across CheckOutcome, serialized dicts, and ApprovalDecision inputs."
+        ],
+        "overall_score": 98,
+        "round": 4,
+        "scores": {
+          "api_code_accuracy": 98,
+          "doc_coverage": 99,
+          "skill_production_quality": 98,
+          "whole_workshop_alignment": 99
+        }
+      },
+      "converged": true
+    }
+  ],
+  "finished_at": "2026-11-19T09:18:22.811669+00:00",
+  "final_static_checks": {
+    "passed": true,
+    "errors": [],
+    "warnings": [],
+    "metrics": {
+      "python_files": 46,
+      "starter_arch_todos": 6,
+      "validate_skills_exit": 0,
+      "package_skill_exit": 0,
+      "verify_lab_solution_all_exit": 0,
+      "urls_in_skills": "34/34",
+      "urls_in_workshop": "34/34"
+    }
+  },
+  "final_critique": {
+    "blocking_issues": [],
+    "improvements": [
+      "Add a matching __all__ export list to solution/coding_agent/architectures.py to achieve 100% symbol-export symmetry with starter/coding_agent/architectures.py (lines 37-48).",
+      "Keep a 40-60 character safety buffer under the 1,024-char frontmatter description cap during future refreshes (current lengths are 997 chars for adk-coding-agent-build and 1,005-1,017 chars across the five sibling skills).",
+      "Optionally add a fast stdlib/mocked unit test in verify_lab.sh 1 (when pydantic/uv venv is active) exercising _format_check_findings, _format_approval_note, and _build_final_report across CheckOutcome, serialized dicts, and ApprovalDecision inputs."
+    ],
+    "overall_score": 98,
+    "round": 4,
+    "scores": {
+      "api_code_accuracy": 98,
+      "doc_coverage": 99,
+      "skill_production_quality": 98,
+      "whole_workshop_alignment": 99
+    }
+  }
+}

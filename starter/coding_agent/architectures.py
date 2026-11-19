@@ -1,0 +1,585 @@
+"""ADK 2.0 Multi-Agent, Declarative Graph, Dynamic Workflow, and ManagedAgent builders (starter track).
+
+Complete the Lab 1 checkpoints in this file when exploring ADK 2.0
+architectures beyond the default ``AGENT_ARCHITECTURE=simple`` single-agent setup:
+- ``collaborative``: Coordinator ``LlmAgent`` + ``mode="single_turn"`` / ``mode="task"`` subagents
+- ``graph``: Declarative ADK 2.0 ``Workflow`` graph with parallel checks, ``JoinNode``,
+  bounded fix cycle, and optional ``RequestInput`` HITL approval gate
+- ``dynamic``: Programmatic ``@node(rerun_on_resume=True)`` orchestrator with
+  ``ctx.run_node()``, ``asyncio.gather(..., use_sub_branch=True)``, and checkpointed HITL
+
+Keep ``AGENT_ARCHITECTURE=simple`` as the default in ``.env`` so Labs 2-7 and
+ADK ``1.29.x`` continue working unchanged.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import inspect
+import json
+import logging
+import os
+import shutil
+import sys
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+from coding_agent.config import Settings, get_settings
+
+try:
+    from google.adk import Context
+except ImportError:  # ADK 1.x fallback so `AGENT_ARCHITECTURE=simple` stays importable
+    Context = Any  # type: ignore[misc, assignment]
+
+__all__ = [
+    "ApprovalDecision",
+    "CheckOutcome",
+    "CodeReviewReport",
+    "Context",
+    "GLOBAL_ENGINEERING_GUARDRAILS",
+    "build_collaborative_coding_team",
+    "build_dynamic_coding_workflow",
+    "build_global_instruction_plugin",
+    "build_graph_coding_workflow",
+    "build_optional_managed_agent",
+]
+
+logger = logging.getLogger(__name__)
+
+GLOBAL_ENGINEERING_GUARDRAILS = """Global Enterprise Engineering Guardrails:
+1. Inspect existing files before making modifications; prefer minimal surgical edits.
+2. Never fabricate command output, lint status, or unit test results.
+3. Keep all file reads, writes, and shell commands strictly confined to the active workspace.
+4. Never hardcode secrets, credentials, or destructive host-level commands.
+"""
+
+
+class ApprovalDecision(BaseModel):
+    """Structured human-in-the-loop (HITL) approval response for ``RequestInput``."""
+
+    approved: bool = Field(
+        description="Set to true to approve finalizing the verified code changes, or false to reject."
+    )
+    reviewer_notes: str = Field(
+        default="",
+        description="Optional human reviewer notes or follow-up instructions.",
+    )
+
+
+class CheckOutcome(BaseModel):
+    """Deterministic verification outcome returned by pytest and ruff graph nodes."""
+
+    check_name: str
+    passed: bool
+    exit_code: int
+    summary: str
+
+
+class CodeReviewReport(BaseModel):
+    """Structured code & test review verdict returned by ``code_reviewer``."""
+
+    approved: bool = Field(description="True if implementation and tests meet engineering bars.")
+    summary: str = Field(description="Concise summary of code quality, edge cases, and security.")
+    issues: list[str] = Field(
+        default_factory=list,
+        description="Concrete defects, missing tests, or security concerns to fix.",
+    )
+
+
+@dataclass(frozen=True)
+class _AdkV2Runtime:
+    """Lazy bundle of ADK 2.0+ workflow, event, and node primitives."""
+
+    Context: Any
+    Event: Any
+    JoinNode: Any
+    NodeTimeoutError: Any
+    RequestInput: Any
+    RetryConfig: Any
+    Workflow: Any
+    node: Any
+
+
+def _require_adk_v2() -> _AdkV2Runtime:
+    """Verify ADK Python >= 2.0.0 workflow primitives are installed and return them.
+
+    This lazy guard allows ``AGENT_ARCHITECTURE=simple`` to run cleanly even on
+    ADK ``1.29.x``, while raising an actionable upgrade hint whenever
+    ``collaborative``, ``graph``, or ``dynamic`` is selected on ADK ``< 2.0.0``.
+    """
+    try:
+        import google.adk
+
+        adk_version = getattr(google.adk, "__version__", "unknown")
+    except ImportError as exc:
+        raise RuntimeError(
+            "google-adk is not installed. Install ADK 2.0+ with:\n"
+            '  pip install "google-adk[a2a,agent-identity,mcp]>=2.0.0"'
+        ) from exc
+
+    try:
+        from google.adk import Context as AdkContext
+        from google.adk import Event, Workflow
+        from google.adk.events import RequestInput
+        from google.adk.workflow import JoinNode, NodeTimeoutError, RetryConfig, node
+    except ImportError as exc:
+        raise RuntimeError(
+            "ADK Python >= 2.0.0 is required for AGENT_ARCHITECTURE in "
+            "{collaborative, graph, dynamic} "
+            f"(detected google-adk=={adk_version}). Upgrade with:\n"
+            '  pip install "google-adk[a2a,agent-identity,mcp]>=2.0.0"\n'
+            "Or set AGENT_ARCHITECTURE=simple in .env to stay on ADK 1.29.x."
+        ) from exc
+
+    return _AdkV2Runtime(
+        Context=AdkContext,
+        Event=Event,
+        JoinNode=JoinNode,
+        NodeTimeoutError=NodeTimeoutError,
+        RequestInput=RequestInput,
+        RetryConfig=RetryConfig,
+        Workflow=Workflow,
+        node=node,
+    )
+
+
+def _build_gemini_model(settings: Settings) -> Any:
+    """Build a regional-safe versioned Gemini model with HTTP retries."""
+    from google.adk.models import Gemini
+    from google.genai import types
+
+    return Gemini(
+        model=settings.model_name,
+        retry_options=types.HttpRetryOptions(initial_delay=1, attempts=2),
+    )
+
+
+def _attach_optional_callbacks(
+    agent_kwargs: dict[str, Any],
+    callbacks: Mapping[str, Any] | None,
+    *,
+    include_tool_callbacks: bool = True,
+    include_agent_callbacks: bool = False,
+) -> None:
+    """Attach optional Lab 4 callbacks to an ``LlmAgent`` kwargs dict."""
+    if not callbacks:
+        return
+    if include_tool_callbacks:
+        if callbacks.get("before_tool_callback") is not None:
+            agent_kwargs["before_tool_callback"] = callbacks["before_tool_callback"]
+        if callbacks.get("after_tool_callback") is not None:
+            agent_kwargs["after_tool_callback"] = callbacks["after_tool_callback"]
+    if include_agent_callbacks and callbacks.get("after_agent_callback") is not None:
+        agent_kwargs["after_agent_callback"] = callbacks["after_agent_callback"]
+
+
+async def _invoke_optional_after_agent_callback(
+    callbacks: Mapping[str, Any] | None,
+    ctx: Context,
+) -> None:
+    """Invoke Lab 4's optional ``after_agent_callback`` once at workflow completion.
+
+    ADK 2.0 ``Workflow`` subclasses ``BaseNode`` (not ``BaseAgent``) and does not expose
+    an ``after_agent_callback`` field, whereas ADK 2.0 unifies ``CallbackContext`` with
+    ``Context`` (exposing ``add_events_to_memory()`` and ``session``). Invoking the
+    callback once at the workflow's terminal step preserves Lab 4 Memory Bank turn
+    persistence (``persist_turn_to_memory_callback``) in ``graph`` and ``dynamic`` modes
+    without duplicating writes across intermediate fix iterations.
+    """
+    callback = callbacks.get("after_agent_callback") if callbacks else None
+    if not callable(callback):
+        return
+    result = callback(ctx)
+    if inspect.isawaitable(result):
+        await result
+
+
+def build_global_instruction_plugin(
+    global_instruction: str = GLOBAL_ENGINEERING_GUARDRAILS,
+    name: str = "enterprise_coding_guardrails",
+) -> Any | None:
+    """Build ADK's ``GlobalInstructionPlugin`` for App-wide engineering guardrails.
+
+    Applies consistent rules across the coordinator and all subagents via
+    ``App(plugins=[...])`` (gracefully returns ``None`` if unavailable).
+    """
+    plugin_cls: Any | None = None
+    try:
+        from google.adk.plugins.global_instruction_plugin import GlobalInstructionPlugin
+
+        plugin_cls = GlobalInstructionPlugin
+    except ImportError:
+        try:
+            from google.adk.plugins import GlobalInstructionPlugin
+
+            plugin_cls = GlobalInstructionPlugin
+        except ImportError as exc:
+            logger.debug("GlobalInstructionPlugin unavailable (%s); skipping plugin.", exc)
+            return None
+
+    return plugin_cls(global_instruction=global_instruction, name=name)
+
+
+def _pytest_command() -> list[str]:
+    """Return the workspace pytest command using the active Python interpreter."""
+    return [sys.executable, "-m", "pytest", "-q"]
+
+
+def _ruff_command() -> list[str]:
+    """Return the workspace ruff command (falling back to ``python -m ruff``)."""
+    ruff_bin = shutil.which("ruff")
+    return [ruff_bin, "check", "."] if ruff_bin else [sys.executable, "-m", "ruff", "check", "."]
+
+
+async def _run_workspace_check(
+    settings: Settings,
+    *,
+    check_name: str,
+    command: list[str],
+    allow_exit_codes: frozenset[int] = frozenset({0}),
+    empty_exit_code_message: str = "",
+) -> CheckOutcome:
+    """Run a deterministic verification CLI inside the local workspace.
+
+    IMPORTANT (ADK 2.0 Retry & HITL semantics):
+    - Never swallow ``Exception`` or ``BaseException``. The ``except BaseException``
+      block around ``proc.communicate()`` only kills and reaps the child subprocess
+      if ADK's ``@node(..., timeout=...)`` cancels the coroutine mid-execution, then
+      immediately re-raises so ``asyncio.CancelledError``, ``TimeoutError``,
+      ``NodeTimeoutError``, and ``NodeInterruptedError`` propagate unmodified to
+      ADK's retry/HITL runtime.
+    """
+    if settings.sandbox_mode != "local":
+        return CheckOutcome(
+            check_name=check_name,
+            passed=True,
+            exit_code=0,
+            summary=(
+                f"Skipped host-local {check_name} check while SANDBOX_MODE={settings.sandbox_mode!r}; "
+                "verification runs inside the remote Managed Sandbox."
+            ),
+        )
+
+    workspace_dir = settings.local_workspace_path
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *command,
+            cwd=str(workspace_dir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        return CheckOutcome(
+            check_name=check_name,
+            passed=True,
+            exit_code=0,
+            summary=f"{check_name} executable not found on PATH; check skipped.",
+        )
+
+    try:
+        stdout_bytes, stderr_bytes = await proc.communicate()
+    except BaseException:
+        if proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+        await proc.wait()
+        raise
+
+    exit_code = int(proc.returncode or 0)
+    combined = (
+        stdout_bytes.decode("utf-8", errors="replace").strip()
+        + "\n"
+        + stderr_bytes.decode("utf-8", errors="replace").strip()
+    ).strip()
+
+    max_chars = min(settings.max_output_chars, 4_000)
+    if len(combined) > max_chars:
+        combined = combined[:max_chars] + "\n...[truncated]..."
+
+    if exit_code in allow_exit_codes:
+        summary = combined or empty_exit_code_message or f"{check_name} passed."
+        if exit_code != 0 and empty_exit_code_message:
+            summary = f"{empty_exit_code_message}\n{combined}".strip()
+        return CheckOutcome(
+            check_name=check_name,
+            passed=True,
+            exit_code=0,
+            summary=summary,
+        )
+
+    return CheckOutcome(
+        check_name=check_name,
+        passed=False,
+        exit_code=exit_code,
+        summary=combined or f"{check_name} failed with exit code {exit_code}.",
+    )
+
+
+def _coerce_check_outcome(name: str, raw: Any) -> CheckOutcome:
+    """Normalize a ``CheckOutcome`` (or serialized dict) emitted from a workflow node."""
+    if isinstance(raw, CheckOutcome):
+        return raw
+    if isinstance(raw, Mapping):
+        return CheckOutcome(
+            check_name=str(raw.get("check_name", name)),
+            passed=bool(raw.get("passed", False)),
+            exit_code=int(raw.get("exit_code", 1)),
+            summary=str(raw.get("summary", "")),
+        )
+    return CheckOutcome(
+        check_name=name,
+        passed=bool(raw),
+        exit_code=0 if raw else 1,
+        summary=str(raw),
+    )
+
+
+def _format_check_findings(pytest_raw: Any, ruff_raw: Any) -> str:
+    """Format failing pytest/ruff ``CheckOutcome`` objects into a concise findings string."""
+    pytest_res = _coerce_check_outcome("pytest", pytest_raw)
+    ruff_res = _coerce_check_outcome("ruff", ruff_raw)
+    parts: list[str] = []
+    if not pytest_res.passed:
+        parts.append(f"[pytest exit={pytest_res.exit_code}]\n{pytest_res.summary}")
+    if not ruff_res.passed:
+        parts.append(f"[ruff exit={ruff_res.exit_code}]\n{ruff_res.summary}")
+    return "\n\n".join(parts)
+
+
+def _coerce_bool(value: Any) -> bool:
+    """Interpret booleans and stringified booleans cleanly for HITL decisions."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "approved"}
+    return bool(value)
+
+
+def _format_approval_note(decision: Any) -> str:
+    """Normalize HITL ``RequestInput`` replies across ``graph`` and ``dynamic`` workflows.
+
+    Handles ``ApprovalDecision`` instances, deserialized JSON ``Mapping`` dicts
+    containing ``"approved"``, JSON-encoded strings, and plain-text human replies.
+    Returns ``""`` when ``decision`` is empty or is the non-HITL graph summary
+    payload forwarded along the ``PASS`` route.
+    """
+    if decision is None:
+        return ""
+    if isinstance(decision, ApprovalDecision):
+        verdict = "APPROVED" if decision.approved else "REJECTED"
+        notes = decision.reviewer_notes.strip()
+        suffix = f" — {notes}" if notes else ""
+        return f"\n\n### Human Approval\n- Decision: **{verdict}**{suffix}"
+    if isinstance(decision, Mapping):
+        if "approved" in decision:
+            verdict = "APPROVED" if _coerce_bool(decision.get("approved")) else "REJECTED"
+            notes = str(decision.get("reviewer_notes", "")).strip()
+            suffix = f" — {notes}" if notes else ""
+            return f"\n\n### Human Approval\n- Decision: **{verdict}**{suffix}"
+        if {"checks_passed", "findings"}.issubset(decision.keys()):
+            return ""
+        if decision:
+            return f"\n\n### Human Approval\n- Response: {dict(decision)}"
+        return ""
+    if isinstance(decision, str):
+        text = decision.strip()
+        if not text:
+            return ""
+        if text.startswith("{") and text.endswith("}"):
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, Mapping) and "approved" in parsed:
+                return _format_approval_note(parsed)
+        return f"\n\n### Human Approval\n- Response: {text}"
+    return f"\n\n### Human Approval\n- Response: {decision}"
+
+
+def _build_final_report(
+    *,
+    code_summary: str,
+    findings: str,
+    fix_attempts: int,
+    approval_note: str = "",
+) -> str:
+    """Render a deterministic final summary report for graph & dynamic workflows."""
+    status = "PASSED" if not findings else f"COMPLETED WITH FINDINGS (after {fix_attempts} fix round(s))"
+    lines = [
+        f"## Coding Workflow Report — {status}",
+        f"- Fix rounds executed: {fix_attempts}",
+        "",
+        "### Verification Summary",
+        findings if findings else "All deterministic checks (pytest + ruff) passed cleanly.",
+    ]
+    if code_summary:
+        lines.extend(["", "### Latest Implementation Summary", code_summary])
+    if approval_note:
+        lines.append(approval_note)
+    return "\n".join(lines)
+
+
+def build_collaborative_coding_team(
+    settings: Settings,
+    tools: Sequence[Any],
+    callbacks: Mapping[str, Any] | None = None,
+    code_executor: Any | None = None,
+) -> Any:
+    """Build an ADK 2.0 collaborative coordinator team with mode-scoped subagents.
+
+    Target design (``https://adk.dev/workflows/collaboration/``):
+    - ``code_implementer`` (``mode="single_turn"``): receives ``tools`` (``EnvironmentToolset``
+      + coding tools) and optional ``code_executor``; returns automatically.
+    - ``code_reviewer`` (``mode="single_turn"``): reviews code/tests in an isolated
+      session branch (parallel-capable) with ``output_schema=CodeReviewReport``.
+    - ``requirements_clarifier`` (``mode="task"``): leaf agent ONLY (cannot have
+      ``sub_agents``; note ``task`` mode is disabled inside Python v2.0.0 graph
+      workflows!); asks clarifying questions and returns via ``finish_task``.
+    - Coordinator ``LlmAgent(name="coding_agent", sub_agents=[...])`` — NEVER set
+      ``mode`` on the root coordinator agent!
+    """
+    _require_adk_v2()
+    del settings, tools, callbacks, code_executor
+    # TODO(lab-1): Construct `code_implementer` (mode="single_turn"),
+    # `code_reviewer` (mode="single_turn", output_schema=CodeReviewReport),
+    # and `requirements_clarifier` (mode="task", leaf-only), then return the
+    # Coordinator `LlmAgent(name="coding_agent", sub_agents=[...])` WITHOUT
+    # setting `mode` on the root agent. Compare against
+    # `solution/coding_agent/architectures.py`.
+    raise NotImplementedError(
+        "Complete TODO(lab-1) in starter/coding_agent/architectures.py: "
+        "build_collaborative_coding_team()."
+    )
+
+
+def build_graph_coding_workflow(
+    settings: Settings,
+    tools: Sequence[Any],
+    callbacks: Mapping[str, Any] | None = None,
+    code_executor: Any | None = None,
+) -> Any:
+    """Build a declarative ADK 2.0 ``Workflow`` graph with parallel checks and HITL.
+
+    Target design (``https://adk.dev/graphs/``):
+    - ``coder_agent`` (``LlmAgent``, default ``single_turn`` in graph — NOT ``chat`` mode)
+    - Parallel ``run_pytest_node`` & ``run_ruff_node`` decorated with
+      ``@node(retry_config=RetryConfig(max_attempts=3, initial_delay=1.0,
+      exceptions=[TimeoutError, NodeTimeoutError]), timeout=30.0)``
+    - ``JoinNode(name="verify_join")`` merging both branches into a dict keyed by
+      predecessor node name (respecting the single terminal output rule!)
+    - ``verdict_router`` emitting ``Event(route="PASS" | "NEEDS_FIX" | "NEEDS_APPROVAL",
+      output=..., state={"fix_attempts": ...})`` with explicit ``settings.max_fix_rounds``
+      bound (ADK 2.0 graph cycles are NOT bounded automatically!)
+    - Optional ``request_human_approval`` (``@node(rerun_on_resume=False)``) yielding
+      ``RequestInput(message=..., payload=..., response_schema=ApprovalDecision)``
+    - ``finalize_report`` formatting optional HITL replies via
+      ``_format_approval_note(...)``, rendering ``_build_final_report(...)``,
+      invoking optional Lab 4 ``callbacks["after_agent_callback"]`` once via
+      ``_invoke_optional_after_agent_callback(callbacks, ctx)``, and emitting
+      strictly ONE ``Event(message=report, output=report, state={"fix_attempts": 0, "latest_findings": ""})``
+      so per-turn workflow state resets cleanly for Turn 2+ while remaining intact
+      across intermediate HITL pauses.
+    """
+    _require_adk_v2()
+    del settings, tools, callbacks, code_executor
+    # TODO(lab-1): Define `coder_agent`, parallel `run_pytest_node` / `run_ruff_node`
+    # (using `_run_workspace_check` + `@node(retry_config=..., timeout=30.0)`),
+    # `JoinNode(name="verify_join")`, bounded `verdict_router`,
+    # `@node(rerun_on_resume=False)` `request_human_approval`, and `finalize_report`,
+    # then return `Workflow(name="coding_agent", edges=[...])`.
+    # Compare against `solution/coding_agent/architectures.py`.
+    raise NotImplementedError(
+        "Complete TODO(lab-1) in starter/coding_agent/architectures.py: "
+        "build_graph_coding_workflow()."
+    )
+
+
+def build_dynamic_coding_workflow(
+    settings: Settings,
+    tools: Sequence[Any],
+    callbacks: Mapping[str, Any] | None = None,
+    code_executor: Any | None = None,
+) -> Any:
+    """Build an ADK 2.0 programmatic dynamic workflow mirroring ``adk.dev/graphs/dynamic/#loop-route``.
+
+    Target design:
+    - ``@node(rerun_on_resume=True)`` orchestrator ``dynamic_coding_workflow(ctx: Context, node_input: str)``
+    - Calls ``await ctx.run_node(coder_agent, node_input)``
+    - Runs initial parallel checks via ``await asyncio.gather(ctx.run_node(run_pytest_node, ..., use_sub_branch=True),
+      ctx.run_node(run_ruff_node, ..., use_sub_branch=True))`` before entering a bounded
+      ``for attempt in range(settings.max_fix_rounds):`` loop that calls ``fixer_agent``
+      and re-runs parallel checks after every fix round
+    - Yields ``Event(state={"code": ..., "findings": ..., "fix_attempts": ...})`` BEFORE calling
+      ``await ctx.run_node(fixer_agent, ...)`` (Python ``{key}`` prompt templates
+      read session state, NOT ``node_input``!)
+    - If ``settings.enable_hitl_approval`` is true, awaits
+      ``await ctx.run_node(request_human_approval, {...})`` (``rerun_on_resume=False``)
+    - Formats optional HITL replies via ``_format_approval_note(decision)``, renders
+      ``_build_final_report(...)``, invokes optional Lab 4
+      ``callbacks["after_agent_callback"]`` once via
+      ``_invoke_optional_after_agent_callback(callbacks, ctx)``, and yields strictly
+      ONE terminal ``Event(message=..., output=..., state={"code": "", "findings": "", "fix_attempts": 0})``
+    - Wraps in ``Workflow(name="coding_agent", edges=[("START", dynamic_coding_workflow)])``
+    """
+    _require_adk_v2()
+    del settings, tools, callbacks, code_executor
+    # TODO(lab-1): Implement `coder_agent`, `fixer_agent`, parallel check nodes,
+    # `request_human_approval` (`rerun_on_resume=False`), and the
+    # `@node(rerun_on_resume=True)` `dynamic_coding_workflow` orchestrator, then
+    # wrap in `Workflow(name="coding_agent", edges=[("START", dynamic_coding_workflow)])`.
+    # Compare against `solution/coding_agent/architectures.py`.
+    raise NotImplementedError(
+        "Complete TODO(lab-1) in starter/coding_agent/architectures.py: "
+        "build_dynamic_coding_workflow()."
+    )
+
+
+def build_optional_managed_agent(
+    agent_id: str | None = None,
+    settings: Settings | None = None,
+) -> Any:
+    """Build an optional ADK Python v2.4.0 Preview ``ManagedAgent`` reference subagent.
+
+    Verified ADK Python v2.4.0 Preview limitations (``adk.dev/agents/managed-agents/``):
+    - **Agent Platform backend is ``global``-only:** Regional endpoints raise an error;
+      ``ManagedAgent`` enforces ``location="global"`` on enterprise clients.
+    - **Server-side tools only:** Supports ADK built-in server-side tools (e.g.,
+      ``google_search``) and ``google.adk.tools.RemoteMcpServer``. Client Python
+      callables / ``FunctionTool`` and raw ``types.Tool.mcp_servers`` raise
+      ``NotImplementedError``.
+    - **Streaming only:** Uses streaming Interactions API calls (``stream=True``).
+    """
+    try:
+        from google.adk.agents import ManagedAgent
+        from google.adk.tools import google_search
+    except ImportError as exc:
+        raise RuntimeError(
+            "ManagedAgent requires ADK Python >= 2.4.0 (Preview). Upgrade with:\n"
+            '  pip install "google-adk[a2a,agent-identity,mcp]>=2.4.0"'
+        ) from exc
+
+    cfg = settings or get_settings()
+    resolved_agent_id = (
+        (agent_id or "").strip()
+        or cfg.managed_agent_id
+        or os.environ.get("MANAGED_AGENT_ID", "").strip()
+        or "antigravity-preview-05-2026"
+    )
+    return ManagedAgent(
+        name="managed_research_agent",
+        mode="single_turn",
+        description=(
+            "Google-hosted Managed Agent that answers fresh engineering and API "
+            "questions using built-in server-side Google Search."
+        ),
+        agent_id=resolved_agent_id,
+        environment={"type": "remote"},
+        tools=[google_search],
+    )

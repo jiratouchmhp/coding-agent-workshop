@@ -1,0 +1,17 @@
+# google/agents-cli project manifest (Solution Track)
+# Enables `agents-cli playground`, `agents-cli run`, `agents-cli deploy`, and
+# `agents-cli eval` to discover `coding_agent/` instead of defaulting to `app/`.
+#
+# Verified against:
+#   https://raw.githubusercontent.com/google/agents-cli/main/docs/src/guide/deployment.md
+#   https://raw.githubusercontent.com/google/agents-cli/main/skills/google-agents-cli-deploy/SKILL.md
+
+name: coding-agent
+language: python
+framework: google-adk
+agent_directory: coding_agent
+
+create_params:
+  deployment_target: agent_runtime
+  region: us-central1
+  agent_gateway: false

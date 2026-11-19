@@ -1,0 +1,20 @@
+# Runtime dependencies for the Enterprise Coding Agent BYOC container (Starter Track).
+# Mirrors runtime dependencies in `starter/pyproject.toml` so both Option 1 (`container_spec`
+# via `Dockerfile`) and Option 2 (`source_code_spec` + `image_spec {}`) install identically.
+
+# ADK 2.0+ for collaborative/graph/dynamic workflows (`~=1.29` works for AGENT_ARCHITECTURE=simple).
+google-adk[a2a,agent-identity,mcp]>=2.0.0
+google-cloud-aiplatform[agent_engines,evaluation]>=1.154.0
+google-cloud-logging>=3.11.0
+google-cloud-monitoring>=2.22.0
+opentelemetry-api>=1.27.0
+opentelemetry-sdk>=1.27.0
+httpx>=0.27.0
+pydantic>=2.9.0
+python-dotenv>=1.0.1
+pyyaml>=6.0.2
+typing-extensions>=4.12.0
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+# Optional standalone Gemini Enterprise Agent Platform SDK if separated from google-cloud-aiplatform:
+# google-cloud-agentplatform>=2.0.1

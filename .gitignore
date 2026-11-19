@@ -1,0 +1,31 @@
+# Python bytecode & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# Local environment secrets (never commit populated .env files)
+.env
+.env.local
+.env.*.local
+
+# Terraform state, caches, variables, and generated archives
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+*.tfvars.json
+coding_agent_source.tar.gz
+
+# Generated evaluation traces, reports, and optimization outputs
+artifacts/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
