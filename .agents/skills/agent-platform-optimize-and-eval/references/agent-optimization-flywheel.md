@@ -11,7 +11,7 @@ Production reference for closing the **Quality Flywheel** on Gemini Enterprise A
 | **Tool bug / schema / docstring error** | Fix tool code, signature, or docstrings directly *(GEPA does NOT optimize tools or sub-agents)* | Yes |
 | **Missing domain-specific examples or function-calling patterns** | Upload curated input-output pairs to **Example Store** (Preview) for dynamic cosine-similarity retrieval | **No** (live immediately) |
 | **System prompt / instruction gaps** (after manual fixes plateau) | Run **`adk optimize`** (`GEPARootAgentPromptOptimizer`), **`SimplePromptOptimizer`**, or **`agents-cli eval optimize`** | Yes (apply optimized instruction) |
-| **Root agent + `SkillToolset` skill instruction gaps** | Run programmatic **`GEPARootAgentOptimizer`** (optimizes both root prompt and `SkillToolset` skills) | Yes |
+| **Root agent + `SkillToolset` skill instruction gaps** | Run programmatic **`GEPARootAgentOptimizer`** (load local skills via `load_skill_from_dir`, preserve YAML frontmatter, then hot-update Skill Registry / Agent Registry) | **No** for dynamic skills (`client.skills.update` / `--default-revision`); Yes if root prompt also changes |
 
 ---
 
@@ -137,6 +137,10 @@ print("Optimized prompt:", result.optimized_agents[best_idx].optimized_agent.ins
 
 *(Swap `GEPARootAgentPromptOptimizer` / `GEPARootAgentPromptOptimizerConfig` with `GEPARootAgentOptimizer` / `GEPARootAgentOptimizerConfig` from `google.adk.optimization.gepa_root_agent_optimizer` to co-optimize root instructions + `SkillToolset` skill instructions.)*
 
+> **Source-Verified `GEPARootAgentOptimizer` + `SkillToolset` Gotchas:**
+> 1. **Local `SkillToolset.skills` Required Offline:** `GEPARootAgentOptimizer` iterates `tool.skills` (`list(self._skills.values())`), which ONLY exposes local in-memory skills — NOT skills fetched lazily from a remote `GCPSkillRegistry`. Load your local skill directory via `from google.adk.skills import load_skill_from_dir` and attach `SkillToolset(skills=[local_skill])` onto a cloned agent during optimization.
+> 2. **Preserve YAML Frontmatter:** GEPA optimizes only `skill.instructions` (the Markdown body). Re-attach the original `--- ... ---` YAML frontmatter (`name`, `description`, `license`) before saving `SKILL.md`, then re-validate all 16 atomic Skill Registry ZIP checks before publishing.
+
 ### B. Programmatic `SimplePromptOptimizer` (Sequential 4-Stage Loop)
 
 ```python
@@ -229,12 +233,16 @@ Combine **Feedback Service** (`agentplatform.Client`), **Offline Eval & Loss Clu
    └── Fix tools/docstrings -> Upload Example Store few-shots (zero redeploy) -> OR `adk optimize` / `eval optimize`
 5. Verify against holdout + diff baseline vs candidate
    └── `agents-cli eval compare baseline.json candidate.json` (confirm target up, zero regressions on other metrics)
-6. Canary rollout via Agent Runtime v1beta1 Revisions (e.g., 90% stable / 10% candidate)
-   └── Monitor `online_evaluator/scores` & Quality Alerts sliced by `runtime_revision_id`
-7. Promote 100% (or instant rollback via `trafficSplitManual` 100% -> stable revision)
+6. Rollout & Verification (Two Tracks):
+   ├── Track A (Root Prompt Change): Canary rollout via Agent Runtime v1beta1 Revisions (90% stable / 10% candidate)
+   │     └── Monitor `online_evaluator/scores` & Quality Alerts sliced by `runtime_revision_id`; promote 100% or instant rollback
+   └── Track B (Domain Skill Change — ZERO Agent Container Rebuild):
+         ├── Re-validate 16 atomic ZIP checks (`package_registry_skill.py`)
+         ├── Vertex AI Skill Registry: `client.skills.update(name=..., config={"display_name": ..., "description": ..., "local_path": zip})`
+         └── Agent Registry (Governed): `gcloud agent-registry skills revisions create v2 --payload=zip` -> `ENABLED_BLOCKING` scan -> `gcloud agent-registry skills update private-SKILL_ID --default-revision=.../revisions/v2` (1-cmd rollback to `v1` if Quality Alerts regress)
 ```
 
-### Verified SDK Bridges (Feedback Harvest -> Canary Traffic Split)
+### Verified SDK Bridges (Feedback Harvest -> Canary Traffic Split & Zero-Redeploy Skill Update)
 
 ```python
 import os
@@ -261,7 +269,7 @@ for entry in entries:
     )
     print(entry.name, entry.feedback_type, len(ctx.context_events))
 
-# 2. After eval + compare pass, shift 10% canary traffic to the new revision
+# 2A. Track A (Root Prompt): shift 10% canary traffic to the new runtime revision
 ap_client.runtimes.update(
     name=engine_name,
     config={
@@ -279,6 +287,17 @@ ap_client.runtimes.update(
                 ]
             }
         }
+    },
+)
+
+# 2B. Track B (Domain Skill — ZERO agent container rebuild): hot-update Vertex AI Skill Registry
+skill_client = agentplatform.Client(project="PROJECT_ID", location="us-central1")
+skill_client.skills.update(
+    name="projects/PROJECT_ID/locations/us-central1/skills/secure-code-review",
+    config={
+        "display_name": "Secure Code Review",
+        "description": "Updated from offline eval + feedback flywheel.",
+        "local_path": "dist/secure-code-review.zip",
     },
 )
 ```

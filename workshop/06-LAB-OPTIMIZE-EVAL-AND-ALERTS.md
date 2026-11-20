@@ -17,14 +17,14 @@ By the end of this lab, you will close the production quality flywheel for your 
 3. **Run 2-Step Simulated User Evaluations** (`starter/eval/run_simulated_eval.py` and `agents-cli eval dataset synthesize`) to stress-test multi-turn debugging, tool errors, and prompt-injection refusal personas before touching production traffic.
 4. **Diagnose Failure Clusters** using **Automatic Loss Analysis** in the Cloud Console (`view-results`), `vertexai.evals` (`client.evals.generate_loss_clusters`), and `agents-cli eval analyze` across the official 13-pattern Task Success and Tool Use taxonomies.
 5. **Configure Online Evaluation Monitors & Quality Alerts** (`starter/eval/setup_online_monitor.py` and `starter/eval/setup_quality_alerts.py` via `google.cloud.monitoring_v3` and `gcloud monitoring policies create`) to catch production quality drift automatically.
-6. **Close the Optimization Flywheel** (`starter/eval/optimize_prompt.py`, `adk optimize`, `agents-cli eval optimize`, and Example Store) and safely promote prompt improvements with a **canary traffic split** (`v1beta1` `trafficSplitManual`).
+6. **Close the Dual-Track Optimization Flywheel** (`starter/eval/optimize_prompt.py`, `adk optimize`, `agents-cli eval optimize`, and Example Store): promote **root prompt fixes** with a **canary traffic split** (`v1beta1` `trafficSplitManual`), and close the **domain skill loop** with **zero agent container rebuild** by hot-updating Vertex AI Skill Registry (`client.skills.update`) or promoting an immutable **Agent Registry `v2` skill revision** (`--default-revision`).
 
 ---
 
 ## Half-Day Fast-Track Path (15-Minute Instructor Live Demo & Walkthrough)
 
 In the **3.5-hour Half-Day Fast-Track**, Lab 6 is delivered as a **15-minute instructor-led live demo and code walkthrough** (no attendee coding required) so the session reserves 25 full minutes for the [Lab 8](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) architecture briefing (skipping [Optional Lab 7](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md) cleanly):
-- Watch the instructor showcase the pre-warmed **Online Evaluation Monitor** & **Observability Dashboard** (Part 1 & Part 5), run the split JSON offline evaluation (`coding_agent_single_turn.json` vs. `coding_agent_multi_turn.json`) and `global` loss-cluster analysis (Parts 2–4), inspect the `monitoring_v3` Quality Alert policy (Part 5.2), and preview a bounded `optimize_prompt.py` diff + canary rollout (Part 6).
+- Watch the instructor showcase the pre-warmed **Online Evaluation Monitor** & **Observability Dashboard** (Part 1 & Part 5), run the split JSON offline evaluation (`coding_agent_single_turn.json` vs. `coding_agent_multi_turn.json`) and `global` loss-cluster analysis (Parts 2–4), inspect the `monitoring_v3` Quality Alert policy (Part 5.2), and preview a bounded `optimize_prompt.py` diff across both root prompts (canary rollout) and skills (zero-redeploy Skill Registry hot-update) in Part 6.
 - All reference scripts remain available in [`solution/eval/`](../solution/eval/) for self-paced post-workshop execution.
 
 ---
@@ -50,10 +50,11 @@ flowchart LR
         Sim["2-Step Simulated User Eval<br/>(Scenario Gen -> Multi-Turn Sim)"]
     end
 
-    subgraph Fix["3. Triage & Closed-Loop Optimization"]
+    subgraph Fix["3. Triage & Dual-Track Closed-Loop Optimization"]
         Clusters["Failure Clusters<br/>(generate_loss_clusters / eval analyze)"]
         Opt["Prompt & Skill Optimization<br/>(GEPA / SimplePromptOptimizer /<br/>agents-cli eval optimize / Example Store)"]
-        Canary["Regression Gate + Canary Rollout<br/>(eval compare -> trafficSplitManual)"]
+        Canary["Track A — Root Prompt:<br/>Rebuild + Canary Rollout<br/>(eval compare -> trafficSplitManual)"]
+        SkillHot["Track B — Domain Skills (ZERO Redeploy):<br/>Re-validate 16 ZIP Checks -> Skill Registry<br/>client.skills.update / Agent Registry v2 Rev"]
     end
 
     Agent -->|"Spans + Events"| Trace
@@ -67,8 +68,10 @@ flowchart LR
     Sim --> Clusters
     Clusters --> Opt
     Opt -->|"Holdout Check"| Offline
-    Offline -->|"Pass Thresholds"| Canary
+    Offline -->|"Core Prompt Fix"| Canary
+    Offline -->|"Skill Instruction Fix"| SkillHot
     Canary -->|"Promote 10% -> 100%"| Agent
+    SkillHot -->|"Live Dynamic Load"| Agent
 ```
 
 ---
@@ -492,6 +495,7 @@ Automatic Loss Analysis classifies failures into two verified 13-pattern taxonom
 | Low `multi_turn_trajectory_quality` | Clarify tool ordering and eliminate redundant `ReadFile` / `Execute` loops. |
 | Low `multi_turn_tool_use_quality` (`Incorrect Parameter Mapping`, `Omission of Required Tool Call`) | Rewrite tool docstrings & parameter schemas; set `tool_config` (`mode="ANY"`) if thinking mode skips required tool calls. |
 | Low `hallucination` (`Hallucination of Missing Information`) | Constrain instructions to cite only verified tool outputs; check whether sandbox tools truncate output (`max_output_chars`). |
+| Domain skill gap (`Constraint Violation`, missed OWASP check, missing `file:line` citation in `secure-code-review`) | Optimize `skills_to_register/secure-code-review/SKILL.md` (manually or via `GEPARootAgentOptimizer`), re-validate 16 ZIP checks, and hot-update **Skill Registry (`client.skills.update`)** or promote an immutable **Agent Registry `v2` revision** — **zero agent container rebuild required** (Section 6.4). |
 | Flaky / noisy judge scores | Pin agent `temperature=0` or enable multi-sample judge voting (`judge_model_sampling_count: 3`). **Never** lower thresholds or delete flaky cases. |
 
 ---
@@ -636,12 +640,24 @@ Now feed your **Failure Clusters** (Part 4) and **Feedback Service** negative en
 
 Open [`starter/eval/optimize_prompt.py`](../starter/eval/optimize_prompt.py) and complete the `# TODO(lab-6)` blocks to:
 1. Pull recent `THUMBS_DOWN` entries from the Feedback Service (`client.feedback_entries.list(...)`) to prioritize real user failure cases.
-2. Run ADK's `SimplePromptOptimizer` (or `GEPARootAgentPromptOptimizer` via `LocalEvalSampler` + `LocalEvalSetsManager`) without mutating your original `root_agent`.
-3. Save the candidate optimized instruction to `artifacts/optimized_instruction.txt` for human diff review.
+2. Run ADK's `SimplePromptOptimizer`, `GEPARootAgentPromptOptimizer`, or **`GEPARootAgentOptimizer`** (`--optimizer gepa-skills`) via `LocalEvalSampler` + `LocalEvalSetsManager` without mutating your original `root_agent`.
+3. When `--optimizer gepa-skills` is chosen, attach your local skill directory (`--skill-dir skills_to_register/secure-code-review`) via `from google.adk.skills import load_skill_from_dir`, extract the optimized skill instructions while **preserving the original YAML frontmatter**, and write candidate diffs to `artifacts/optimized_instruction.txt` and `artifacts/optimized_skills/secure-code-review/SKILL.md`.
+4. Implement `publish_updated_skill()` (`--publish-skill`) to re-validate all 16 atomic Skill Registry rules and hot-update Vertex AI Skill Registry via `client.skills.update(...)`.
+
+> [!IMPORTANT]
+> **Two Source-Verified ADK `GEPARootAgentOptimizer` Gotchas:**
+> 1. **Local `SkillToolset.skills` Required During Optimization:** `GEPARootAgentOptimizer` reads `tool.skills` (`list(self._skills.values())`), which only contains **local in-memory skills** — NOT skills fetched lazily from a remote `GCPSkillRegistry`. Always load your local skill source folder (`load_skill_from_dir(skill_dir)`) onto the cloned candidate agent when running `--optimizer gepa-skills`, then publish the winning update back to Skill Registry / Agent Registry (Section 6.4).
+> 2. **Preserve YAML Frontmatter (`R12–R15`):** `GEPARootAgentOptimizer` optimizes only `skill.instructions` (the Markdown body below `--- ... ---`). Always re-attach the original YAML frontmatter (`name`, `description`, `license`) before saving `SKILL.md`, otherwise `scripts/package_registry_skill.py` will reject the bundle.
 
 ```bash
-# Run the bounded workshop prompt optimization pass (defaults to small iteration count to save tokens/time)
+# Track A — Fast root-prompt optimization pass (small iteration count to save tokens/time)
 cd starter && uv run python eval/optimize_prompt.py --iterations 2 --batch-size 4
+
+# Track B — Co-optimize root prompt + local secure-code-review SKILL.md via GEPARootAgentOptimizer
+cd starter && uv run python eval/optimize_prompt.py \
+  --optimizer gepa-skills \
+  --skill-dir skills_to_register/secure-code-review \
+  --iterations 2 --batch-size 4
 ```
 
 You can also invoke ADK's native CLI (`adk optimize`, backed by [`starter/coding_agent/train_eval_set.evalset.json`](../starter/coding_agent/train_eval_set.evalset.json) and [`starter/eval/sampler_config.json`](../starter/eval/sampler_config.json)) or `agents-cli`'s GEPA optimizer directly:
@@ -711,6 +727,88 @@ Never push an auto-optimized prompt straight to 100% of users:
    ```
 3. **Compare `runtime_revision_id` in Online Monitor Dashboards:** Watch `aiplatform.googleapis.com/online_evaluator/scores` segmented by `runtime_revision_id`. If your Quality Alert fires on the canary revision, roll back 100% traffic to `${STABLE_REVISION_NAME}` in seconds; otherwise promote the canary to 100% (or restore `trafficSplitAlwaysLatest: {}` — required before changing any Agent Gateway binding!).
 
+### 6.4 Close the Skill Optimization Loop: Hot-Update Skill Registry & Promote Agent Registry Revisions (Zero Container Rebuild)
+
+When Failure Clusters or `THUMBS_DOWN` feedback point to a **domain skill gap** (for example, `secure-code-review` missed an OWASP check or omitted `file:line` citations), externalized skills give you a major operational advantage over root-prompt edits: **you do NOT need to rebuild or redeploy the Agent Runtime container!** Because `GCPSkillRegistry` + `SkillToolset` (Lab 4) fetches skills dynamically at runtime, updating the skill in the registry upgrades live agent behavior immediately.
+
+1. **Review the Candidate Diff, Copy Approved Changes & Re-Validate All 16 ZIP Rules:**
+   ```bash
+   # Inspect the frontmatter-preserved diff generated by --optimizer gepa-skills
+   # (or apply your targeted manual edit directly to starter/skills_to_register/secure-code-review/SKILL.md)
+   diff -u starter/skills_to_register/secure-code-review/SKILL.md \
+     starter/artifacts/optimized_skills/secure-code-review/SKILL.md || true
+
+   # Copy approved edits into the source skill, re-run holdout eval (`agents-cli eval compare`),
+   # then validate all 16 atomic Skill Registry rules and rebuild the ZIP:
+   python3 scripts/package_registry_skill.py \
+     starter/skills_to_register/secure-code-review \
+     --output dist/secure-code-review.zip
+   ```
+
+2. **Path B1 (Core Lab 4 — Zero Redeploy): Hot-Update Vertex AI Skill Registry (`client.skills.update`):**
+   Use our CLI helper (`--publish-skill --dry-run` first to verify all 16 rules offline, then live):
+   ```bash
+   # Safe offline dry-run (validates all 16 atomic rules without network calls)
+   cd starter && uv run python eval/optimize_prompt.py \
+     --publish-skill \
+     --skill-dir skills_to_register/secure-code-review \
+     --skill-id secure-code-review \
+     --dry-run
+
+   # Live hot-update into Vertex AI Skill Registry (ZERO agent container rebuild!)
+   cd starter && uv run python eval/optimize_prompt.py \
+     --publish-skill \
+     --skill-dir skills_to_register/secure-code-review \
+     --skill-id secure-code-review
+   ```
+   Under the hood, `publish_updated_skill()` invokes the verified `agentplatform` SDK `UpdateSkill` LRO (or REST `PATCH .../v1beta1/projects/${GOOGLE_CLOUD_PROJECT}/locations/${SKILL_REGISTRY_LOCATION}/skills/secure-code-review?updateMask=displayName,description,zippedFilesystem`):
+   ```python
+   import agentplatform
+
+   client = agentplatform.Client(project=project_id, location=skill_registry_location)
+   updated = client.skills.update(
+       name=f"projects/{project_id}/locations/{skill_registry_location}/skills/secure-code-review",
+       config={
+           "display_name": "Secure Code Review",
+           "description": "Enterprise OWASP static security audit workflow (updated via Lab 6 eval flywheel).",
+           "local_path": "dist/secure-code-review.zip",
+       },
+   )
+   print("Updated skill:", updated.name)
+   ```
+
+3. **Path B2 (Governed / Optional Lab 7 — Immutable Revisions & Instant Rollback): Promote `v2` in Agent Registry:**
+   If your enterprise registers standalone skills in **Agent Registry (`agentregistry.googleapis.com/v1`)** (see [Optional Lab 7 Part A](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md#part-a-standalone-skill-security-scanning--lifecycle-governance-agentregistrygoogleapiscomv1)), publish an immutable `v2` revision, let automated `ENABLED_BLOCKING` security scanning verify it, and flip `--default-revision`:
+   ```bash
+   export AGENT_REGISTRY_LOCATION="${AGENT_REGISTRY_LOCATION:-us-central1}"
+
+   # 1. Upload immutable v2 skill revision (triggers automated LLM security scan if ENABLED_BLOCKING)
+   gcloud agent-registry skills revisions create v2 \
+     --skill=private-secure-code-review \
+     --project="${GOOGLE_CLOUD_PROJECT}" \
+     --location="${AGENT_REGISTRY_LOCATION}" \
+     --payload="dist/secure-code-review.zip"
+
+   # 2. Verify scan status succeeded with zero findings (ENABLED_BLOCKING rejects promotion with FAILED_PRECONDITION otherwise!)
+   gcloud agent-registry skills revisions describe v2 \
+     --skill=private-secure-code-review \
+     --project="${GOOGLE_CLOUD_PROJECT}" \
+     --location="${AGENT_REGISTRY_LOCATION}"
+
+   # 3. Promote v2 as the default serving revision (zero agent container rebuild!)
+   gcloud agent-registry skills update private-secure-code-review \
+     --project="${GOOGLE_CLOUD_PROJECT}" \
+     --location="${AGENT_REGISTRY_LOCATION}" \
+     --default-revision="projects/${GOOGLE_CLOUD_PROJECT}/locations/${AGENT_REGISTRY_LOCATION}/skills/private-secure-code-review/revisions/v2"
+
+   # 4. Watch Online Monitor scores (`aiplatform.googleapis.com/online_evaluator/scores`);
+   #    if Quality Alerts fire after promotion, roll back to v1 in one command:
+   # gcloud agent-registry skills update private-secure-code-review \
+   #   --project="${GOOGLE_CLOUD_PROJECT}" \
+   #   --location="${AGENT_REGISTRY_LOCATION}" \
+   #   --default-revision="projects/${GOOGLE_CLOUD_PROJECT}/locations/${AGENT_REGISTRY_LOCATION}/skills/private-secure-code-review/revisions/v1"
+   ```
+
 ---
 
 ## Lab 6 Verification Checkpoint
@@ -723,12 +821,13 @@ Run the automated Lab 6 verification script from the repository root:
 # make verify-lab LAB=6
 ```
 
-Confirm all five checkpoints pass before choosing your next track:
+Confirm all six checkpoints pass before choosing your next track:
 - [ ] **Observability:** `GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=true`, `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`, and `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=EVENT_ONLY` are verified, and traces appear in the **Observability → Traces** tab.
 - [ ] **Offline Eval:** `starter/eval/run_offline_eval.py` parses cleanly and grades single-turn vs. multi-turn cases without mixing incompatible metrics.
 - [ ] **Simulated Eval & Loss Clustering:** `starter/eval/run_simulated_eval.py` completes 2-step scenario synthesis + multi-turn simulation and produces loss cluster diagnostics.
 - [ ] **Online Monitor & Quality Alerts:** Online Monitor configuration is validated (and created in Console), and `starter/eval/setup_quality_alerts.py` emits/creates a valid `aiplatform.googleapis.com/online_evaluator/scores` alert policy.
-- [ ] **Optimization Flywheel:** `starter/eval/optimize_prompt.py` produces a candidate instruction diff ready for `agents-cli eval compare` and canary rollout.
+- [ ] **Root Prompt Optimization Flywheel:** `starter/eval/optimize_prompt.py` produces a candidate instruction diff ready for `agents-cli eval compare` and canary rollout.
+- [ ] **Skill Optimization & Registry Hot-Update Loop:** `starter/eval/optimize_prompt.py` supports `--optimizer gepa-skills` (loading local `SkillToolset.skills` with preserved YAML frontmatter) and `--publish-skill --dry-run` (`client.skills.update` + Agent Registry `v2` revision rollout/rollback commands).
 
 > **Time-Box Fallback:** If you hit rate limits or run short on time, inspect or run the complete reference scripts directly from [`solution/eval/`](../solution/eval/) (`run_offline_eval.py`, `run_simulated_eval.py`, `setup_online_monitor.py`, `setup_quality_alerts.py`, `optimize_prompt.py`).
 
@@ -755,6 +854,9 @@ Confirm all five checkpoints pass before choosing your next track:
 - **Multimodal Prompt/Response GCS Collection:** https://docs.cloud.google.com/stackdriver/docs/instrumentation/collect-view-multimodal-prompts-responses
 - **Cloud Monitoring `online_evaluator/*` Metrics:** https://docs.cloud.google.com/monitoring/api/metrics_gcp_a_b
 - **ADK Agent Optimization (`adk optimize`):** https://adk.dev/optimize/
+- **Create & Update Skills in Skill Registry (`UpdateSkill`):** https://docs.cloud.google.com/gemini-enterprise-agent-platform/build/skill-registry/create-manage
+- **Manage Skill Revisions in Agent Registry (`revisions create`):** https://docs.cloud.google.com/agent-registry/manage-skill-revisions
+- **Manage Skills & Default Revision Promotion in Agent Registry (`skills update --default-revision`):** https://docs.cloud.google.com/agent-registry/manage-skills
 - **Python SDK Reference (`vertexai._genai.evals.Evals` / `generate_loss_clusters`):** https://docs.cloud.google.com/python/docs/reference/vertexai/latest/vertexai._genai.evals.Evals
 - **`google/agents-cli` Canonical Eval Dataset Schema (`dataset_schema.md`):** https://raw.githubusercontent.com/google/agents-cli/main/skills/google-agents-cli-eval/references/dataset_schema.md
 - **`google/agents-cli` Evaluation & Observability:** https://github.com/google/agents-cli

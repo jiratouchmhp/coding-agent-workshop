@@ -277,3 +277,4 @@ curl -H "Authorization: Bearer ${TOKEN}" "${BASE}/operations/${OPERATION_ID}"
 2. Upload via `client.skills.create(...)` (or REST `POST` + poll `GetOperation` until `"done": true` with no `"error"`).
 3. Run `client.skills.list()` twice: verify your custom skill appears with `"state": "ACTIVE"` and verify `gcp-skill-registry` appears on the second call.
 4. Run `client.skills.retrieve(query="<intent>", config={"top_k": 3})` and confirm your skill ranks in `retrieved_skills`.
+5. **Closed-Loop Optimize Flywheel (Zero Agent Container Rebuild):** When offline/online evals or `GEPARootAgentOptimizer` improve `SKILL.md`, preserve its YAML frontmatter, re-run `package_registry_skill.py`, and publish live via `client.skills.update(...)` (Vertex AI Skill Registry) or `gcloud agent-registry skills revisions create v2` + `skills update --default-revision=.../revisions/v2` (Agent Registry — gated by `ENABLED_BLOCKING` scanning with 1-command rollback to `v1`).

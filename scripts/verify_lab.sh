@@ -169,7 +169,7 @@ check_pattern() {
   if [[ ! -f "${path}" ]]; then
     return 0
   fi
-  if grep -Eq "${pattern}" "${path}"; then
+  if grep -Eq -- "${pattern}" "${path}"; then
     pass "${label} (${path})"
   else
     fail "Missing expected pattern [${label}] in ${path}"
@@ -837,6 +837,10 @@ PYEOF
   check_pattern "${eval_dir}/setup_quality_alerts.py" "aiplatform\.googleapis\.com/online_evaluator/scores" "Targets verified online_evaluator/scores metric"
   check_pattern "${eval_dir}/optimize_prompt.py" "SimplePromptOptimizer" "Integrates ADK SimplePromptOptimizer"
   check_pattern "${eval_dir}/optimize_prompt.py" "agents-cli eval optimize" "Documents agents-cli eval optimize command"
+  check_pattern "${eval_dir}/optimize_prompt.py" "load_skill_from_dir" "Attaches local SkillToolset skills via load_skill_from_dir for GEPARootAgentOptimizer"
+  check_pattern "${eval_dir}/optimize_prompt.py" "client\.skills\.update" "Supports zero-redeploy Skill Registry hot-update via client.skills.update"
+  check_pattern "${eval_dir}/optimize_prompt.py" "revisions create v2" "Documents Agent Registry immutable v2 skill revision creation"
+  check_pattern "${eval_dir}/optimize_prompt.py" "--default-revision=" "Documents Agent Registry --default-revision promotion and rollback"
 
   # Regression check: pre-recorded multi-turn traces (coding_agent_multi_turn.json) MUST use
   # `agents-cli eval grade --traces`, NEVER `agents-cli eval run --dataset`.
@@ -999,6 +1003,11 @@ PYEOF
       pass "optimize_prompt.py --dry-run succeeded"
     else
       fail "optimize_prompt.py --dry-run failed"
+    fi
+    if python3 "${eval_dir}/optimize_prompt.py" --optimizer gepa-skills --publish-skill --dry-run >/dev/null 2>&1; then
+      pass "optimize_prompt.py --optimizer gepa-skills --publish-skill --dry-run succeeded (16-rule skill validation)"
+    else
+      fail "optimize_prompt.py --optimizer gepa-skills --publish-skill --dry-run failed"
     fi
   else
     warn "Skipping Lab 6 --dry-run smoke executions until TODO(lab-6) markers are resolved."

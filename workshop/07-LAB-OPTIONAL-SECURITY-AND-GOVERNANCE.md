@@ -128,6 +128,7 @@ Before authoring IAM, Agent Gateway, or Semantic Governance rules, verify which 
    ```
 
    - Under `ENABLED_BLOCKING` (default), Agent Registry scans `SKILL.md`, scripts, and assets via LLM for exfiltration, exposed secrets, and prompt injection, and **blocks** downloads or `defaultRevision` promotion with `FAILED_PRECONDITION` until the scan succeeds with zero findings.
+   - **Closing the Lab 6 Flywheel Safely:** When your team iterates on `secure-code-review/SKILL.md` in [Lab 6 Section 6.4](./06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md#64-close-the-skill-optimization-loop-hot-update-skill-registry--promote-agent-registry-revisions-zero-container-rebuild) (`gcloud agent-registry skills revisions create v2`), `ENABLED_BLOCKING` automatically scans the new `v2` bundle before `--default-revision` promotion can succeed — ensuring an automated GEPA rewrite can never introduce prompt injection or unsafe shell commands into production, while preserving 1-command rollback to `v1` if Online Eval Quality Alerts regress.
    - **Non-retroactive rule:** Changing `scanningConfig.policy` (`ENABLED_BLOCKING` / `ENABLED_NONBLOCKING` / `DISABLED`) applies only to **future revisions**.
    - **5 Lifecycle States:** `DRAFT` -> `ACTIVE` <-> `DISABLED` -> `DEPRECATED` -> `DECOMMISSIONED` (**terminal** — can only transition from `DEPRECATED` and cannot revert!).
 
