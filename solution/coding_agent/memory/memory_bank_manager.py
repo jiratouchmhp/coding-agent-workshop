@@ -1,4 +1,4 @@
-"""Memory Bank integration, governance sanitizer & CLI (complete reference solution — Lab 4).
+"""Memory Bank integration, governance sanitizer & CLI (complete reference solution — Lab 3).
 
 Provides both verified integration surfaces for Gemini Enterprise Agent Platform
 Memory Bank plus defense-in-depth prompt-injection / memory-poisoning hygiene:

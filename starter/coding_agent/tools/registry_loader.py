@@ -1,6 +1,6 @@
-"""Skill Registry & Agent Registry ADK integration and publisher (starter — Lab 5).
+"""Skill Registry & Agent Registry ADK integration and publisher (starter — Lab 4).
 
-Complete the ``# TODO(lab-5)`` sections below to wire:
+Complete the ``# TODO(lab-4)`` sections below to wire:
 1. ``build_skill_registry_toolset()``: ``GCPSkillRegistry`` + ``SkillToolset`` with
    graceful fallback to locally bundled skills when running inside an air-gapped
    sandbox without outbound Vertex AI / Agent Registry egress.
@@ -97,7 +97,7 @@ def build_skill_registry_toolset(
             "SkillToolset accepts either environment= or code_executor=, never both."
         )
 
-    # TODO(lab-5):
+    # TODO(lab-4):
     # 1. Load existing directories in ``local_skill_dirs`` with ``load_skill_from_dir(Path(d))``.
     # 2. If ``enable_remote_registry and project_id and location``, try instantiating
     #    ``GCPSkillRegistry(project_id=project_id, location=location)`` from
@@ -117,7 +117,7 @@ def build_skill_registry_toolset(
         discovery_mode,
         max_active_skills,
     )
-    raise NotImplementedError("Complete TODO(lab-5): build_skill_registry_toolset()")
+    raise NotImplementedError("Complete TODO(lab-4): build_skill_registry_toolset()")
 
 
 # ---------------------------------------------------------------------------
@@ -145,11 +145,11 @@ class GoogleApiAuth(httpx.Auth):
             self._creds, _ = google.auth.default(scopes=effective_scopes)
 
     def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
-        # TODO(lab-5): Refresh ``self._creds`` with ``google.auth.transport.requests.Request()``
+        # TODO(lab-4): Refresh ``self._creds`` with ``google.auth.transport.requests.Request()``
         # when ``not self._creds.valid``, set ``Authorization: Bearer {token}`` and
         # (when ``self._quota_project_id`` is set) ``X-Goog-User-Project``, then ``yield request``.
         _ = request
-        raise NotImplementedError("Complete TODO(lab-5): GoogleApiAuth.auth_flow()")
+        raise NotImplementedError("Complete TODO(lab-4): GoogleApiAuth.auth_flow()")
         yield request  # pragma: no cover
 
 
@@ -246,7 +246,7 @@ def build_agent_registry_integrations(
     a2a_audience: str | None = None,
 ) -> dict[str, Any]:
     """Configure ADK ``AgentRegistry`` with Auth Manager, MCP toolsets & Remote A2A agents."""
-    # TODO(lab-5):
+    # TODO(lab-4):
     # 1. Import ``AgentRegistry`` from ``google.adk.integrations.agent_registry`` (catching
     #    ``ImportError`` with an install hint for ``google-adk[a2a,agent-identity,mcp]>=2.0.0``).
     # 2. When ``register_auth_provider`` is True, call
@@ -272,7 +272,7 @@ def build_agent_registry_integrations(
         httpx_timeout_seconds,
         a2a_audience,
     )
-    raise NotImplementedError("Complete TODO(lab-5): build_agent_registry_integrations()")
+    raise NotImplementedError("Complete TODO(lab-4): build_agent_registry_integrations()")
 
 
 # ---------------------------------------------------------------------------
@@ -324,13 +324,13 @@ class SkillRegistryPublisher:
         warmup_delay_seconds: float = 2.0,
     ) -> list[Any]:
         """List skills in Vertex AI Skill Registry (handling first-call ``gcp-skill-registry`` quirk)."""
-        # TODO(lab-5): Call ``list(self.client.skills.list())``. Remember that the built-in
+        # TODO(lab-4): Call ``list(self.client.skills.list())``. Remember that the built-in
         # ``gcp-skill-registry`` skill starts ingesting asynchronously on the project's FIRST
         # API call and appears starting on call #2 — when ``trigger_builtin_warmup=True`` and
         # ``gcp-skill-registry`` is missing from the first response, sleep ``warmup_delay_seconds``
         # and issue a second ``list(self.client.skills.list())`` call.
         _ = (trigger_builtin_warmup, warmup_delay_seconds, time)
-        raise NotImplementedError("Complete TODO(lab-5): SkillRegistryPublisher.list_skills()")
+        raise NotImplementedError("Complete TODO(lab-4): SkillRegistryPublisher.list_skills()")
 
     def create_skill(
         self,
@@ -344,12 +344,12 @@ class SkillRegistryPublisher:
         resolved = Path(local_path).resolve()
         if not resolved.exists():
             raise FileNotFoundError(f"Skill path does not exist: {resolved}")
-        # TODO(lab-5): Call ``self.client.skills.create(skill_id=skill_id,
+        # TODO(lab-4): Call ``self.client.skills.create(skill_id=skill_id,
         # display_name=display_name, description=description,
         # config={"local_path": str(resolved)})`` (falling back to ``config={"skill_id": ...,
         # "local_path": ...}`` on ``TypeError`` for google-cloud-aiplatform < 1.154.0).
         _ = (display_name, description)
-        raise NotImplementedError("Complete TODO(lab-5): SkillRegistryPublisher.create_skill()")
+        raise NotImplementedError("Complete TODO(lab-4): SkillRegistryPublisher.create_skill()")
 
     def update_skill(
         self,
@@ -361,11 +361,11 @@ class SkillRegistryPublisher:
     ) -> Any:
         """Update an existing skill's metadata and/or upload a new skill payload revision."""
         validate_skill_id(skill_id)
-        # TODO(lab-5): Build ``config`` containing non-None ``display_name``, ``description``,
+        # TODO(lab-4): Build ``config`` containing non-None ``display_name``, ``description``,
         # and ``local_path`` and return ``self.client.skills.update(
         # name=self.skill_resource_name(skill_id), config=config)``.
         _ = (display_name, description, local_path)
-        raise NotImplementedError("Complete TODO(lab-5): SkillRegistryPublisher.update_skill()")
+        raise NotImplementedError("Complete TODO(lab-4): SkillRegistryPublisher.update_skill()")
 
     def get_skill(self, skill_id: str) -> Any:
         """Fetch metadata for a single skill (including built-in ``gcp-skill-registry``)."""
@@ -388,10 +388,10 @@ class SkillRegistryPublisher:
         """Run semantic skill retrieval via ``client.skills.retrieve(...)``."""
         if not query or not query.strip():
             raise ValueError("Search query must be non-empty.")
-        # TODO(lab-5): Call ``self.client.skills.retrieve(query=query, config={"top_k": top_k})``
+        # TODO(lab-4): Call ``self.client.skills.retrieve(query=query, config={"top_k": top_k})``
         # and return ``list(getattr(response, "retrieved_skills", []) or [])``.
         _ = top_k
-        raise NotImplementedError("Complete TODO(lab-5): SkillRegistryPublisher.search_skills()")
+        raise NotImplementedError("Complete TODO(lab-4): SkillRegistryPublisher.search_skills()")
 
     def delete_skill(self, skill_id: str) -> None:
         """Delete a user-created skill (never built-in ``gcp-*`` skills)."""

@@ -54,6 +54,7 @@ resource "google_service_account" "agent_runtime_sa" {
 resource "google_project_iam_member" "runtime_sa_roles" {
   for_each = toset([
     "roles/aiplatform.user",
+    "roles/aiplatform.memoryUser",
     "roles/logging.logWriter",
     "roles/cloudtrace.agent",
     "roles/telemetry.tracesWriter",
@@ -62,6 +63,16 @@ resource "google_project_iam_member" "runtime_sa_roles" {
 
   project = var.project_id
   role    = each.value
+  member  = "serviceAccount:${google_service_account.agent_runtime_sa.email}"
+}
+
+# Grant Agent Registry read access when Lab 4 Skill Registry integration is enabled
+# so the Custom SA can read from `agentregistry.googleapis.com`.
+resource "google_project_iam_member" "runtime_sa_agentregistry_viewer" {
+  count = var.enable_skill_registry ? 1 : 0
+
+  project = var.project_id
+  role    = "roles/agentregistry.viewer"
   member  = "serviceAccount:${google_service_account.agent_runtime_sa.email}"
 }
 
@@ -99,7 +110,7 @@ resource "google_secret_manager_secret_iam_member" "runtime_sa_secret_accessor" 
 
 # SERVICE AGENT #2: Agent Platform Service Agent (gcp-sa-aiplatform)
 # Required to fetch `secret_env` at deploy time when using `identity_type = "AGENT_IDENTITY"`
-# (Lab 5) or when pulling BYOC images from a cross-project Artifact Registry repo.
+# (Optional Lab 7) or when pulling BYOC images from a cross-project Artifact Registry repo.
 resource "google_secret_manager_secret_iam_member" "platform_service_agent_secret_accessor" {
   secret_id = google_secret_manager_secret.coding_agent_api_key.id
   role      = "roles/secretmanager.secretAccessor"
@@ -144,7 +155,7 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
     agent_framework = "google-adk"
 
     # Pass ONLY the service account email (NOT a full `projects/...` URI).
-    # Lab 5 Upgrade Path: to bind Agent Gateway or Semantic Governance Policies,
+    # Optional Lab 7 Upgrade Path: to bind Agent Gateway or Semantic Governance Policies,
     # switch this resource to `provider = google-beta`, remove `service_account`,
     # and set `identity_type = "AGENT_IDENTITY"` (immutable at creation time!).
     service_account = google_service_account.agent_runtime_sa.email
@@ -171,7 +182,7 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
     # `./Dockerfile` is missing. Always `cd` into the app root first:
     #
     #   cd solution && tar -czvf terraform/coding_agent_source.tar.gz \
-    #     Dockerfile main.py requirements.txt coding_agent/
+    #     Dockerfile main.py requirements.txt coding_agent/ skills_to_register/
     #   tar -tzvf terraform/coding_agent_source.tar.gz | head -n 5
     #
     # source_code_spec {
@@ -214,8 +225,8 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
         value = var.model_name
       }
 
-      # Optional ADK 2.0 architecture overrides (Lab 1 Part B / Lab 3 portability).
-      # Defaults to `AGENT_ARCHITECTURE=simple` (Labs 2-7 compatible) when omitted;
+      # Optional ADK 2.0 architecture overrides (Lab 1 Part B / Lab 5 portability).
+      # Defaults to `AGENT_ARCHITECTURE=simple` (Labs 2-8 compatible) when omitted;
       # uncomment to switch the deployed Agent Runtime to `collaborative`, `graph`,
       # or `dynamic` with zero changes to Dockerfile, main.py, or the HTTP contract:
       #
@@ -249,6 +260,26 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
         value = google_service_account.agent_runtime_sa.email
       }
 
+      env {
+        name  = "ENABLE_MEMORY_BANK"
+        value = tostring(var.enable_memory_bank)
+      }
+
+      env {
+        name  = "ENABLE_SKILL_REGISTRY"
+        value = tostring(var.enable_skill_registry)
+      }
+
+      env {
+        name  = "SKILL_REGISTRY_LOCATION"
+        value = var.skill_registry_location
+      }
+
+      env {
+        name  = "AGENT_REGISTRY_LOCATION"
+        value = var.skill_registry_location
+      }
+
       secret_env {
         name = "CODING_AGENT_API_KEY"
         secret_ref {
@@ -257,7 +288,7 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
         }
       }
 
-      # Optional Lab 5 Agent Gateway binding (requires `provider = google-beta`
+      # Optional Lab 7 Upgrade Path — Agent Gateway binding (requires `provider = google-beta`
       # and `identity_type = "AGENT_IDENTITY"` in `spec`):
       # agent_gateway_config {
       #   agent_to_anywhere_config {
@@ -278,6 +309,7 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
     google_project_iam_member.re_service_agent_ar_reader,
     google_project_iam_member.sandbox_service_agent_ar_reader,
     google_project_iam_member.runtime_sa_roles,
+    google_project_iam_member.runtime_sa_agentregistry_viewer,
     google_service_account_iam_member.runtime_sa_self_token_creator,
     google_secret_manager_secret_iam_member.runtime_sa_secret_accessor,
     google_secret_manager_secret_iam_member.platform_service_agent_secret_accessor,

@@ -1,4 +1,4 @@
-# Non-root Trusted Agent Runtime BYOC Container Image (Solution Track — Lab 3).
+# Non-root Trusted Agent Runtime BYOC Container Image (Solution Track — Lab 5).
 #
 # Distinct from Lab 2's untrusted sandbox image (`solution/sandbox_image/Dockerfile`):
 # - Trusted Agent Runtime container runs the FastAPI + ADK HTTP adapter (`main:app`)
@@ -16,7 +16,7 @@
 #   - Option 1 (`container_spec`): `make TRACK=solution push-agent`
 #   - Option 2 (`source_code_spec` + `image_spec {}`):
 #       cd solution && tar -czvf terraform/coding_agent_source.tar.gz \
-#         Dockerfile main.py requirements.txt coding_agent/
+#         Dockerfile main.py requirements.txt coding_agent/ skills_to_register/
 
 FROM python:3.11-slim-bookworm
 
@@ -34,7 +34,7 @@ RUN apt-get update \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Optional Lab 5 Agent Gateway BYOC CA Trust pattern (scale/runtime/agent-gateway-runtime-deploy):
+# Optional Lab 7 Agent Gateway BYOC CA Trust pattern (scale/runtime/agent-gateway-runtime-deploy):
 # Pass `agents-cli deploy --build-args AGENT_GATEWAY_ROOT_CERTIFICATES="$(gcloud network-services agent-gateways describe ...)"` (plural)
 # or `docker build --build-arg AGENT_GATEWAY_ROOT_CERTIFICATES="$(gcloud network-services agent-gateways describe ...)"` (singular)
 # and uncomment below to trust Agent Gateway interception certificates in Python/gRPC/OpenSSL:
@@ -60,6 +60,7 @@ RUN groupadd --gid 1000 appuser \
 
 COPY --chown=appuser:appuser main.py ./
 COPY --chown=appuser:appuser coding_agent/ ./coding_agent/
+COPY --chown=appuser:appuser skills_to_register/ ./skills_to_register/
 
 USER appuser
 

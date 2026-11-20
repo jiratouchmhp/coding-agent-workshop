@@ -7,9 +7,9 @@ Evolution across workshop labs:
   in ``coding_agent/architectures.py`` selected via ``AGENT_ARCHITECTURE``).
 - Lab 2: Switch cleanly to remote ``AgentPlatformSandboxEnvironment`` (``shell`` / ``byoc``)
   or ``AgentEngineSandboxCodeExecutor`` (``code_execution``) based on ``SANDBOX_MODE``.
-- Lab 4: Attach parent-runtime telemetry callbacks (OTel + Cloud Logging for sandbox output)
+- Lab 3: Attach parent-runtime telemetry callbacks (OTel + Cloud Logging for sandbox output)
   and optional Memory Bank tools/callbacks.
-- Lab 5: Attach ``SkillToolset(registry=GCPSkillRegistry(...))`` for dynamic skill discovery.
+- Lab 4: Attach ``SkillToolset(registry=GCPSkillRegistry(...))`` for dynamic skill discovery.
 """
 
 from __future__ import annotations
@@ -101,26 +101,26 @@ def _build_optional_skill_toolset(
     settings: Settings,
     environment: BaseEnvironment | None,
 ) -> Any | None:
-    """Optionally attach ``SkillToolset(registry=GCPSkillRegistry(...))`` in Lab 5.
+    """Optionally attach ``SkillToolset(registry=GCPSkillRegistry(...))`` in Lab 4.
 
     NOTE: ``SkillToolset`` accepts ``environment=`` OR ``code_executor=``, NEVER both.
     """
     if not settings.enable_skill_registry:
         return None
 
-    # TODO(lab-5): Import ``build_skill_registry_toolset`` from
+    # TODO(lab-4): Import ``build_skill_registry_toolset`` from
     # ``coding_agent.tools.registry_loader`` and pass:
     #   project_id=settings.google_cloud_project,
-    #   location=settings.agent_registry_location,
+    #   location=settings.agent_registry_location or settings.skill_registry_location,
     #   local_skill_dirs=[Path(__file__).resolve().parents[1] / "skills_to_register" / "secure-code-review"],
     #   environment=environment,
     #   enable_remote_registry=True,
-    logger.info("ENABLE_SKILL_REGISTRY=true; complete TODO(lab-5) to attach SkillToolset.")
+    logger.info("ENABLE_SKILL_REGISTRY=true; complete TODO(lab-4) to attach SkillToolset.")
     return None
 
 
 def _build_optional_callbacks(settings: Settings) -> dict[str, Any]:
-    """Optionally wire Lab 4 telemetry and Memory Bank callbacks."""
+    """Optionally wire Lab 3 telemetry and Memory Bank callbacks."""
     callbacks: dict[str, Any] = {
         "before_tool_callback": None,
         "after_tool_callback": None,
@@ -130,7 +130,7 @@ def _build_optional_callbacks(settings: Settings) -> dict[str, Any]:
     if not settings.enable_telemetry_callbacks and not settings.enable_memory_bank:
         return callbacks
 
-    # TODO(lab-4): Import ``before_tool_callback`` and ``after_tool_callback`` from
+    # TODO(lab-3): Import ``before_tool_callback`` and ``after_tool_callback`` from
     # ``coding_agent.callbacks.telemetry_and_feedback`` to log Managed Sandbox stdout/stderr
     # under the parent ReasoningEngine resource and attach OTel tool span attributes.
     # If ``settings.enable_memory_bank`` is enabled, attach ``PreloadMemoryTool()`` and
@@ -141,7 +141,7 @@ def _build_optional_callbacks(settings: Settings) -> dict[str, Any]:
 def _assemble_runtime_components(
     cfg: Settings,
 ) -> tuple[list[Any], dict[str, Any], Any | None]:
-    """Assemble workspace tools, optional Lab 5 skills, Lab 4 callbacks, and code executor."""
+    """Assemble workspace tools, optional Lab 4 skills, Lab 3 callbacks, and code executor."""
     tools: list[Any] = []
     active_environment: BaseEnvironment | None = None
     code_executor: Any | None = None
@@ -210,7 +210,7 @@ def build_coding_agent(settings: Settings | None = None) -> LlmAgent:
 def build_root_agent(settings: Settings | None = None) -> Any:
     """Dispatch root agent construction based on ``AGENT_ARCHITECTURE``.
 
-    - ``simple`` (default): Single ``LlmAgent`` via ``build_coding_agent()`` (Labs 1-7).
+    - ``simple`` (default): Single ``LlmAgent`` via ``build_coding_agent()`` (Labs 1-8).
     - ``collaborative``: ADK 2.0 Coordinator + ``single_turn``/``task`` subagents.
     - ``graph``: ADK 2.0 declarative ``Workflow`` graph with ``JoinNode`` + bounded fix loop.
     - ``dynamic``: ADK 2.0 programmatic ``@node(rerun_on_resume=True)`` orchestrator.
@@ -257,7 +257,7 @@ def _build_app_options(settings: Settings | None = None) -> dict[str, Any]:
     Attaches ``GlobalInstructionPlugin`` across multi-agent and workflow modes
     (``collaborative``, ``graph``, ``dynamic``) per ADK 2.0 guidance
     (``adk.dev/graphs/``, ``adk.dev/workflows/collaboration/``), while keeping
-    ``simple`` mode unchanged for Labs 2-7 backward compatibility.
+    ``simple`` mode unchanged for Labs 2-8 backward compatibility.
     """
     cfg = settings or get_settings()
     options: dict[str, Any] = {

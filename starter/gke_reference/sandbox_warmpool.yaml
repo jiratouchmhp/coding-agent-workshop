@@ -27,7 +27,7 @@ metadata:
     app: coding-sandbox-warmpool
     app.kubernetes.io/part-of: gemini-coding-agent-workshop
 spec:
-  # TODO(lab-7): Increase `replicas` (e.g., to 2) to maintain pre-warmed gVisor
+  # TODO(lab-8): Increase `replicas` (e.g., to 2) to maintain pre-warmed gVisor
   # Pods for <1s SandboxClaim assignment, and verify `sandboxTemplateRef.name`
   # matches `starter/gke_reference/sandbox_template.yaml`.
   replicas: 1

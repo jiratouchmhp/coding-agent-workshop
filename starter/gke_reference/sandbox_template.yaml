@@ -74,7 +74,7 @@ spec:
       # Note: `secure-sandbox-policy` VAP enforces `runtimeClassName == gvisor`
       # and rejects `microvm` or Istio/Envoy `istio-init` NET_ADMIN/NET_RAW.
       runtimeClassName: gvisor
-      # TODO(lab-7): Harden this PodSpec for `secure-sandbox-policy` VAP compliance:
+      # TODO(lab-8): Harden this PodSpec for `secure-sandbox-policy` VAP compliance:
       #   1. Set `automountServiceAccountToken: false`
       #   2. Add pod-level `securityContext: { runAsNonRoot: true, runAsUser: 1000 }`
       #   3. Add container-level `securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] } }`
@@ -108,5 +108,5 @@ spec:
             requests:
               cpu: "250m"
               memory: "512Mi"
-            # TODO(lab-7): Add `limits` (`cpu: "500m"`, `memory: "1Gi"`) required by VAP.
+            # TODO(lab-8): Add `limits` (`cpu: "500m"`, `memory: "1Gi"`) required by VAP.
       restartPolicy: OnFailure

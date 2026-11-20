@@ -1,9 +1,9 @@
 # Lab 2 — Custom Sandbox (BYOC), Lifecycle Management & Execution (`Scale Pillar`)
 
 > **Pillar:** Scale (Managed Sandboxes, BYOC Custom Containers, Lifecycle CRUD/Pause/Resume/Snapshot, Multi-Path Execution, Credential & Egress Isolation)  
-> **Duration:** 65 minutes (Full-Day Track) | 40 minutes (Half-Day Fast-Track)  
+> **Duration:** 60 minutes (Full-Day Track) | 40 minutes (Half-Day Fast-Track)  
 > **Antigravity Skill Companion:** [`.agents/skills/agent-platform-sandbox-byoc/SKILL.md`](../.agents/skills/agent-platform-sandbox-byoc/SKILL.md)  
-> **Previous Lab:** [Lab 1: Setup & Build ADK Coding Agent](./01-LAB-SETUP-AND-BUILD-ADK.md) | **Next Lab:** [Lab 3: Deploy & Manage Agent Runtime (CLI & Terraform)](./03-LAB-DEPLOY-RUNTIME-TERRAFORM.md)  
+> **Previous Lab:** [Lab 1: Setup & Build ADK Coding Agent](./01-LAB-SETUP-AND-BUILD-ADK.md) | **Next Lab:** [Lab 3: Managed Sessions, Memory Bank, Feedback Service & Runtime Telemetry](./03-LAB-SESSIONS-MEMORY-FEEDBACK.md)  
 > **Files You Will Inspect & Edit:** `starter/sandbox_image/Dockerfile`, `starter/sandbox_image/runner.py`, `starter/coding_agent/tools/sandbox_lifecycle.py`, `starter/coding_agent/tools/sandbox_execution.py`, `starter/coding_agent/agent.py`
 
 ---
@@ -65,7 +65,7 @@ Do not confuse these three distinct products when reading docs or designing arch
 |---|---|---|---|
 | **1. Agent Platform Scale Sandboxes** (`scale/sandbox`) | `agentplatform.Client.sandboxes.*` under a parent `ReasoningEngine` | gVisor containers: **Code Execution**, **Shell**, **Computer Use**, and **BYOC Custom Containers**. **No built-in domain allowlist field**—use PSC-I + Cloud NGFW/SWP for FQDN filtering. | **This Lab (Lab 2)** |
 | **2. Managed Agents API Sandbox** (`build/managed-agents/sandbox-environment`, Pre-GA) | `google.genai` Agents/Interactions API (`global` only) | Built-in `antigravity-preview-05-2026` harness with a native network `allowlist`, direct Skill Registry mounts, and `env_id` sharing. Pre-GA (not for production/confidential data). | Reference contrast only |
-| **3. Self-Hosted GKE Agent Sandbox** (`kubernetes-sigs/agent-sandbox`) | Kubernetes CRDs (`Sandbox`, `SandboxTemplate`, `SandboxWarmPool`, `PodSnapshot`) + `sandbox-router` (port `8888`) | Self-managed GKE clusters; supports GPUs/TPUs, `<1s` warm pools, microVMs/Kata, and Kubernetes `NetworkPolicy`. | [Lab 7](07-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) |
+| **3. Self-Hosted GKE Agent Sandbox** (`kubernetes-sigs/agent-sandbox`) | Kubernetes CRDs (`Sandbox`, `SandboxTemplate`, `SandboxWarmPool`, `PodSnapshot`) + `sandbox-router` (port `8888`) | Self-managed GKE clusters; supports GPUs/TPUs, `<1s` warm pools, microVMs/Kata, and Kubernetes `NetworkPolicy`. | [Lab 8](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) |
 
 ### Comparing the Four Agent Platform Scale Sandbox Types
 
@@ -103,7 +103,7 @@ Confirm you see a non-root `USER appuser` (never `USER root`), `WORKDIR /workspa
 ```bash
 source .env
 
-# 1. Create a unified Docker repository in Artifact Registry (hosts both Lab 2 coding-sandbox and Lab 3 coding-agent images)
+# 1. Create a unified Docker repository in Artifact Registry (hosts both Lab 2 coding-sandbox and Lab 5 coding-agent images)
 gcloud artifacts repositories create coding-agent-repo \
   --repository-format=docker \
   --location="$GOOGLE_CLOUD_LOCATION" \
@@ -126,7 +126,7 @@ gcloud builds submit starter/sandbox_image \
 
 > [!CAUTION]
 > **Use `gcp-sa-vertex-sandbox`, NOT `gcp-sa-aiplatform-re`!**  
-> `service-PROJECT_NUMBER@gcp-sa-aiplatform-re.iam.gserviceaccount.com` pulls **Agent Runtime** images (Lab 3).  
+> `service-PROJECT_NUMBER@gcp-sa-aiplatform-re.iam.gserviceaccount.com` pulls **Agent Runtime** images (Lab 5).  
 > `service-PROJECT_NUMBER@gcp-sa-vertex-sandbox.iam.gserviceaccount.com` pulls **BYOC Sandbox** images (Lab 2).
 
 ```bash
@@ -145,10 +145,14 @@ Update `.env` with your `SANDBOX_IMAGE_URI` value before proceeding to Part B.
 
 Open [`starter/coding_agent/tools/sandbox_lifecycle.py`](../starter/coding_agent/tools/sandbox_lifecycle.py). You will implement `SandboxLifecycleManager` covering **every verified lifecycle operation** across all three resources:
 
-1. **Parent Agent Platform Instance (`ReasoningEngine`)**: Prerequisite for all sandboxes (does **not** require deploying agent code yet—an empty instance takes seconds to create).
+1. **Lightweight Standalone Agent Platform Instance (`ReasoningEngine`)**: Prerequisite for all Managed Sandboxes — created in **~3 seconds** via `client.runtimes.create()` with **zero code deployment**. This single lightweight backing instance powers **both Lab 2 Sandboxes and Lab 3 Managed Sessions / Memory Bank**, letting you finish building your entire agent locally before deploying ONCE in Lab 5!
 2. **`SandboxEnvironmentTemplate`** (Create, Get, List, Update = Delete + Recreate, Delete).
 3. **`SandboxEnvironment`** (Create, Get, List, Pause, Resume, Snapshot, Delete).
 4. **`SandboxEnvironmentSnapshot`** (Create, Restore/Branch, Get, List, Delete).
+
+> [!TIP]
+> **One Lightweight Backing Instance Powers Labs 2 & 3 (Zero Code Deploy Required):**
+> Calling `client.runtimes.create()` without a container or source spec provisions an empty parent `ReasoningEngine` in **~3 seconds**. Save the returned `instance_name` to `REASONING_ENGINE_NAME` (and its trailing numeric ID to `REASONING_ENGINE_ID`) in `.env` — it backs **both Lab 2 Managed Sandboxes and Lab 3 Managed Sessions / Memory Bank** while you keep iterating locally, so you only build and deploy your complete Coding Agent container **once** in [Lab 5](./05-LAB-DEPLOY-RUNTIME-TERRAFORM.md)!
 
 ### SDK Namespace & API Version Rules (Read Before Coding!)
 
@@ -171,10 +175,13 @@ client = agentplatform.Client(
     http_options={"api_version": "v1beta1"},  # Required for BYOC templates, PSC, CMEK
 )
 
-# Empty parent instance (no code deployment needed to run sandboxes)
+# Lightweight standalone backing instance (~3 seconds, zero code deploy):
+# Powers BOTH Lab 2 Managed Sandboxes and Lab 3 Managed Sessions / Memory Bank
+# before you package and deploy the complete Coding Agent ONCE in Lab 5!
 remote_agent = client.runtimes.create()
 instance_name = remote_agent.api_resource.name
 # Format: projects/{PROJECT_NUMBER_OR_ID}/locations/{LOCATION}/reasoningEngines/{INSTANCE_ID}
+# Save `instance_name` as REASONING_ENGINE_NAME (and its trailing ID as REASONING_ENGINE_ID) in `.env`.
 ```
 
 #### 2. `SandboxEnvironmentTemplate` Lifecycle (Create / Get / List / Update / Delete)
@@ -445,7 +452,7 @@ class AgentPlatformSandboxEnvironment(BaseEnvironment):
         # Always check `ctx.state.get(self.STATE_KEY)` first; if already set, reuse it,
         # otherwise resolve `resolved_parent = (_infer_parent_instance(self._template_name) if self._template_name else "") or self._instance_name or None`
         # so BYOC templates always target their owning parent ReasoningEngine (while shell mode
-        # reuses the deployed Agent Runtime), create the sandbox, and store its name in `ctx.state[self.STATE_KEY]`.
+        # reuses the parent Agent Platform instance / deployed Agent Runtime), create the sandbox, and store its name in `ctx.state[self.STATE_KEY]`.
         if ctx is not None and ctx.state.get(self.STATE_KEY):
             return
         ...
@@ -497,7 +504,7 @@ sudo -n true 2>&1 || echo "PASS: Non-root appuser cannot escalate"
 
 | Identity Layer | Principal | Accessible Inside Sandbox? |
 |---|---|---|
-| **Parent Agent Runtime Identity** | SPIFFE `AGENT_IDENTITY` (`principal://agents.global.org-...`) or custom/default Runtime SA | **NEVER** — stays strictly in Agent Runtime |
+| **Parent Agent Runtime Identity** | Dedicated Custom Runtime SA (Lab 5 default) or SPIFFE `AGENT_IDENTITY` (`principal://agents.global.org-...`, Optional Lab 7) | **NEVER** — stays strictly in Agent Runtime |
 | **Sandbox Service Agent** | `service-PROJECT_NUMBER@gcp-sa-vertex-sandbox.iam.gserviceaccount.com` | **NEVER** — control-plane image pulls only |
 | **In-Sandbox Execution Identity** | Unprivileged `appuser` backed by tenant identity `sandbox-untrusted` (**0 IAM roles** on your project) | **Yes** — zero ADC, zero metadata server (`169.254.169.254:80`) |
 
@@ -516,7 +523,7 @@ There is **no built-in domain allowlist property** on `SandboxEnvironment` or `S
    - **Cloud NAT** on the PSC subnet if internet egress is required (omit for private-only internal VPC/on-prem access).
    - *(Shared VPC note: If the network attachment lives in a host project, grant `roles/compute.networkUser` on the host project to **`service-PROJECT_NUMBER@gcp-sa-aiplatform.iam.gserviceaccount.com`**.)*
 4. **Private Ingress (PSC-E):** Set `ingress_control_config.private_service_connect_config.enable_private_service_connect: True` on the template, then create a VPC forwarding rule targeting `sandbox.connection_info.service_attachment` (limit: **1 consumer project**, which must be the **same project** running the sandbox).
-5. **VPC Service Controls & CMEK:**
+5. **VPC Service Controls & CMEK** *(deep-dive & hardening checklist in [Lab 7 (Optional): Enterprise Security & Governance Hardening](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md))*:
    - **VPC-SC:** Add `aiplatform.googleapis.com`, `storage.googleapis.com`, and `artifactregistry.googleapis.com` to Restricted Services **before** creating sandboxes; route `*.googleapis.com` and `pkg.dev` via `199.36.153.4/30`.
    - **CMEK:** Configured **only** when creating the parent `ReasoningEngine` (`encryption_spec.kms_key_name`, single-region key, immutable; grant `roles/cloudkms.cryptoKeyEncrypterDecrypter` to `gcp-sa-aiplatform-re`). Encrypts sandbox node boot disks (runtime files + paged memory) and the snapshot GCS bucket; does **not** encrypt resource metadata or Artifact Registry source images (configure CMEK on the AR repo separately).
 
@@ -528,7 +535,7 @@ There is **no built-in domain allowlist property** on `SandboxEnvironment` or `S
 | **Provisioning Latency** | Cold start (unprovisioned template): **up to 2 minutes**. Warm / template-backed spin-up, resume from pause, or snapshot restore: **seconds** (~20s typical for Shell; `<1s` for Code Execution). |
 | **Cloud Audit Logs (`aiplatform.googleapis.com`)** | `ADMIN_WRITE` lifecycle ops are always enabled. `ADMIN_READ` (`Get`/`List`) and `DATA_WRITE` (`ExecuteSandboxEnvironment`, `BidiExecuteSandboxEnvironment`, `AuthorizeSandboxEnvironmentAccess`, `ExecuteCode`) are **disabled by default**—enable both for enterprise audit! **VPC-SC caveat:** Request/response payloads are omitted from audit logs inside a VPC-SC perimeter. |
 | **In-Container Blind Spot** | Cloud Audit Logs records only the outer API call—**NOT** child subprocesses, syscalls, file writes, or individual WebSocket/CDP/PTY stream frames. |
-| **`stdout` / `stderr` Logging Gap (CRITICAL!)** | Automatic Cloud Logging (`reasoning_engine_stdout` / `reasoning_engine_stderr`) applies **only** to the parent `ReasoningEngine` and does **NOT** collect logs from child sandboxes! Your parent agent **must** inspect and log sandbox execution responses explicitly (which we wire into ADK callbacks in [Lab 4](04-LAB-SESSIONS-MEMORY-FEEDBACK.md)). |
+| **`stdout` / `stderr` Logging Gap (CRITICAL!)** | Automatic Cloud Logging (`reasoning_engine_stdout` / `reasoning_engine_stderr`) applies **only** to the parent `ReasoningEngine` and does **NOT** collect logs from child sandboxes! Your parent agent **must** inspect and log sandbox execution responses explicitly (which we wire into ADK callbacks in [Lab 3](./03-LAB-SESSIONS-MEMORY-FEEDBACK.md)). |
 
 ---
 
@@ -556,7 +563,7 @@ Run the Lab 2 automated checkpoint verifier from the repository root:
 
 ## Next Lab
 
-Now that your Coding Agent executes untrusted code inside a secure Managed Sandbox, it is time to deploy the **trusted orchestrator** to **Agent Runtime** declaratively with Terraform. Continue to **[Lab 3: Deploy Agent Runtime with Terraform](03-LAB-DEPLOY-RUNTIME-TERRAFORM.md)**.
+Now that your Coding Agent executes untrusted code inside a secure Managed Sandbox—and your lightweight standalone backing instance (`REASONING_ENGINE_NAME`) is ready—keep building locally by adding Managed Sessions, Memory Bank, Feedback, and runtime telemetry before deploying your complete agent once in Lab 5. Continue to **[Lab 3: Managed Sessions, Memory Bank, Feedback Service & Runtime Telemetry](./03-LAB-SESSIONS-MEMORY-FEEDBACK.md)**.
 
 ---
 

@@ -75,20 +75,21 @@ class Settings:
     google_cloud_project_number: str = ""
     google_cloud_location: str = "us-central1"
 
-    # Agent Runtime & Managed Sandbox resources (populated in Labs 2-3)
+    # Agent Runtime & Managed Sandbox resources (populated in Lab 2 & Lab 5)
     reasoning_engine_name: str = ""
     sandbox_template_name: str = ""
     sandbox_image_uri: str = ""
     sandbox_mode: SandboxMode = "local"
 
-    # Skill Registry (us-central1, europe-west4, or us-east5) & Agent Registry (Lab 5)
+    # Skill Registry (us-central1, europe-west4, or us-east5) & Agent Registry (Lab 4)
+    # When AGENT_REGISTRY_LOCATION is unset, it falls back to skill_registry_location.
     skill_registry_location: str = "us-central1"
-    agent_registry_location: str = "us-central1"
+    agent_registry_location: str = ""
 
     # Explicit versioned Gemini model ID (avoid `gemini-flash-latest` on regional endpoints)
     model_name: str = "gemini-2.5-flash"
 
-    # ADK 2.0 Architecture & Workflow Controls (Lab 1; default `simple` keeps Labs 2-7 unchanged)
+    # ADK 2.0 Architecture & Workflow Controls (Lab 1; default `simple` keeps Labs 2-8 unchanged)
     agent_architecture: AgentArchitecture = "simple"
     max_fix_rounds: int = 3
     enable_hitl_approval: bool = False
@@ -127,6 +128,10 @@ class Settings:
             raise ValueError(f"MAX_FIX_ROUNDS must be positive, got {self.max_fix_rounds}.")
         if self.max_output_chars <= 0:
             raise ValueError(f"MAX_OUTPUT_CHARS must be positive, got {self.max_output_chars}.")
+        normalized_skill_loc = self.skill_registry_location.strip() or "us-central1"
+        object.__setattr__(self, "skill_registry_location", normalized_skill_loc)
+        normalized_agent_loc = self.agent_registry_location.strip() or normalized_skill_loc
+        object.__setattr__(self, "agent_registry_location", normalized_agent_loc)
 
     @property
     def local_workspace_path(self) -> Path:
@@ -198,8 +203,10 @@ def load_settings() -> Settings:
         sandbox_template_name=os.environ.get("SANDBOX_TEMPLATE_NAME", "").strip(),
         sandbox_image_uri=os.environ.get("SANDBOX_IMAGE_URI", "").strip(),
         sandbox_mode=raw_mode,  # type: ignore[arg-type]
-        skill_registry_location=os.environ.get("SKILL_REGISTRY_LOCATION", "us-central1").strip(),
-        agent_registry_location=os.environ.get("AGENT_REGISTRY_LOCATION", "us-central1").strip(),
+        skill_registry_location=(
+            os.environ.get("SKILL_REGISTRY_LOCATION", "").strip() or "us-central1"
+        ),
+        agent_registry_location=os.environ.get("AGENT_REGISTRY_LOCATION", "").strip(),
         model_name=os.environ.get("MODEL_NAME", "gemini-2.5-flash").strip(),
         agent_architecture=raw_arch,  # type: ignore[arg-type]
         max_fix_rounds=_parse_int(os.environ.get("MAX_FIX_ROUNDS"), 3),

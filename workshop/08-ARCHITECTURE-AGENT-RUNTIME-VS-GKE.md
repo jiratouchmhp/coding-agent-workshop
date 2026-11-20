@@ -1,16 +1,16 @@
-# Lab 7: Architecture & Limitations Deep-Dive — Gemini Enterprise Agent Platform vs. Self-Hosted GKE
+# Lab 8: Architecture & Limitations Deep-Dive — Gemini Enterprise Agent Platform vs. Self-Hosted GKE
 
 > **Track:** Executive & Principal Engineering Architecture Deep-Dive + GKE Reference Overlay Walkthrough  
-> **Duration:** 35 minutes (Full-Day Track) | 25 minutes (Half-Day Executive Briefing & Decision Tree)  
+> **Duration:** 30 minutes (Full-Day Track) | 25 minutes (Half-Day Executive Briefing & Decision Tree)  
 > **Antigravity Skill Companion:** [`.agents/skills/agent-runtime-vs-gke-architecture/SKILL.md`](../.agents/skills/agent-runtime-vs-gke-architecture/SKILL.md)  
-> **Previous Lab:** [Lab 6: Optimize, Evaluate, Alert & Close the Flywheel](./06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md) | **Related:** [Facilitator Guide](./FACILITATOR-GUIDE.md)  
+> **Previous Lab:** [Lab 6: Optimize, Evaluate, Alert & Close the Flywheel](./06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md) *(or [Lab 7 (Optional): Enterprise Security & Governance Hardening](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md))* | **Related:** [Facilitator Guide](./FACILITATOR-GUIDE.md)  
 > **GKE Reference Manifests:** [`starter/gke_reference/`](../starter/gke_reference/) | **Reference Solution:** [`solution/gke_reference/`](../solution/gke_reference/)
 
 ---
 
 ## Learning Objectives
 
-In Labs 1–6 you built, sandboxed, deployed, governed, and evaluated a Coding Agent on **Gemini Enterprise Agent Platform (Agent Runtime + Managed BYOC Sandbox)**. Before committing an enterprise architecture to production, Principal Architects and Platform Engineering Leads must know **exactly where the managed serverless platform shines, where its hard limits sit, and when to run self-hosted on GKE or adopt a hybrid topology**.
+In Labs 1–6 you built, sandboxed, persisted state for, extended with registries, deployed, and evaluated a Coding Agent — and optionally hardened it with enterprise governance and SecOps controls in Lab 7 — on **Gemini Enterprise Agent Platform (Agent Runtime + Managed BYOC Sandbox)**. Before committing an enterprise architecture to production, Principal Architects and Platform Engineering Leads must know **exactly where the managed serverless platform shines, where its hard limits sit, and when to run self-hosted on GKE or adopt a hybrid topology**.
 
 By the end of this module, you will be able to:
 1. Evaluate all **four production deployment options** (Agent Platform Managed, GKE Agent Sandbox, GKE Agent Substrate, and `agents-cli` Hybrid/Multi-Target).
@@ -159,19 +159,19 @@ If you choose **Option B (GKE Agent Sandbox)** and need suspend/resume that pres
 
 ## 5. Walkthrough of `starter/gke_reference/` (GKE Agent Sandbox Overlay)
 
-Open the four comparison-track files under [`starter/gke_reference/`](../starter/gke_reference/). Each `starter/gke_reference/` file includes an optional hands-on **`# TODO(lab-7)`** hardening/wiring exercise (complete, ready-to-apply manifests and Python implementation live in [`solution/gke_reference/`](../solution/gke_reference/)):
+Open the four comparison-track files under [`starter/gke_reference/`](../starter/gke_reference/). Each `starter/gke_reference/` file includes an optional hands-on **`# TODO(lab-8)`** hardening/wiring exercise (complete, ready-to-apply manifests and Python implementation live in [`solution/gke_reference/`](../solution/gke_reference/)):
 
 1. **[`starter/gke_reference/sandbox_template.yaml`](../starter/gke_reference/sandbox_template.yaml)** (`extensions.agents.x-k8s.io/v1beta1`, `kind: SandboxTemplate`):
-   - Complete `# TODO(lab-7)` to enforce `secure-sandbox-policy` VAP compliance: `runtimeClassName: gvisor`, `automountServiceAccountToken: false`, `securityContext.runAsNonRoot: true`, `capabilities.drop: ["ALL"]`, explicit CPU/memory `limits`, and `nodeSelector` + `tolerations` for `sandbox.gke.io/runtime: gvisor`.
+   - Complete `# TODO(lab-8)` to enforce `secure-sandbox-policy` VAP compliance: `runtimeClassName: gvisor`, `automountServiceAccountToken: false`, `securityContext.runAsNonRoot: true`, `capabilities.drop: ["ALL"]`, explicit CPU/memory `limits`, and `nodeSelector` + `tolerations` for `sandbox.gke.io/runtime: gvisor`.
    - Because it uses `SandboxTemplate` (not a bare `Sandbox`), the controller automatically creates a managed `NetworkPolicy` (`networkPolicyManagement: Managed`) allowing ingress **only** from `app: sandbox-router` in `agent-sandbox-system` and blocking RFC 1918, CoreDNS, and `169.254.0.0/16` metadata egress.
 2. **[`starter/gke_reference/sandbox_warmpool.yaml`](../starter/gke_reference/sandbox_warmpool.yaml)** (`extensions.agents.x-k8s.io/v1beta1`, `kind: SandboxWarmPool`):
-   - Complete `# TODO(lab-7)` to set warm-pool `replicas: 2` referencing your `SandboxTemplate` (`coding-sandbox-template`) for **`< 1s`** `SandboxClaim` assignment.
+   - Complete `# TODO(lab-8)` to set warm-pool `replicas: 2` referencing your `SandboxTemplate` (`coding-sandbox-template`) for **`< 1s`** `SandboxClaim` assignment.
    - *(Operational check: verify `metadata.ownerReferences[*].kind` on `Sandbox` objects—`SandboxWarmPool` = idle/unclaimed; `SandboxClaim` = claimed/in-use. Claiming before warm-pool replicas are `Ready` falls back to cold Pod creation!)*
 3. **[`starter/gke_reference/rbac.yaml`](../starter/gke_reference/rbac.yaml)** (`Role` & `RoleBinding`):
-   - Complete `# TODO(lab-7)` to grant your ADK orchestrator's Kubernetes Service Account `create, get, watch, delete` across BOTH **distinct Agent Sandbox API groups**: **`extensions.agents.x-k8s.io`** for `sandboxclaims` (and `sandboxtemplates` / `sandboxwarmpools`) AND **`agents.x-k8s.io`** for `sandboxes` (the exact RBAC required by `GkeCodeExecutor(executor_type="sandbox")`).
+   - Complete `# TODO(lab-8)` to grant your ADK orchestrator's Kubernetes Service Account `create, get, watch, delete` across BOTH **distinct Agent Sandbox API groups**: **`extensions.agents.x-k8s.io`** for `sandboxclaims` (and `sandboxtemplates` / `sandboxwarmpools`) AND **`agents.x-k8s.io`** for `sandboxes` (the exact RBAC required by `GkeCodeExecutor(executor_type="sandbox")`).
    - *(Remember: `adk deploy gke` defaults to `default/default` KSA—bind it via WIF to `roles/aiplatform.user` or specify a dedicated KSA to avoid `403 PERMISSION_DENIED`.)*
 4. **[`starter/gke_reference/gke_agent_example.py`](../starter/gke_reference/gke_agent_example.py)**:
-   - Complete `# TODO(lab-7)` (`build_gke_code_executor`, `build_gke_coding_agent`, `run_warmpool_sdk_smoke_test`) to swap Agent Platform's `AgentEngineSandboxCodeExecutor` for ADK's **`GkeCodeExecutor`** (`pip install "google-adk[extensions]>=2.0.0"`, ADK Python 2.0+):
+   - Complete `# TODO(lab-8)` (`build_gke_code_executor`, `build_gke_coding_agent`, `run_warmpool_sdk_smoke_test`) to swap Agent Platform's `AgentEngineSandboxCodeExecutor` for ADK's **`GkeCodeExecutor`** (`pip install "google-adk[extensions]>=2.0.0"`, ADK Python 2.0+):
      ```python
      from google.adk.agents import LlmAgent
      from google.adk.code_executors import GkeCodeExecutor
@@ -227,7 +227,7 @@ Before wrapping up the workshop, confirm your architecture team can answer these
 - [ ] If choosing GKE Agent Sandbox at scale, have we planned for GKE Dataplane V2 constraints (cluster-create-only, HTTP keep-alives/pooling to bound `anetd` CPU under rapid TCP churn, `260,000`-entry Service map, `1,000`-node `CiliumNetworkPolicy` limit), `FQDNNetworkPolicy` direct-alias rules (`50` IPs/policy), and Pod Snapshot prerequisites (`>= 1.35.3-gke.1234000`, gVisor, non-E2 for `whole-pod` or `>= 1.35.3-gke.1031000` for `rootfs-only`, `--soft-delete-duration=0d`)?
 - [ ] Does a **Hybrid Pattern** (e.g., Agent Runtime orchestrator + GKE GPU/microVM sandbox, OR GKE orchestrator + Managed Sandbox/Sessions) deliver lower TCO than an all-or-nothing choice?
 
-*(Optional automated check — if you completed the `# TODO(lab-7)` exercises in `starter/gke_reference/`, validate them with `./scripts/verify_lab.sh 7` or `make verify-lab LAB=7`; verify the reference manifests directly with `./scripts/verify_lab.sh 7 --track solution`.)*
+*(Optional automated check — if you completed the `# TODO(lab-8)` exercises in `starter/gke_reference/`, validate them with `./scripts/verify_lab.sh 8` or `make verify-lab LAB=8`; verify the reference manifests directly with `./scripts/verify_lab.sh 8 --track solution`.)*
 
 ---
 

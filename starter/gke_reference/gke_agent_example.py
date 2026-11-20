@@ -68,7 +68,7 @@ def build_gke_code_executor(settings: GkeSandboxSettings) -> Any:
     - ``rbac.yaml``, ``sandbox_template.yaml``, and ``sandbox_warmpool.yaml``
       applied in ``settings.namespace``.
     """
-    # TODO(lab-7): Import ``GkeCodeExecutor`` from ``google.adk.code_executors``
+    # TODO(lab-8): Import ``GkeCodeExecutor`` from ``google.adk.code_executors``
     # and instantiate it with:
     #   - ``namespace=settings.namespace``
     #   - ``executor_type="sandbox"``
@@ -77,14 +77,14 @@ def build_gke_code_executor(settings: GkeSandboxSettings) -> Any:
     #   - Optional ``kubeconfig_path`` / ``kubeconfig_context`` (when set)
     # Compare with ``solution/gke_reference/gke_agent_example.py`` for the complete wiring.
     raise NotImplementedError(
-        "Complete TODO(lab-7) in starter/gke_reference/gke_agent_example.py: "
+        "Complete TODO(lab-8) in starter/gke_reference/gke_agent_example.py: "
         "build_gke_code_executor()."
     )
 
 
 def build_gke_coding_agent(settings: GkeSandboxSettings) -> Any:
     """Construct an ADK ``LlmAgent`` wired with ``GkeCodeExecutor``."""
-    # TODO(lab-7): Import ``LlmAgent`` from ``google.adk.agents``, build the
+    # TODO(lab-8): Import ``LlmAgent`` from ``google.adk.agents``, build the
     # executor via ``build_gke_code_executor(settings)``, and return:
     #   LlmAgent(
     #       name="gke_sandbox_coding_agent",
@@ -93,7 +93,7 @@ def build_gke_coding_agent(settings: GkeSandboxSettings) -> Any:
     #       code_executor=executor,
     #   )
     raise NotImplementedError(
-        "Complete TODO(lab-7) in starter/gke_reference/gke_agent_example.py: "
+        "Complete TODO(lab-8) in starter/gke_reference/gke_agent_example.py: "
         "build_gke_coding_agent()."
     )
 
@@ -150,13 +150,13 @@ def run_warmpool_sdk_smoke_test(
             "Standalone GKE Sandbox client requires `pip install k8s-agent-sandbox==1.0.6`."
         ) from exc
 
-    # TODO(lab-7): Instantiate ``SandboxClient`` with
+    # TODO(lab-8): Instantiate ``SandboxClient`` with
     # ``connection_config=SandboxLocalTunnelConnectionConfig()`` and ``cleanup=True``,
     # call ``client.create_sandbox(warmpool=settings.warmpool, namespace=settings.namespace)``,
     # execute ``sandbox.commands.run(command)``, and return ``result.stdout``.
     _ = (SandboxClient, SandboxLocalTunnelConnectionConfig, settings, command)
     raise NotImplementedError(
-        "Complete TODO(lab-7) in starter/gke_reference/gke_agent_example.py: "
+        "Complete TODO(lab-8) in starter/gke_reference/gke_agent_example.py: "
         "run_warmpool_sdk_smoke_test()."
     )
 
@@ -164,7 +164,7 @@ def run_warmpool_sdk_smoke_test(
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point for inspecting or exercising the GKE reference overlay."""
     parser = argparse.ArgumentParser(
-        description="GKE Agent Sandbox ADK integration example (Lab 7 comparison track)."
+        description="GKE Agent Sandbox ADK integration example (Lab 8 comparison track)."
     )
     parser.add_argument(
         "--mode",

@@ -1,9 +1,9 @@
 # Lab 6: Optimize Pillar — Observability, Offline/Simulated/Online Evaluation, Quality Alerts & Optimization Flywheel
 
 > **Pillar:** Optimize (`Observability` → `Offline & Simulated Eval` → `Failure Clustering` → `Online Monitors & Quality Alerts` → `Prompt & Example Optimization`)  
-> **Duration:** 45 minutes (Full-Day Track) | 15 minutes (Half-Day Fast-Track — Instructor Live Demo & Walkthrough)  
+> **Duration:** 40 minutes (Full-Day Track) | 15 minutes (Half-Day Fast-Track — Instructor Live Demo & Walkthrough)  
 > **Antigravity Skill Companion:** [`.agents/skills/agent-platform-optimize-and-eval/SKILL.md`](../.agents/skills/agent-platform-optimize-and-eval/SKILL.md)  
-> **Previous Lab:** [Lab 5: Govern Skills, Agent Registry & Semantic Policies](./05-LAB-GOVERN-SKILL-AGENT-REGISTRY.md) | **Next Lab:** [Lab 7: Agent Runtime vs. Self-Hosted GKE](./07-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md)  
+> **Previous Lab:** [Lab 5: Deploy & Manage the Complete Coding Agent on Agent Runtime (CLI & Terraform)](./05-LAB-DEPLOY-RUNTIME-TERRAFORM.md) | **Next Lab:** [Lab 7 (Optional): Enterprise Security & Governance Hardening](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md) *(or skip directly to [Lab 8: Agent Runtime vs. Self-Hosted GKE](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md))*  
 > **Working Files:** [`starter/eval/`](../starter/eval/) | **Reference Solution:** [`solution/eval/`](../solution/eval/)
 
 ---
@@ -12,7 +12,7 @@
 
 By the end of this lab, you will close the production quality flywheel for your Coding Agent on **Gemini Enterprise Agent Platform**:
 
-1. **Instrument & Inspect GenAI Observability** using OpenTelemetry GenAI Semantic Conventions (`v1.37.0+`), verify multimodal GCS payload offloading, configure **tamper-evident WORM audit retention**, and route dual-attributed agentic logs to an external **SIEM via Pub/Sub**.
+1. **Instrument & Inspect GenAI Observability** using OpenTelemetry GenAI Semantic Conventions (`v1.37.0+`), navigate the Observability Dashboard & Trace/Session views, and verify multimodal GCS payload offloading.
 2. **Run Offline Evaluations** over traces, sessions, and canonical split single-turn and multi-turn JSON test suites (`starter/eval/run_offline_eval.py` and `agents-cli eval`), contrasting **trace vs. session** grading and applying predefined adaptive rubrics, multi-turn trajectory/tool metrics, and custom Python/LLM metrics.
 3. **Run 2-Step Simulated User Evaluations** (`starter/eval/run_simulated_eval.py` and `agents-cli eval dataset synthesize`) to stress-test multi-turn debugging, tool errors, and prompt-injection refusal personas before touching production traffic.
 4. **Diagnose Failure Clusters** using **Automatic Loss Analysis** in the Cloud Console (`view-results`), `vertexai.evals` (`client.evals.generate_loss_clusters`), and `agents-cli eval analyze` across the official 13-pattern Task Success and Tool Use taxonomies.
@@ -23,7 +23,7 @@ By the end of this lab, you will close the production quality flywheel for your 
 
 ## Half-Day Fast-Track Path (15-Minute Instructor Live Demo & Walkthrough)
 
-In the **3.5-hour Half-Day Fast-Track**, Lab 6 is delivered as a **15-minute instructor-led live demo and code walkthrough** (no attendee coding required) so the session reserves 25 full minutes for the Lab 7 architecture briefing:
+In the **3.5-hour Half-Day Fast-Track**, Lab 6 is delivered as a **15-minute instructor-led live demo and code walkthrough** (no attendee coding required) so the session reserves 25 full minutes for the [Lab 8](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) architecture briefing (skipping [Optional Lab 7](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md) cleanly):
 - Watch the instructor showcase the pre-warmed **Online Evaluation Monitor** & **Observability Dashboard** (Part 1 & Part 5), run the split JSON offline evaluation (`coding_agent_single_turn.json` vs. `coding_agent_multi_turn.json`) and `global` loss-cluster analysis (Parts 2–4), inspect the `monitoring_v3` Quality Alert policy (Part 5.2), and preview a bounded `optimize_prompt.py` diff + canary rollout (Part 6).
 - All reference scripts remain available in [`solution/eval/`](../solution/eval/) for self-paced post-workshop execution.
 
@@ -33,15 +33,14 @@ In the **3.5-hour Half-Day Fast-Track**, Lab 6 is delivered as a **15-minute ins
 
 ```mermaid
 flowchart LR
-    subgraph Prod["Production Agent Runtime"]
-        Agent["ADK 2.0 Coding Agent<br/>(OTel GenAI SemConv)"]
-        Feedback["Feedback Service<br/>(THUMBS_DOWN + Labels)"]
+    subgraph Prod["Production Agent Runtime (Lab 5)"]
+        Agent["ADK 2.0 Coding Agent<br/>(OTel GenAI SemConv + Lab 4 Skills)"]
+        Feedback["Feedback Service (Lab 3)<br/>(THUMBS_DOWN + Labels)"]
     end
 
-    subgraph Obs["1. Observability & Security Ops"]
+    subgraph Obs["1. GenAI Observability"]
         Trace["Cloud Trace &<br/>Observability Dashboard"]
-        Logs["Cloud Logging + GCS JSONL<br/>(WORM Bucket + SIEM Pub/Sub)"]
-        Anom["Agent Anomaly Detection<br/>(3-Layer -> SCC)"]
+        Logs["Cloud Logging +<br/>GCS JSONL Payload Offload"]
     end
 
     subgraph Eval["2. Continuous & Pre-Release Evaluation"]
@@ -58,8 +57,7 @@ flowchart LR
     end
 
     Agent -->|"Spans + Events"| Trace
-    Agent -->|"Dual-Attributed Logs"| Logs
-    Trace --> Anom
+    Agent -->|"Structured Logs"| Logs
     Trace --> Online
     Logs --> Online
     Online --> Alerts
@@ -78,8 +76,8 @@ flowchart LR
 ## Prerequisites & Environment Check
 
 Before starting Lab 6, verify that:
-- You completed [Lab 3](./03-LAB-DEPLOY-RUNTIME-TERRAFORM.md) and [Lab 4](./04-LAB-SESSIONS-MEMORY-FEEDBACK.md) (or switched to [`solution/`](../solution/)) so your Coding Agent is deployed with telemetry enabled.
-- Your shell environment is loaded from `.env` and evaluation dependencies are installed:
+- You completed [Lab 3](./03-LAB-SESSIONS-MEMORY-FEEDBACK.md) (OTel telemetry callbacks & Feedback Service), [Lab 4](./04-LAB-SKILLS-AND-AGENT-REGISTRY.md) (Skill Registry & Agent Registry), and [Lab 5](./05-LAB-DEPLOY-RUNTIME-TERRAFORM.md) (deployed Agent Runtime with telemetry enabled) — or switched to [`solution/`](../solution/).
+- Your shell environment is loaded from `.env` (with `REASONING_ENGINE_NAME` pointing to your Lab 5 Terraform-deployed runtime for unified Trace + Online Eval correlation) and evaluation dependencies are installed:
 
 ```bash
 set -a && source .env && set +a
@@ -115,7 +113,7 @@ cd starter && uv sync
 
 ---
 
-## Part 1: GenAI OTel Observability, Multimodal GCS Offload, Audit Retention & SIEM Export (8 min)
+## Part 1: GenAI OTel Observability, Dashboard Inspection & Multimodal GCS Offload (6 min)
 
 ### 1.1 Verify Mandatory OpenTelemetry GenAI Telemetry Signals
 
@@ -189,61 +187,12 @@ GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY='true'
 
 The Agent Platform Trace Details UI automatically stitches trace spans with `gen_ai.input.messages_ref`, `gen_ai.output.messages_ref`, and `gen_ai.system_instructions_ref` GCS pointers from `labels."event.name"="gen_ai.client.inference.operation.details"`. Grant the **agent runtime service account** `roles/storage.objectUser` on the bucket plus `roles/logging.logWriter`, `roles/monitoring.metricWriter`, and `roles/telemetry.tracesWriter` on the project; grant engineers viewing traces `roles/cloudtrace.user`, `roles/logging.viewer`, and `roles/storage.objectViewer`.
 
-### 1.4 Tamper-Evident WORM Audit Retention, SIEM Export & Security Ops
-
-Enterprise security teams require immutable audit trails of agentic actions and real-time forwarding to external SIEMs (Chronicle / Google SecOps, Splunk, Datadog):
-
-- **Default Retention Reality:** `_Required` (Admin Activity / System Event) retains logs immutably for **400 days**, whereas `_Default` (Data Access, Policy Denied, Agent Gateway `gateway_requests`, and `is_agentic=true` dual-attribution logs) retains logs for only **30 days**.
-- **Dual-Attribution Query:** Delegated user actions emit both the agent's SPIFFE identity (`principal://...` in audit logs, `spiffe://...` in execution logs) and the initiating human user. Filter in Logs Explorer with:
-  ```text
-  jsonPayload.is_agentic=true OR labels.is_agentic="true"
-  ```
-  *(Gotcha: when querying recent audit logs via `gcloud logging read`, pass `--freshness=1d` rather than `--freshness=6h`, which can miss recent entries.)*
-
-Run (or review) the exact commands to create a locked WORM log bucket (1–3,650 days) and a Pub/Sub SIEM export sink:
-
-```bash
-# 1. Create a custom compliance log bucket (e.g., 365-day retention)
-gcloud logging buckets create agent-audit-worm \
-  --location="${GOOGLE_CLOUD_LOCATION}" \
-  --retention-days=365 \
-  --project="${GOOGLE_CLOUD_PROJECT}"
-
-# OPTIONAL (IRREVERSIBLE!): Lock the bucket to enforce tamper-evident WORM retention.
-# WARNING: Do NOT run --locked in a temporary workshop sandbox project unless you intend
-# to keep the bucket locked for its full retention period; pair with a project lien in prod.
-# gcloud logging buckets update agent-audit-worm \
-#   --location="${GOOGLE_CLOUD_LOCATION}" \
-#   --locked \
-#   --project="${GOOGLE_CLOUD_PROJECT}"
-
-# 2. Export agentic audit, gateway, and runtime logs to a SIEM Pub/Sub topic
-gcloud pubsub topics create agent-siem-events --project="${GOOGLE_CLOUD_PROJECT}" || true
-
-gcloud logging sinks create agent-siem-sink \
-  "pubsub.googleapis.com/projects/${GOOGLE_CLOUD_PROJECT}/topics/agent-siem-events" \
-  --log-filter='logName:("cloudaudit.googleapis.com" OR "networkservices.googleapis.com%2Fgateway_requests" OR "aiplatform.googleapis.com%2Freasoning_engine") OR jsonPayload.is_agentic=true OR labels.is_agentic="true"' \
-  --project="${GOOGLE_CLOUD_PROJECT}"
-
-WRITER_IDENTITY=$(gcloud logging sinks describe agent-siem-sink \
-  --project="${GOOGLE_CLOUD_PROJECT}" --format='value(writerIdentity)')
-
-gcloud pubsub topics add-iam-policy-binding agent-siem-events \
-  --project="${GOOGLE_CLOUD_PROJECT}" \
-  --member="${WRITER_IDENTITY}" \
-  --role="roles/pubsub.publisher"
-```
-
-> [!TIP]
-> **Out-of-Band Threat Detection & Telemetry Latencies:**
-> - **Cloud Audit Logs, Gateway Requests, Runtime stdout/stderr, Trace spans:** Searchable within **seconds** (inline Agent Gateway / Model Armor enforcement has **0 post-processing delay**).
-> - **Cloud Monitoring metrics:** Sampled every **60–120s** with **180–420s** visibility delay.
-> - **Agent Anomaly Detection (`AGENT_SESSION_ANOMALY` → Security Command Center, Preview):** Runs a 3-layer ML + reasoning + tool/parameter deep-dive pipeline every **120s** (up to **420s** delay; ~**40 min** initial scope enablement) detecting OWASP Agentic Top 10 risks — **Tool misuse (`ASI02`)**, **Identity privilege abuse (`ASI03`)**, **Agentic cascading failures (`ASI08`)**, **Rogue agents (`ASI10`)**, and **Resource exhaustion** — across Agent Runtime, Cloud Run, GKE (`ADK >= 2.1.0`), and AWS/Azure (`ADK >= 2.12.0`).
-> - **Emergency Stop Latency:** Deleting a runtime (`client.runtimes.delete(..., force=True)`) or shifting `trafficSplitManual` takes **seconds to a few minutes** and immediately kills active streams. Revoking IAM / UAP `DENY` takes **2–7+ minutes** globally (`principalSet` updates take minutes to hours) and does **not** terminate open streams—always pair policy revocation with runtime deletion or traffic rerouting during live incidents.
+> [!NOTE]
+> **SecOps Audit Retention, SIEM Export & Anomaly Detection (Optional Lab 7):** For tamper-evident WORM audit log buckets (`--locked`, 365–3,650d retention), dual-attributed `is_agentic=true` SIEM Pub/Sub export sinks, and out-of-band **Agent Anomaly Detection (`AGENT_SESSION_ANOMALY` → Security Command Center)**, see [Lab 7 (Optional): Enterprise Security & Governance Hardening](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md).
 
 ---
 
-## Part 2: Offline Evaluation — Traces vs. Sessions, Split JSON Datasets & CI Gates (10 min)
+## Part 2: Offline Evaluation — Traces vs. Sessions, Split JSON Datasets & CI Gates (9 min)
 
 ### 2.1 Traces vs. Sessions & Choosing the Right Metrics
 
@@ -395,7 +344,7 @@ You can also evaluate historical production traffic without writing a dataset:
 
 ---
 
-## Part 3: Simulated User Evaluation — 2-Step Personas & Adversarial Stress Testing (7 min)
+## Part 3: Simulated User Evaluation — 2-Step Personas & Adversarial Stress Testing (6 min)
 
 Static single-turn datasets miss emergent failures that only appear when a developer replies with follow-up error tracebacks, changes requirements mid-conversation, or embeds adversarial instructions inside pasted logs.
 
@@ -670,9 +619,9 @@ gcloud monitoring policies create --policy-from-file="policy.yaml" --project="${
 
 ---
 
-## Part 6: Close the Optimization Flywheel & Canary Rollout (7 min)
+## Part 6: Close the Optimization Flywheel & Canary Rollout (6 min)
 
-Now feed your **Failure Clusters** (Part 4) and **Feedback Service** negative entries (Lab 4: `THUMBS_DOWN` with labels like `inaccurate`, `hallucination`, `tool_error`) into automated prompt/skill optimization.
+Now feed your **Failure Clusters** (Part 4) and **Feedback Service** negative entries (Lab 3: `THUMBS_DOWN` with labels like `inaccurate`, `hallucination`, `tool_error`) into automated prompt/skill optimization (spanning both root instructions and Lab 4 `SkillToolset` skills).
 
 ### 6.1 Choosing the Right Optimization Strategy (`google-adk>=2.0.0`)
 
@@ -770,9 +719,11 @@ Run the automated Lab 6 verification script from the repository root:
 
 ```bash
 ./scripts/verify_lab.sh 6
+# Or via Makefile:
+# make verify-lab LAB=6
 ```
 
-Confirm all five checkpoints pass before moving to [Lab 7](./07-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md):
+Confirm all five checkpoints pass before choosing your next track:
 - [ ] **Observability:** `GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=true`, `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`, and `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=EVENT_ONLY` are verified, and traces appear in the **Observability → Traces** tab.
 - [ ] **Offline Eval:** `starter/eval/run_offline_eval.py` parses cleanly and grades single-turn vs. multi-turn cases without mixing incompatible metrics.
 - [ ] **Simulated Eval & Loss Clustering:** `starter/eval/run_simulated_eval.py` completes 2-step scenario synthesis + multi-turn simulation and produces loss cluster diagnostics.
@@ -803,7 +754,6 @@ Confirm all five checkpoints pass before moving to [Lab 7](./07-ARCHITECTURE-AGE
 - **Example Store Overview:** https://docs.cloud.google.com/gemini-enterprise-agent-platform/optimize/example-store/overview
 - **Multimodal Prompt/Response GCS Collection:** https://docs.cloud.google.com/stackdriver/docs/instrumentation/collect-view-multimodal-prompts-responses
 - **Cloud Monitoring `online_evaluator/*` Metrics:** https://docs.cloud.google.com/monitoring/api/metrics_gcp_a_b
-- **Agent Anomaly Detection:** https://docs.cloud.google.com/gemini-enterprise-agent-platform/agent-anomalies-overview
 - **ADK Agent Optimization (`adk optimize`):** https://adk.dev/optimize/
 - **Python SDK Reference (`vertexai._genai.evals.Evals` / `generate_loss_clusters`):** https://docs.cloud.google.com/python/docs/reference/vertexai/latest/vertexai._genai.evals.Evals
 - **`google/agents-cli` Canonical Eval Dataset Schema (`dataset_schema.md`):** https://raw.githubusercontent.com/google/agents-cli/main/skills/google-agents-cli-eval/references/dataset_schema.md
@@ -811,4 +761,9 @@ Confirm all five checkpoints pass before moving to [Lab 7](./07-ARCHITECTURE-AGE
 
 ---
 
-**Next:** [Lab 7 — Architecture & Limitations Deep-Dive: Agent Runtime vs. Self-Hosted GKE](./07-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md)
+## Next Lab
+
+Choose your path based on your schedule and enterprise security goals:
+
+- **Full-Day / Security Track:** [Lab 7 (Optional): Enterprise Security & Governance Hardening](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md) — Add Agent Registry `ENABLED_BLOCKING` skill scanning, Semantic Governance NLC policies & Model Armor, SPIFFE `AGENT_IDENTITY` + Agent Gateway Terraform upgrade, multi-tenant Session/Memory IAM Conditions, CMEK/VPC-SC, and WORM/SIEM/SCC SecOps.
+- **Short on Time / Half-Day Fast-Track (Skip Lab 7 cleanly):** [Lab 8: Architecture & Limitations Deep-Dive — Agent Runtime vs. Self-Hosted GKE](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) — Skipping Optional Lab 7 leaves Labs 1–6 100% working and green!

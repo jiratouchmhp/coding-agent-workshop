@@ -408,7 +408,15 @@ resource "google_iam_projects_policy_binding" "egress_binding" {
 
 ### BYOC Agent Gateway Root CA Trust & Constraints
 
-- **Fetch Root CA:** `gcloud network-services agent-gateways describe GW_NAME --location=REGION --project=PROJECT_ID --format="value[delimiter=\n](agentGatewayCard.rootCertificates)"`
+Fetch the Agent Gateway Root CA certificates:
+
+```bash
+gcloud network-services agent-gateways describe GW_NAME \
+  --location=REGION \
+  --project=PROJECT_ID \
+  --format="json(agentGatewayCard.rootCertificates)" | jq -r '.agentGatewayCard.rootCertificates[]'
+```
+
 - **Bake into BYOC Container:** Write certs to `/usr/local/share/ca-certificates/agw-*.crt`, run `update-ca-certificates`, and set `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH`, `REQUESTS_CA_BUNDLE`, `SSL_CERT_FILE`, and `AGENT_GATEWAY_ROOT_CERT_302034098528` to `/etc/ssl/certs/ca-certificates.crt`.
 - **Constraints:** Cannot bind Agent Gateway to engines created before **April 29, 2026**; SCC Threat Detection is unavailable when Agent Gateway is attached; VPC-SC + Agent Gateway egress requires engines created after **September 8, 2026**, `AgentConnectivityTemplate` with `vpcEgress: ALL_TRAFFIC`, private DNS peering for `googleapis.com.` -> `restricted.googleapis.com` (`199.36.153.4/30`), and allowlisted regional/mTLS `aiplatform` endpoints in Agent Registry.
 

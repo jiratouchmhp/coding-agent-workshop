@@ -175,7 +175,7 @@ def run_warmpool_sdk_smoke_test(
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point for inspecting or exercising the GKE reference overlay."""
     parser = argparse.ArgumentParser(
-        description="GKE Agent Sandbox ADK integration example (Lab 7 comparison track)."
+        description="GKE Agent Sandbox ADK integration example (Lab 8 comparison track)."
     )
     parser.add_argument(
         "--mode",

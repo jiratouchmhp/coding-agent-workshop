@@ -1,4 +1,4 @@
-"""ADK OTel Telemetry Callbacks, Sandbox Cloud Logging & Feedback Client (solution — Lab 4).
+"""ADK OTel Telemetry Callbacks, Sandbox Cloud Logging & Feedback Client (solution — Lab 3).
 
 Addresses two critical Gemini Enterprise Agent Platform observability requirements:
 1. **Parent-Runtime Structured Cloud Logging for Sandbox Outputs:**

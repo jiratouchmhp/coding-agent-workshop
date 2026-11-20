@@ -1,6 +1,6 @@
-"""Managed Sessions integration & lifecycle CLI (starter track — Lab 4).
+"""Managed Sessions integration & lifecycle CLI (starter track — Lab 3).
 
-Complete the ``# TODO(lab-4)`` sections below to wire:
+Complete the ``# TODO(lab-3)`` sections below to wire:
 1. **ADK Integration (`build_adk_session_service`):**
    Return ``VertexAiSessionService`` when GCP project + ``agent_engine_id`` are
    configured, with fallback to ``InMemorySessionService`` for offline local runs.
@@ -138,13 +138,13 @@ def build_adk_session_service(
     Falls back cleanly to ``InMemorySessionService`` for offline local runs when
     ``project_id`` or ``agent_engine_id`` is omitted.
     """
-    # TODO(lab-4): Import ``InMemorySessionService`` and ``VertexAiSessionService`` from
+    # TODO(lab-3): Import ``InMemorySessionService`` and ``VertexAiSessionService`` from
     # ``google.adk.sessions``. When BOTH ``project_id`` and ``agent_engine_id`` are truthy,
     # set ``os.environ.setdefault("GOOGLE_GENAI_USE_ENTERPRISE", "TRUE")`` and return
     # ``VertexAiSessionService(project=project_id, location=location, agent_engine_id=agent_engine_id)``.
     # Otherwise return ``InMemorySessionService()``.
     _ = (project_id, location, agent_engine_id)
-    raise NotImplementedError("Complete TODO(lab-4): build_adk_session_service()")
+    raise NotImplementedError("Complete TODO(lab-3): build_adk_session_service()")
 
 
 def build_adk_session_service_from_settings(settings: Settings | None = None) -> Any:
@@ -259,28 +259,28 @@ class SessionLifecycleManager:
             raise ValueError(f"ttl_days must be positive, got {ttl_days}.")
 
         runtime_name = self._require_runtime_name()
-        # TODO(lab-4): Build ``config`` with ``{"expire_time": expire_time}`` or
+        # TODO(lab-3): Build ``config`` with ``{"expire_time": expire_time}`` or
         # ``{"ttl": f"{ttl_days * 24 * 60 * 60}s"}``, call ``self.client.sessions.create(
         # name=runtime_name, user_id=user_id, ...)`` (passing ``session_id`` when provided),
         # and return ``_extract_session_name(session_op)`` so both LRO (.response.name)
         # and direct Session (.name) SDK responses work cleanly.
         _ = (runtime_name, session_id, ttl_days, expire_time)
-        raise NotImplementedError("Complete TODO(lab-4): SessionLifecycleManager.create_session()")
+        raise NotImplementedError("Complete TODO(lab-3): SessionLifecycleManager.create_session()")
 
     def get_session(self, session_name: str, user_id: str) -> Any:
         """Fetch a single Managed Session resource."""
         validate_session_identifiers(user_id)
-        # TODO(lab-4): Return ``self.client.sessions.get(name=session_name, user_id=user_id)``.
+        # TODO(lab-3): Return ``self.client.sessions.get(name=session_name, user_id=user_id)``.
         _ = (session_name, user_id)
-        raise NotImplementedError("Complete TODO(lab-4): SessionLifecycleManager.get_session()")
+        raise NotImplementedError("Complete TODO(lab-3): SessionLifecycleManager.get_session()")
 
     def list_sessions(self, user_id: str | None = None) -> list[Any]:
         """List Managed Sessions under the parent runtime (default order: ``create_time desc``)."""
         runtime_name = self._require_runtime_name()
-        # TODO(lab-4): Call ``self.client.sessions.list(name=runtime_name, config={"filter": f"user_id={user_id}"})``
+        # TODO(lab-3): Call ``self.client.sessions.list(name=runtime_name, config={"filter": f"user_id={user_id}"})``
         # when ``user_id`` is provided (else omit ``config``) and return ``list(...)``.
         _ = (runtime_name, user_id)
-        raise NotImplementedError("Complete TODO(lab-4): SessionLifecycleManager.list_sessions()")
+        raise NotImplementedError("Complete TODO(lab-3): SessionLifecycleManager.list_sessions()")
 
     def append_event(
         self,
@@ -300,12 +300,12 @@ class SessionLifecycleManager:
             raise ValueError("Provide either text or raw_event, not both.")
 
         event_ts = timestamp or datetime.datetime.now(tz=datetime.timezone.utc)
-        # TODO(lab-4): Build ``config={"raw_event": raw_event}`` or
+        # TODO(lab-3): Build ``config={"raw_event": raw_event}`` or
         # ``config={"content": {"role": role, "parts": [{"text": text}]}}`` and return
         # ``self.client.sessions.events.append(name=session_name, author=author,
         # invocation_id=invocation_id, timestamp=event_ts, config=config)``.
         _ = (session_name, author, invocation_id, text, role, raw_event, event_ts)
-        raise NotImplementedError("Complete TODO(lab-4): SessionLifecycleManager.append_event()")
+        raise NotImplementedError("Complete TODO(lab-3): SessionLifecycleManager.append_event()")
 
     def append_text_event(
         self,
@@ -341,15 +341,15 @@ class SessionLifecycleManager:
 
     def list_events(self, session_name: str) -> list[Any]:
         """List all persisted events in a Managed Session."""
-        # TODO(lab-4): Return ``list(self.client.sessions.events.list(name=session_name))``.
+        # TODO(lab-3): Return ``list(self.client.sessions.events.list(name=session_name))``.
         _ = session_name
-        raise NotImplementedError("Complete TODO(lab-4): SessionLifecycleManager.list_events()")
+        raise NotImplementedError("Complete TODO(lab-3): SessionLifecycleManager.list_events()")
 
     def delete_session(self, session_name: str) -> None:
         """Delete a Managed Session by full resource name."""
-        # TODO(lab-4): Call ``self.client.sessions.delete(name=session_name)``.
+        # TODO(lab-3): Call ``self.client.sessions.delete(name=session_name)``.
         _ = session_name
-        raise NotImplementedError("Complete TODO(lab-4): SessionLifecycleManager.delete_session()")
+        raise NotImplementedError("Complete TODO(lab-3): SessionLifecycleManager.delete_session()")
 
     def run_demo(
         self,

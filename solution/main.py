@@ -1,4 +1,4 @@
-"""Agent Runtime HTTP Contract FastAPI Server (Solution Track — Lab 3).
+"""Agent Runtime HTTP Contract FastAPI Server (Solution Track — Lab 5).
 
 Implements the verified Gemini Enterprise Agent Platform BYOC runtime contract
 (``scale/runtime/runtime-contract``) on ``0.0.0.0:8080``:

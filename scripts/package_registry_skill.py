@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Google Cloud Skill Registry ZIP packager and payload validator (Lab 5).
+"""Google Cloud Skill Registry ZIP packager and payload validator (Lab 4).
 
 Builds a deterministic `.zip` archive from a skill directory and validates ALL
 official Google Cloud Skill Registry payload validation rules from:

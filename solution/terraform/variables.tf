@@ -67,3 +67,21 @@ variable "api_key_value" {
   sensitive   = true
   description = "Secret payload stored in Secret Manager and injected via deployment_spec.secret_env (use a non-sensitive workshop placeholder; never commit real secrets)"
 }
+
+variable "enable_memory_bank" {
+  type        = bool
+  default     = false
+  description = "Enable Lab 3 Memory Bank tools and after_agent_callback inside the deployed Agent Runtime (ENABLE_MEMORY_BANK)"
+}
+
+variable "enable_skill_registry" {
+  type        = bool
+  default     = false
+  description = "Enable Lab 4 Skill Registry SkillToolset integration inside the deployed Agent Runtime (ENABLE_SKILL_REGISTRY)"
+}
+
+variable "skill_registry_location" {
+  type        = string
+  default     = "us-central1"
+  description = "Lab 4 Skill Registry / Agent Registry region injected as SKILL_REGISTRY_LOCATION and AGENT_REGISTRY_LOCATION (supported: us-central1, europe-west4, us-east5)"
+}

@@ -1,4 +1,4 @@
-"""Managed Sessions integration & lifecycle CLI (complete reference solution — Lab 4).
+"""Managed Sessions integration & lifecycle CLI (complete reference solution — Lab 3).
 
 Provides both verified integration surfaces for Gemini Enterprise Agent Platform
 Managed Sessions:

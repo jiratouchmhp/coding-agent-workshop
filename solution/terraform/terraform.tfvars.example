@@ -5,14 +5,17 @@
 #
 # Never commit `terraform.tfvars` or real secrets to version control.
 
-project_id            = "your-gcp-project-id"
-project_number        = "123456789012"
-location              = "us-central1"
-repository_name       = "coding-agent-repo"
-display_name          = "coding_agent_byoc_tf"
-agent_image_uri       = "us-central1-docker.pkg.dev/your-gcp-project-id/coding-agent-repo/coding-agent:v1"
-sandbox_image_uri     = "us-central1-docker.pkg.dev/your-gcp-project-id/coding-agent-repo/coding-sandbox:v1"
-sandbox_template_name = ""
-sandbox_mode          = "" # Empty auto-selects "byoc" when sandbox_template_name is set, else "shell"
-model_name            = "gemini-2.5-flash"
-api_key_value         = "replace-with-workshop-placeholder-value"
+project_id              = "your-gcp-project-id"
+project_number          = "123456789012"
+location                = "us-central1"
+repository_name         = "coding-agent-repo"
+display_name            = "coding_agent_byoc_tf"
+agent_image_uri         = "us-central1-docker.pkg.dev/your-gcp-project-id/coding-agent-repo/coding-agent:v1"
+sandbox_image_uri       = "us-central1-docker.pkg.dev/your-gcp-project-id/coding-agent-repo/coding-sandbox:v1"
+sandbox_template_name   = ""
+sandbox_mode            = "" # Empty auto-selects "byoc" when sandbox_template_name is set, else "shell"
+model_name              = "gemini-2.5-flash"
+api_key_value           = "replace-with-workshop-placeholder-value"
+enable_memory_bank      = false
+enable_skill_registry   = false
+skill_registry_location = "us-central1"

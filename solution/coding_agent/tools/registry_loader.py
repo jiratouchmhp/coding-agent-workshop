@@ -1,6 +1,6 @@
-"""Skill Registry & Agent Registry ADK integration and publisher (solution — Lab 5).
+"""Skill Registry & Agent Registry ADK integration and publisher (solution — Lab 4).
 
-Covers all three Lab 5 registry workflows:
+Covers all three Lab 4 registry workflows:
 1. **Dynamic ADK Skill Consumption (`build_skill_registry_toolset`):**
    Wires ``GCPSkillRegistry`` + ``SkillToolset`` with 3-level progressive disclosure
    and automatic fallback to locally bundled skills when executing in an air-gapped

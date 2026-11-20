@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Enterprise Coding Agent Workshop — Automated Lab Checkpoint Verifier (Labs 1-7)
+# Enterprise Coding Agent Workshop — Automated Lab Checkpoint Verifier (Labs 1-8)
 # =============================================================================
 # Usage:
-#   ./scripts/verify_lab.sh <1|2|3|4|5|6|7|all> [--track starter|solution]
+#   ./scripts/verify_lab.sh <1|2|3|4|5|6|7|8|all> [--track starter|solution]
 #   TRACK=solution ./scripts/verify_lab.sh all
 #   TRACK=solution ./scripts/verify_lab.sh 7
+#   TRACK=solution ./scripts/verify_lab.sh 8
 # =============================================================================
 
 set -euo pipefail
@@ -25,16 +26,17 @@ TARGET=""
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/verify_lab.sh <1|2|3|4|5|6|7|all> [--track starter|solution]
+Usage: ./scripts/verify_lab.sh <1|2|3|4|5|6|7|8|all> [--track starter|solution]
 
-Verify workshop checkpoints locally for Labs 1-7:
+Verify workshop checkpoints locally for Labs 1-8:
   1    Lab 1: Setup, agents-cli-manifest.yaml, .agents/skills/ & ADK LlmAgent + LocalEnvironment
   2    Lab 2: Non-root BYOC Sandbox Dockerfile, Lifecycle & BaseEnvironment execution
-  3    Lab 3: Agent Runtime BYOC Dockerfile/main.py/requirements.txt & Terraform IaC + IAM
-  4    Lab 4: Managed Sessions, Memory Bank, Prompt-Injection Sanitizer & Telemetry/Feedback
-  5    Lab 5: Skill Registry 16-check packaging, GCPSkillRegistry & AgentRegistry loader
+  3    Lab 3: Managed Sessions, Memory Bank, Prompt-Injection Sanitizer & Telemetry/Feedback
+  4    Lab 4: Skill Registry 16-check packaging, GCPSkillRegistry & AgentRegistry loader
+  5    Lab 5: Agent Runtime BYOC Dockerfile/main.py/requirements.txt & Terraform IaC + IAM
   6    Lab 6: Split JSON Eval Datasets, Offline/Simulated Eval, Online Monitor, Alerts & Optimize
-  7    Lab 7 (Optional): Self-Hosted GKE Agent Sandbox overlay (RBAC, VAP hardening, WarmPool)
+  7    Lab 7 (Optional): Enterprise Security & Governance Hardening checks
+  8    Lab 8: Self-Hosted GKE Agent Sandbox overlay (RBAC, VAP hardening, WarmPool)
   all  Run checkpoints for core Labs 1-6
 
 Options:
@@ -45,7 +47,7 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    1|2|3|4|5|6|7|all)
+    1|2|3|4|5|6|7|8|all)
       TARGET="$1"
       shift
       ;;
@@ -206,7 +208,7 @@ verify_lab_1() {
   check_file_exists "${TRACK}/services.yaml"
   check_file_exists "${TRACK}/services.py"
 
-  check_pattern ".env.example" "^AGENT_ARCHITECTURE=simple$" "Default AGENT_ARCHITECTURE=simple preserves Labs 2-7 compatibility"
+  check_pattern ".env.example" "^AGENT_ARCHITECTURE=simple$" "Default AGENT_ARCHITECTURE=simple preserves Labs 2-8 compatibility"
   check_pattern ".env.example" "^MAX_FIX_ROUNDS=3$" ".env.example sets MAX_FIX_ROUNDS=3"
   check_pattern ".env.example" "^ENABLE_HITL_APPROVAL=false$" ".env.example sets ENABLE_HITL_APPROVAL=false"
 
@@ -283,6 +285,10 @@ s = mod.Settings()
 assert s.agent_architecture == "simple", f"Expected default simple, got {s.agent_architecture!r}"
 assert s.max_fix_rounds == 3, f"Expected default max_fix_rounds=3, got {s.max_fix_rounds!r}"
 assert s.enable_hitl_approval is False, f"Expected default enable_hitl_approval=False, got {s.enable_hitl_approval!r}"
+assert s.skill_registry_location == "us-central1", f"Expected default skill_registry_location='us-central1', got {s.skill_registry_location!r}"
+assert s.agent_registry_location == "us-central1", f"Expected default agent_registry_location='us-central1', got {s.agent_registry_location!r}"
+assert mod.Settings(skill_registry_location="europe-west4").agent_registry_location == "europe-west4"
+assert mod.Settings(skill_registry_location="europe-west4", agent_registry_location="global").agent_registry_location == "global"
 
 for arch in ("simple", "collaborative", "graph", "dynamic"):
     assert mod.Settings(agent_architecture=arch).agent_architecture == arch
@@ -583,14 +589,78 @@ PYEOF
 }
 
 # -----------------------------------------------------------------------------
-# Lab 3: Deploy Agent Runtime with Terraform
+# Lab 3: Managed Sessions, Memory Bank, Feedback & Telemetry
 # -----------------------------------------------------------------------------
 verify_lab_3() {
-  section "Lab 3 Verification (${TRACK}/ — Agent Runtime & Terraform IaC)"
+  section "Lab 3 Verification (${TRACK}/ — Sessions, Memory Bank, Feedback & Telemetry)"
+  local sess="${TRACK}/coding_agent/memory/session_manager.py"
+  local mem="${TRACK}/coding_agent/memory/memory_bank_manager.py"
+  local cb="${TRACK}/coding_agent/callbacks/telemetry_and_feedback.py"
+  local ag="${TRACK}/coding_agent/agent.py"
+
+  check_file_exists "${sess}"
+  check_file_exists "${mem}"
+  check_file_exists "${cb}"
+
+  check_py_compile "${sess}"
+  check_py_compile "${mem}"
+  check_py_compile "${cb}"
+
+  check_no_todo_markers "${sess}" "lab-3"
+  check_no_todo_markers "${mem}" "lab-3"
+  check_no_todo_markers "${cb}" "lab-3"
+  check_no_todo_markers "${ag}" "lab-3"
+
+  check_pattern "${sess}" "VertexAiSessionService" "Wires ADK VertexAiSessionService"
+  check_pattern "${mem}" "VertexAiMemoryBankService" "Wires ADK VertexAiMemoryBankService"
+  check_pattern "${mem}" "sanitize_for_memory_ingestion" "Includes prompt-injection sanitizer before Memory Bank ingestion"
+  check_pattern "${cb}" "aiplatform\.googleapis\.com/ReasoningEngine" "Logs parent runtime sandbox output to ReasoningEngine resource"
+  check_pattern "${cb}" "feedback_entries" "Implements Feedback Service client"
+}
+
+# -----------------------------------------------------------------------------
+# Lab 4: Skill Registry & Agent Registry Discovery
+# -----------------------------------------------------------------------------
+verify_lab_4() {
+  section "Lab 4 Verification (${TRACK}/ — Skill Registry & Agent Registry Discovery)"
+  local reg="${TRACK}/coding_agent/tools/registry_loader.py"
+  local ag="${TRACK}/coding_agent/agent.py"
+  local skill_dir="${TRACK}/skills_to_register/secure-code-review"
+
+  check_file_exists "${reg}"
+  check_file_exists "${skill_dir}/SKILL.md"
+  check_file_exists "scripts/package_registry_skill.py"
+
+  check_py_compile "${reg}"
+  check_no_todo_markers "${reg}" "lab-4"
+  check_no_todo_markers "${ag}" "lab-4"
+
+  check_pattern "${reg}" "GCPSkillRegistry" "Integrates ADK GCPSkillRegistry"
+  check_pattern "${reg}" "SkillToolset" "Integrates ADK SkillToolset"
+  check_pattern "${reg}" "AgentRegistry" "Integrates ADK AgentRegistry"
+  check_pattern "${reg}" "GcpAuthProvider" "Registers Agent Identity GcpAuthProvider"
+  check_pattern "${reg}" "X-Goog-User-Project" "Implements GoogleApiAuth with X-Goog-User-Project header"
+
+  if [[ -d "${skill_dir}" ]]; then
+    if python3 scripts/package_registry_skill.py "${skill_dir}" --dry-run >/dev/null 2>&1; then
+      pass "${skill_dir} passed all 16 atomic Skill Registry validation checks (--dry-run)"
+    else
+      fail "${skill_dir} failed scripts/package_registry_skill.py --dry-run"
+    fi
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# Lab 5: Deploy & Manage Complete Coding Agent on Agent Runtime + Terraform IaC
+# -----------------------------------------------------------------------------
+verify_lab_5() {
+  section "Lab 5 Verification (${TRACK}/ — Agent Runtime & Terraform IaC)"
   local tf_dir="${TRACK}/terraform"
   local main_tf="${tf_dir}/main.tf"
+  local vars_tf="${tf_dir}/variables.tf"
   local outputs_tf="${tf_dir}/outputs.tf"
   local versions_tf="${tf_dir}/versions.tf"
+  local tfvars_example="${tf_dir}/terraform.tfvars.example"
   local runtime_df="${TRACK}/Dockerfile"
   local runtime_main="${TRACK}/main.py"
   local runtime_reqs="${TRACK}/requirements.txt"
@@ -601,35 +671,54 @@ verify_lab_3() {
   check_file_exists "${runtime_reqs}"
   check_file_exists "${manifest}"
   check_file_exists "${versions_tf}"
-  check_file_exists "${tf_dir}/variables.tf"
+  check_file_exists "${vars_tf}"
   check_file_exists "${main_tf}"
   check_file_exists "${outputs_tf}"
-  check_file_exists "${tf_dir}/terraform.tfvars.example"
+  check_file_exists "${tfvars_example}"
 
   if [[ -f "${runtime_df}" ]]; then
     check_dockerfile_non_root "${runtime_df}" "Agent Runtime BYOC Dockerfile"
     check_pattern "${runtime_df}" "^EXPOSE[[:space:]]+8080" "Agent Runtime Dockerfile exposes port 8080"
     check_pattern "${runtime_df}" "uvicorn" "Agent Runtime Dockerfile launches uvicorn"
+    check_pattern "${runtime_df}" '^COPY[[:space:]]+.*skills_to_register/[[:space:]]+\./skills_to_register/' "Agent Runtime Dockerfile packages skills_to_register/ for Lab 4 local fallback"
+    check_pattern "${runtime_df}" 'Dockerfile[[:space:]]+main\.py[[:space:]]+requirements\.txt[[:space:]]+coding_agent/[[:space:]]+skills_to_register/' "Agent Runtime Dockerfile source_code_spec tar example includes skills_to_register/"
   fi
 
   check_py_compile "${runtime_main}"
-  check_no_todo_markers "${runtime_main}" "lab-3"
+  check_no_todo_markers "${runtime_main}" "lab-5"
   check_pattern "${runtime_main}" "/api/reasoning_engine" "Agent Runtime server defines POST /api/reasoning_engine"
   check_pattern "${runtime_main}" "/api/stream_reasoning_engine" "Agent Runtime server defines POST /api/stream_reasoning_engine"
 
-  check_no_todo_markers "${main_tf}" "lab-3"
+  check_no_todo_markers "${main_tf}" "lab-5"
 
   check_pattern "${versions_tf}" 'version[[:space:]]*=[[:space:]]*">= 6\.0\.0"' "Terraform provider floor >= 6.0.0 for container_spec support"
+  check_pattern "${vars_tf}" 'variable "enable_memory_bank"' "Declares optional enable_memory_bank variable with safe default"
+  check_pattern "${vars_tf}" 'variable "enable_skill_registry"' "Declares optional enable_skill_registry variable with safe default"
+  check_pattern "${vars_tf}" 'variable "skill_registry_location"' "Declares optional skill_registry_location variable with safe default"
+  check_pattern "${tfvars_example}" '^enable_memory_bank[[:space:]]*=[[:space:]]*false' "terraform.tfvars.example declares enable_memory_bank = false"
+  check_pattern "${tfvars_example}" '^enable_skill_registry[[:space:]]*=[[:space:]]*false' "terraform.tfvars.example declares enable_skill_registry = false"
+  check_pattern "${tfvars_example}" '^skill_registry_location[[:space:]]*=[[:space:]]*"us-central1"' "terraform.tfvars.example declares skill_registry_location"
   check_pattern "${main_tf}" 'resource "google_vertex_ai_reasoning_engine"' "Declares google_vertex_ai_reasoning_engine"
   check_pattern "${main_tf}" "region[[:space:]]*=[[:space:]]*var\.location" "Uses verified Terraform attribute 'region = var.location'"
+  check_pattern "${main_tf}" 'Dockerfile[[:space:]]+main\.py[[:space:]]+requirements\.txt[[:space:]]+coding_agent/[[:space:]]+skills_to_register/' "Terraform source_code_spec tar example includes skills_to_register/"
   check_pattern "${main_tf}" "SANDBOX_MODE" "Injects SANDBOX_MODE env var in Agent Runtime deployment_spec"
+  check_pattern "${main_tf}" "roles/aiplatform\.memoryUser" "Grants roles/aiplatform.memoryUser for Lab 3 Memory Bank access"
+  check_pattern "${main_tf}" 'resource "google_project_iam_member" "runtime_sa_agentregistry_viewer"' "Declares conditional runtime_sa_agentregistry_viewer IAM binding for Lab 4 Skill Registry"
+  check_pattern "${main_tf}" 'roles/agentregistry\.viewer' "Grants conditional roles/agentregistry.viewer when enable_skill_registry is true"
+  check_pattern "${main_tf}" 'google_project_iam_member\.runtime_sa_agentregistry_viewer' "Wires runtime_sa_agentregistry_viewer into reasoning engine depends_on"
+  check_pattern "${main_tf}" "ENABLE_MEMORY_BANK" "Injects ENABLE_MEMORY_BANK env var in Agent Runtime deployment_spec"
+  check_pattern "${main_tf}" "ENABLE_SKILL_REGISTRY" "Injects ENABLE_SKILL_REGISTRY env var in Agent Runtime deployment_spec"
+  check_pattern "${main_tf}" "SKILL_REGISTRY_LOCATION" "Injects SKILL_REGISTRY_LOCATION env var in Agent Runtime deployment_spec"
+  check_pattern "${main_tf}" "AGENT_REGISTRY_LOCATION" "Injects AGENT_REGISTRY_LOCATION env var in Agent Runtime deployment_spec"
   check_pattern "${main_tf}" "roles/telemetry\.tracesWriter" "Grants roles/telemetry.tracesWriter for OTel telemetry.googleapis.com export"
   check_pattern "${main_tf}" "roles/iam\.serviceAccountTokenCreator" "Grants self serviceAccountTokenCreator for BYOC generate_access_token()"
+  check_pattern "${main_tf}" "gcp-sa-aiplatform\.iam\.gserviceaccount\.com" "Grants Secret Manager access to Agent Platform SA (gcp-sa-aiplatform)"
   check_pattern "${main_tf}" "gcp-sa-aiplatform-re\.iam\.gserviceaccount\.com" "Grants Artifact Registry access to Agent Runtime SA (gcp-sa-aiplatform-re)"
   check_pattern "${main_tf}" "gcp-sa-vertex-sandbox\.iam\.gserviceaccount\.com" "Grants Artifact Registry access to Agent Sandbox SA (gcp-sa-vertex-sandbox)"
   check_pattern "${main_tf}" "depends_on[[:space:]]*=" "Orders IAM bindings with depends_on to prevent IMAGE_PULL_BACKOFF"
   check_pattern "${outputs_tf}" 'output "reasoning_engine_resource_name"' "Exports canonical reasoning_engine_resource_name"
   check_pattern "${outputs_tf}" 'output "reasoning_engine_id"' "Exports short numeric reasoning_engine_id"
+  check_pattern "${outputs_tf}" "reverse\(split\(" "Extracts trailing numeric ID safely with reverse(split(...))[0]"
 
   # Reject Terraform's invalid negative-index `element(..., -1)` bug in outputs.tf
   if [[ -f "${outputs_tf}" ]]; then
@@ -663,68 +752,6 @@ PYEOF
     fi
   else
     warn "terraform binary not found on PATH; skipping terraform fmt -check."
-  fi
-}
-
-# -----------------------------------------------------------------------------
-# Lab 4: Managed Sessions, Memory Bank, Feedback & Telemetry
-# -----------------------------------------------------------------------------
-verify_lab_4() {
-  section "Lab 4 Verification (${TRACK}/ — Sessions, Memory Bank, Feedback & Telemetry)"
-  local sess="${TRACK}/coding_agent/memory/session_manager.py"
-  local mem="${TRACK}/coding_agent/memory/memory_bank_manager.py"
-  local cb="${TRACK}/coding_agent/callbacks/telemetry_and_feedback.py"
-  local ag="${TRACK}/coding_agent/agent.py"
-
-  check_file_exists "${sess}"
-  check_file_exists "${mem}"
-  check_file_exists "${cb}"
-
-  check_py_compile "${sess}"
-  check_py_compile "${mem}"
-  check_py_compile "${cb}"
-
-  check_no_todo_markers "${sess}" "lab-4"
-  check_no_todo_markers "${mem}" "lab-4"
-  check_no_todo_markers "${cb}" "lab-4"
-  check_no_todo_markers "${ag}" "lab-4"
-
-  check_pattern "${sess}" "VertexAiSessionService" "Wires ADK VertexAiSessionService"
-  check_pattern "${mem}" "VertexAiMemoryBankService" "Wires ADK VertexAiMemoryBankService"
-  check_pattern "${mem}" "sanitize_for_memory_ingestion" "Includes prompt-injection sanitizer before Memory Bank ingestion"
-  check_pattern "${cb}" "aiplatform\.googleapis\.com/ReasoningEngine" "Logs parent runtime sandbox output to ReasoningEngine resource"
-  check_pattern "${cb}" "feedback_entries" "Implements Feedback Service client"
-}
-
-# -----------------------------------------------------------------------------
-# Lab 5: Skill Registry, Agent Registry & Governance
-# -----------------------------------------------------------------------------
-verify_lab_5() {
-  section "Lab 5 Verification (${TRACK}/ — Skill Registry, Agent Registry & Governance)"
-  local reg="${TRACK}/coding_agent/tools/registry_loader.py"
-  local ag="${TRACK}/coding_agent/agent.py"
-  local skill_dir="${TRACK}/skills_to_register/secure-code-review"
-
-  check_file_exists "${reg}"
-  check_file_exists "${skill_dir}/SKILL.md"
-  check_file_exists "scripts/package_registry_skill.py"
-
-  check_py_compile "${reg}"
-  check_no_todo_markers "${reg}" "lab-5"
-  check_no_todo_markers "${ag}" "lab-5"
-
-  check_pattern "${reg}" "GCPSkillRegistry" "Integrates ADK GCPSkillRegistry"
-  check_pattern "${reg}" "SkillToolset" "Integrates ADK SkillToolset"
-  check_pattern "${reg}" "AgentRegistry" "Integrates ADK AgentRegistry"
-  check_pattern "${reg}" "GcpAuthProvider" "Registers Agent Identity GcpAuthProvider"
-  check_pattern "${reg}" "X-Goog-User-Project" "Implements GoogleApiAuth with X-Goog-User-Project header"
-
-  if [[ -d "${skill_dir}" ]]; then
-    if python3 scripts/package_registry_skill.py "${skill_dir}" --dry-run >/dev/null 2>&1; then
-      pass "${skill_dir} passed all 16 atomic Skill Registry validation checks (--dry-run)"
-    else
-      fail "${skill_dir} failed scripts/package_registry_skill.py --dry-run"
-    fi
   fi
 }
 
@@ -979,10 +1006,46 @@ PYEOF
 }
 
 # -----------------------------------------------------------------------------
-# Lab 7 (Optional): Self-Hosted GKE Agent Sandbox Reference Overlay
+# Lab 7 (Optional): Enterprise Security & Governance Hardening
 # -----------------------------------------------------------------------------
 verify_lab_7() {
-  section "Lab 7 Verification (${TRACK}/ — Optional Self-Hosted GKE Agent Sandbox Overlay)"
+  section "Lab 7 Verification (${TRACK}/ — Optional Enterprise Security & Governance Hardening)"
+  local lab7_doc="workshop/07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md"
+  local runtime_df="${TRACK}/Dockerfile"
+  local sandbox_df="${TRACK}/sandbox_image/Dockerfile"
+  local mem="${TRACK}/coding_agent/memory/memory_bank_manager.py"
+  local reg="${TRACK}/coding_agent/tools/registry_loader.py"
+  local main_tf="${TRACK}/terraform/main.tf"
+
+  check_file_exists "${lab7_doc}"
+  check_pattern "${lab7_doc}" "ENABLED_BLOCKING" "Optional Lab 7 doc covers Agent Registry ENABLED_BLOCKING scanning"
+  check_pattern "${lab7_doc}" "AGENT_IDENTITY" "Optional Lab 7 doc covers SPIFFE AGENT_IDENTITY upgrade path"
+  check_pattern "${lab7_doc}" "agent_gateway_config" "Optional Lab 7 doc covers Terraform agent_gateway_config binding"
+  check_pattern "${lab7_doc}" "modelarmor\.calloutUser" "Optional Lab 7 doc covers Model Armor roles/modelarmor.calloutUser"
+  check_pattern "${lab7_doc}" "agent-audit-worm" "Optional Lab 7 doc covers WORM audit bucket agent-audit-worm"
+
+  check_file_exists "${runtime_df}"
+  check_file_exists "${sandbox_df}"
+  check_dockerfile_non_root "${runtime_df}" "Agent Runtime BYOC Dockerfile"
+  check_dockerfile_non_root "${sandbox_df}" "BYOC Sandbox Dockerfile"
+
+  check_file_exists "${mem}"
+  check_pattern "${mem}" "sanitize_for_memory_ingestion" "Memory Bank includes sanitize_for_memory_ingestion prompt-injection defense"
+
+  check_file_exists "${reg}"
+  check_pattern "${reg}" "GcpAuthProvider" "Agent Registry loader registers GcpAuthProvider"
+  check_pattern "${reg}" "X-Goog-User-Project" "Agent Registry loader sends X-Goog-User-Project header"
+
+  check_file_exists "${main_tf}"
+  check_pattern "${main_tf}" "AGENT_IDENTITY" "Terraform main.tf documents SPIFFE AGENT_IDENTITY upgrade path"
+  check_pattern "${main_tf}" "agent_gateway_config" "Terraform main.tf documents agent_gateway_config hardening reference"
+}
+
+# -----------------------------------------------------------------------------
+# Lab 8: Self-Hosted GKE Agent Sandbox Reference Overlay & Architecture Capstone
+# -----------------------------------------------------------------------------
+verify_lab_8() {
+  section "Lab 8 Verification (${TRACK}/ — GKE Reference & Architecture Capstone)"
   local gke_dir="${TRACK}/gke_reference"
   local rbac="${gke_dir}/rbac.yaml"
   local tpl="${gke_dir}/sandbox_template.yaml"
@@ -996,10 +1059,10 @@ verify_lab_7() {
 
   check_py_compile "${py}"
 
-  check_no_todo_markers "${rbac}" "lab-7"
-  check_no_todo_markers "${tpl}" "lab-7"
-  check_no_todo_markers "${pool}" "lab-7"
-  check_no_todo_markers "${py}" "lab-7"
+  check_no_todo_markers "${rbac}" "lab-8"
+  check_no_todo_markers "${tpl}" "lab-8"
+  check_no_todo_markers "${pool}" "lab-8"
+  check_no_todo_markers "${py}" "lab-8"
 
   if python3 - "${rbac}" "${tpl}" "${pool}" 2>/dev/null <<'PYEOF'
 import sys
@@ -1069,6 +1132,7 @@ case "${TARGET}" in
   5) verify_lab_5 ;;
   6) verify_lab_6 ;;
   7) verify_lab_7 ;;
+  8) verify_lab_8 ;;
   all)
     verify_lab_1
     verify_lab_2

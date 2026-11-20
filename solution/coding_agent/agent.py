@@ -7,14 +7,14 @@ Supports all four execution modes via ``SANDBOX_MODE``:
 - ``code_execution`` (Lab 2): ADK ``AgentEngineSandboxCodeExecutor``.
 
 And four ADK 2.0 architectures via ``AGENT_ARCHITECTURE`` (default: ``simple``):
-- ``simple`` (default; 100% compatible with Labs 2-7): Single ``LlmAgent``.
+- ``simple`` (default; 100% compatible with Labs 2-8): Single ``LlmAgent``.
 - ``collaborative``: ADK 2.0 Coordinator + ``single_turn``/``task`` subagents + ``GlobalInstructionPlugin``.
 - ``graph``: ADK 2.0 declarative ``Workflow`` graph with parallel checks, ``JoinNode``, and HITL.
 - ``dynamic``: ADK 2.0 programmatic ``@node(rerun_on_resume=True)`` workflow orchestrator.
 
 Also wires:
-- Lab 4: OTel + parent-runtime Cloud Logging callbacks and optional Memory Bank hooks.
-- Lab 5: ``SkillToolset(registry=GCPSkillRegistry(...))`` with offline sandbox fallback.
+- Lab 3: OTel + parent-runtime Cloud Logging callbacks and optional Memory Bank hooks.
+- Lab 4: ``SkillToolset(registry=GCPSkillRegistry(...))`` with offline sandbox fallback.
 """
 
 from __future__ import annotations
@@ -106,7 +106,7 @@ def _build_optional_skill_toolset(
     settings: Settings,
     environment: BaseEnvironment | None,
 ) -> Any | None:
-    """Build ``SkillToolset(registry=GCPSkillRegistry(...))`` when enabled (Lab 5).
+    """Build ``SkillToolset(registry=GCPSkillRegistry(...))`` when enabled (Lab 4).
 
     NOTE: ``SkillToolset`` accepts ``environment=`` OR ``code_executor=``, NEVER both.
     """
@@ -117,13 +117,16 @@ def _build_optional_skill_toolset(
         Path(__file__).resolve().parents[1] / "skills_to_register" / "secure-code-review"
     )
     local_dirs = [local_skill_dir] if local_skill_dir.exists() else []
+    registry_location = (
+        settings.agent_registry_location or settings.skill_registry_location or None
+    )
 
     try:
         from coding_agent.tools.registry_loader import build_skill_registry_toolset
 
         return build_skill_registry_toolset(
             project_id=settings.google_cloud_project or None,
-            location=settings.agent_registry_location or None,
+            location=registry_location,
             local_skill_dirs=local_dirs,
             environment=environment,
             enable_remote_registry=bool(settings.google_cloud_project),
@@ -146,13 +149,13 @@ def _build_optional_skill_toolset(
 
     local_skills = [load_skill_from_dir(d) for d in local_dirs]
     registry = None
-    if settings.google_cloud_project and settings.agent_registry_location:
+    if settings.google_cloud_project and registry_location:
         try:
             from google.adk.integrations.skill_registry import GCPSkillRegistry
 
             registry = GCPSkillRegistry(
                 project_id=settings.google_cloud_project,
-                location=settings.agent_registry_location,
+                location=registry_location,
             )
         except Exception as exc:
             logger.warning(
@@ -180,7 +183,7 @@ def _fallback_before_tool_callback(
     args: dict[str, Any],
     tool_context: Any,
 ) -> None:
-    """Lightweight OTel start-time marker used when Lab 4 callback module is absent."""
+    """Lightweight OTel start-time marker used when Lab 3 callback module is absent."""
     del args
     state = getattr(tool_context, "state", None)
     if state is not None:
@@ -213,7 +216,7 @@ def _fallback_after_tool_callback(
 
 
 def _build_optional_callbacks(settings: Settings) -> dict[str, Any]:
-    """Wire Lab 4 telemetry callbacks and optional Memory Bank tools/callbacks."""
+    """Wire Lab 3 telemetry callbacks and optional Memory Bank tools/callbacks."""
     callbacks: dict[str, Any] = {
         "before_tool_callback": None,
         "after_tool_callback": None,
@@ -251,7 +254,7 @@ def _build_optional_callbacks(settings: Settings) -> dict[str, Any]:
 def _assemble_runtime_components(
     cfg: Settings,
 ) -> tuple[list[Any], dict[str, Any], Any | None]:
-    """Assemble workspace tools, optional Lab 5 skills, Lab 4 callbacks, and code executor."""
+    """Assemble workspace tools, optional Lab 4 skills, Lab 3 callbacks, and code executor."""
     tools: list[Any] = []
     active_environment: BaseEnvironment | None = None
     code_executor: Any | None = None
@@ -316,7 +319,7 @@ def build_coding_agent(settings: Settings | None = None) -> LlmAgent:
 def build_root_agent(settings: Settings | None = None) -> Any:
     """Dispatch root agent construction based on ``AGENT_ARCHITECTURE``.
 
-    - ``simple`` (default): Single ``LlmAgent`` via ``build_coding_agent()`` (Labs 1-7).
+    - ``simple`` (default): Single ``LlmAgent`` via ``build_coding_agent()`` (Labs 1-8).
     - ``collaborative``: ADK 2.0 Coordinator + ``single_turn``/``task`` subagents.
     - ``graph``: ADK 2.0 declarative ``Workflow`` graph with ``JoinNode`` + bounded fix loop.
     - ``dynamic``: ADK 2.0 programmatic ``@node(rerun_on_resume=True)`` orchestrator.
@@ -363,7 +366,7 @@ def _build_app_options(settings: Settings | None = None) -> dict[str, Any]:
     Attaches ``GlobalInstructionPlugin`` across multi-agent and workflow modes
     (``collaborative``, ``graph``, ``dynamic``) per ADK 2.0 guidance
     (``adk.dev/graphs/``, ``adk.dev/workflows/collaboration/``), while keeping
-    ``simple`` mode unchanged for Labs 2-7 backward compatibility.
+    ``simple`` mode unchanged for Labs 2-8 backward compatibility.
     """
     cfg = settings or get_settings()
     options: dict[str, Any] = {

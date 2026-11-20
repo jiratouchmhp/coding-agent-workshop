@@ -1,5 +1,5 @@
 # Declarative Terraform IaC for Gemini Enterprise Agent Platform (Agent Runtime).
-# Starter track: complete every `# TODO(lab-3)` marker below before running
+# Starter track: complete every `# TODO(lab-5)` marker below before running
 # `terraform fmt -check`, `terraform validate`, and `terraform plan`.
 #
 # Verified against:
@@ -55,6 +55,8 @@ resource "google_service_account" "agent_runtime_sa" {
 resource "google_project_iam_member" "runtime_sa_roles" {
   for_each = toset([
     "roles/aiplatform.user",
+    # TODO(lab-5): Add "roles/aiplatform.memoryUser" so the deployed Agent Runtime SA
+    # can read/write Lab 3 Memory Bank memories when ENABLE_MEMORY_BANK=true.
     "roles/logging.logWriter",
     "roles/cloudtrace.agent",
     "roles/telemetry.tracesWriter",
@@ -63,6 +65,16 @@ resource "google_project_iam_member" "runtime_sa_roles" {
 
   project = var.project_id
   role    = each.value
+  member  = "serviceAccount:${google_service_account.agent_runtime_sa.email}"
+}
+
+# Grant Agent Registry read access when Lab 4 Skill Registry integration is enabled
+# so the Custom SA can read from `agentregistry.googleapis.com`.
+resource "google_project_iam_member" "runtime_sa_agentregistry_viewer" {
+  count = var.enable_skill_registry ? 1 : 0
+
+  project = var.project_id
+  role    = "roles/agentregistry.viewer"
   member  = "serviceAccount:${google_service_account.agent_runtime_sa.email}"
 }
 
@@ -99,7 +111,7 @@ resource "google_secret_manager_secret_iam_member" "runtime_sa_secret_accessor" 
 }
 
 # Agent Platform Service Agent (gcp-sa-aiplatform): required to fetch secret_env
-# at deploy time when using `identity_type = "AGENT_IDENTITY"` (Lab 5) or when
+# at deploy time when using `identity_type = "AGENT_IDENTITY"` (Optional Lab 7) or when
 # pulling BYOC images from a cross-project Artifact Registry repository.
 resource "google_secret_manager_secret_iam_member" "platform_service_agent_secret_accessor" {
   secret_id = google_secret_manager_secret.coding_agent_api_key.id
@@ -117,7 +129,7 @@ resource "google_secret_manager_secret_iam_member" "platform_service_agent_secre
 #   2. Agent Sandbox Service Agent (Lab 2 BYOC sandboxes):
 #      service-${var.project_number}@gcp-sa-vertex-sandbox.iam.gserviceaccount.com
 #
-# TODO(lab-3): Uncomment BOTH `google_project_iam_member` resources below so
+# TODO(lab-5): Uncomment BOTH `google_project_iam_member` resources below so
 # Terraform grants `roles/artifactregistry.reader` to both service agents before
 # provisioning `google_vertex_ai_reasoning_engine.coding_agent`.
 # (In stricter production environments, you can narrow these to a single repo
@@ -151,7 +163,7 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
     agent_framework = "google-adk"
 
     # Pass ONLY the service account email (NOT a full `projects/...` URI).
-    # Lab 5 Upgrade Path: to bind Agent Gateway or Semantic Governance Policies,
+    # Optional Lab 7 Upgrade Path: to bind Agent Gateway or Semantic Governance Policies,
     # switch this resource to `provider = google-beta`, remove `service_account`,
     # and set `identity_type = "AGENT_IDENTITY"` (immutable at creation time!).
     service_account = google_service_account.agent_runtime_sa.email
@@ -159,7 +171,7 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
     # -------------------------------------------------------------------------
     # Option 1 (Primary): BYOC Prebuilt Container Image (`container_spec`)
     # -------------------------------------------------------------------------
-    # TODO(lab-3): Uncomment `container_spec` below to deploy the prebuilt
+    # TODO(lab-5): Uncomment `container_spec` below to deploy the prebuilt
     # Agent Runtime BYOC container image pushed in Step B0 (`make push-agent`).
     #
     # container_spec {
@@ -181,7 +193,7 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
     # is missing. Always `cd` into the app root first:
     #
     #   cd starter && tar -czvf terraform/coding_agent_source.tar.gz \
-    #     Dockerfile main.py requirements.txt coding_agent/
+    #     Dockerfile main.py requirements.txt coding_agent/ skills_to_register/
     #   tar -tzvf terraform/coding_agent_source.tar.gz | head -n 5
     #
     # source_code_spec {
@@ -224,8 +236,8 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
         value = var.model_name
       }
 
-      # Optional ADK 2.0 architecture overrides (Lab 1 Part B / Lab 3 portability).
-      # Defaults to `AGENT_ARCHITECTURE=simple` (Labs 2-7 compatible) when omitted;
+      # Optional ADK 2.0 architecture overrides (Lab 1 Part B / Lab 5 portability).
+      # Defaults to `AGENT_ARCHITECTURE=simple` (Labs 2-8 compatible) when omitted;
       # uncomment to switch the deployed Agent Runtime to `collaborative`, `graph`,
       # or `dynamic` with zero changes to Dockerfile, main.py, or the HTTP contract:
       #
@@ -244,9 +256,11 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
       #   value = "false"
       # }
 
-      # TODO(lab-3): Uncomment ALL blocks below to wire isolated Managed Sandbox
+      # TODO(lab-5): Uncomment ALL blocks below to wire isolated Managed Sandbox
       # execution (`SANDBOX_MODE`, `SANDBOX_TEMPLATE_NAME`, and
-      # `SANDBOX_SERVICE_ACCOUNT_EMAIL`) plus Secret Manager `CODING_AGENT_API_KEY`.
+      # `SANDBOX_SERVICE_ACCOUNT_EMAIL`), optional Lab 3/Lab 4 runtime flags
+      # (`ENABLE_MEMORY_BANK`, `ENABLE_SKILL_REGISTRY`, `SKILL_REGISTRY_LOCATION`,
+      # `AGENT_REGISTRY_LOCATION`), plus Secret Manager `CODING_AGENT_API_KEY`.
       # Setting `SANDBOX_MODE` explicitly prevents deployed containers from silently
       # falling back to `local` inside the trusted Agent Runtime container.
       #
@@ -265,6 +279,26 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
       #   value = google_service_account.agent_runtime_sa.email
       # }
       #
+      # env {
+      #   name  = "ENABLE_MEMORY_BANK"
+      #   value = tostring(var.enable_memory_bank)
+      # }
+      #
+      # env {
+      #   name  = "ENABLE_SKILL_REGISTRY"
+      #   value = tostring(var.enable_skill_registry)
+      # }
+      #
+      # env {
+      #   name  = "SKILL_REGISTRY_LOCATION"
+      #   value = var.skill_registry_location
+      # }
+      #
+      # env {
+      #   name  = "AGENT_REGISTRY_LOCATION"
+      #   value = var.skill_registry_location
+      # }
+      #
       # secret_env {
       #   name = "CODING_AGENT_API_KEY"
       #   secret_ref {
@@ -273,7 +307,7 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
       #   }
       # }
 
-      # Optional Lab 5 Agent Gateway binding (requires `provider = google-beta`
+      # Optional Lab 7 Upgrade Path — Agent Gateway binding (requires `provider = google-beta`
       # and `identity_type = "AGENT_IDENTITY"` in `spec`):
       # agent_gateway_config {
       #   agent_to_anywhere_config {
@@ -288,14 +322,15 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
     class_methods = jsonencode(local.adk_class_methods)
   }
 
-  # TODO(lab-3): Replace the minimal `depends_on` list below with ALL IAM
-  # bindings (`re_service_agent_ar_reader`, `sandbox_service_agent_ar_reader`,
+  # TODO(lab-5): Expand `depends_on` below with ALL remaining IAM bindings
+  # (`re_service_agent_ar_reader`, `sandbox_service_agent_ar_reader`,
   # `runtime_sa_roles`, `runtime_sa_self_token_creator`,
   # `runtime_sa_secret_accessor`, `platform_service_agent_secret_accessor`)
-  # plus `coding_agent_api_key_v1`.
+  # alongside `runtime_sa_agentregistry_viewer` and `coding_agent_api_key_v1`.
   # Without explicit `depends_on`, container startup can race ahead of IAM
   # propagation and fail with `IMAGE_PULL_BACKOFF` or Secret Manager errors.
   depends_on = [
+    google_project_iam_member.runtime_sa_agentregistry_viewer,
     google_secret_manager_secret_version.coding_agent_api_key_v1,
   ]
 }

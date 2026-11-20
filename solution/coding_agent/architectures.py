@@ -2,7 +2,7 @@
 
 Reference solution track implementing the full ADK 2.0 architecture progression
 while keeping ``AGENT_ARCHITECTURE=simple`` (single ``LlmAgent``) as the default
-so Labs 2-7 run unchanged.
+so Labs 2-8 run unchanged.
 
 Verified ADK 2.0 Python design rules encoded in this module:
 - **Collaborative agent modes (ADK Python v2.0.0):** Set ``mode="single_turn"``
@@ -123,7 +123,7 @@ def _attach_optional_callbacks(
     include_tool_callbacks: bool = True,
     include_agent_callbacks: bool = False,
 ) -> None:
-    """Attach optional Lab 4 callbacks to an ``LlmAgent`` kwargs dict."""
+    """Attach optional Lab 3 callbacks to an ``LlmAgent`` kwargs dict."""
     if not callbacks:
         return
     if include_tool_callbacks:
@@ -139,12 +139,12 @@ async def _invoke_optional_after_agent_callback(
     callbacks: Mapping[str, Any] | None,
     ctx: Context,
 ) -> None:
-    """Invoke Lab 4's optional ``after_agent_callback`` once at workflow completion.
+    """Invoke Lab 3's optional ``after_agent_callback`` once at workflow completion.
 
     ADK 2.0 ``Workflow`` subclasses ``BaseNode`` (not ``BaseAgent``) and does not expose
     an ``after_agent_callback`` field, whereas ADK 2.0 unifies ``CallbackContext`` with
     ``Context`` (exposing ``add_events_to_memory()`` and ``session``). Invoking the
-    callback once at the workflow's terminal step preserves Lab 4 Memory Bank turn
+    callback once at the workflow's terminal step preserves Lab 3 Memory Bank turn
     persistence (``persist_turn_to_memory_callback``) in ``graph`` and ``dynamic`` modes
     without duplicating writes across intermediate fix iterations.
     """

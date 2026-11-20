@@ -60,7 +60,7 @@ rules:
       - get
       - list
       - watch
-  # TODO(lab-7): Add the second RBAC rule for the core Agent Sandbox API group
+  # TODO(lab-8): Add the second RBAC rule for the core Agent Sandbox API group
   # `agents.x-k8s.io` granting `create`, `get`, `list`, `watch`, and `delete`
   # on `sandboxes` (required by `GkeCodeExecutor(executor_type="sandbox")`).
   #

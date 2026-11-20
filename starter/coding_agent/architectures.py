@@ -8,7 +8,7 @@ architectures beyond the default ``AGENT_ARCHITECTURE=simple`` single-agent setu
 - ``dynamic``: Programmatic ``@node(rerun_on_resume=True)`` orchestrator with
   ``ctx.run_node()``, ``asyncio.gather(..., use_sub_branch=True)``, and checkpointed HITL
 
-Keep ``AGENT_ARCHITECTURE=simple`` as the default in ``.env`` so Labs 2-7
+Keep ``AGENT_ARCHITECTURE=simple`` as the default in ``.env`` so Labs 2-8
 continue working unchanged.
 """
 
@@ -106,7 +106,7 @@ def _attach_optional_callbacks(
     include_tool_callbacks: bool = True,
     include_agent_callbacks: bool = False,
 ) -> None:
-    """Attach optional Lab 4 callbacks to an ``LlmAgent`` kwargs dict."""
+    """Attach optional Lab 3 callbacks to an ``LlmAgent`` kwargs dict."""
     if not callbacks:
         return
     if include_tool_callbacks:
@@ -122,12 +122,12 @@ async def _invoke_optional_after_agent_callback(
     callbacks: Mapping[str, Any] | None,
     ctx: Context,
 ) -> None:
-    """Invoke Lab 4's optional ``after_agent_callback`` once at workflow completion.
+    """Invoke Lab 3's optional ``after_agent_callback`` once at workflow completion.
 
     ADK 2.0 ``Workflow`` subclasses ``BaseNode`` (not ``BaseAgent``) and does not expose
     an ``after_agent_callback`` field, whereas ADK 2.0 unifies ``CallbackContext`` with
     ``Context`` (exposing ``add_events_to_memory()`` and ``session``). Invoking the
-    callback once at the workflow's terminal step preserves Lab 4 Memory Bank turn
+    callback once at the workflow's terminal step preserves Lab 3 Memory Bank turn
     persistence (``persist_turn_to_memory_callback``) in ``graph`` and ``dynamic`` modes
     without duplicating writes across intermediate fix iterations.
     """
@@ -408,7 +408,7 @@ def build_graph_coding_workflow(
       ``RequestInput(message=..., payload=..., response_schema=ApprovalDecision)``
     - ``finalize_report`` formatting optional HITL replies via
       ``_format_approval_note(...)``, rendering ``_build_final_report(...)``,
-      invoking optional Lab 4 ``callbacks["after_agent_callback"]`` once via
+      invoking optional Lab 3 ``callbacks["after_agent_callback"]`` once via
       ``_invoke_optional_after_agent_callback(callbacks, ctx)``, and emitting
       strictly ONE ``Event(message=report, output=report, state={"fix_attempts": 0, "latest_findings": ""})``
       so per-turn workflow state resets cleanly for Turn 2+ while remaining intact
@@ -448,7 +448,7 @@ def build_dynamic_coding_workflow(
     - If ``settings.enable_hitl_approval`` is true, awaits
       ``await ctx.run_node(request_human_approval, {...})`` (``rerun_on_resume=False``)
     - Formats optional HITL replies via ``_format_approval_note(decision)``, renders
-      ``_build_final_report(...)``, invokes optional Lab 4
+      ``_build_final_report(...)``, invokes optional Lab 3
       ``callbacks["after_agent_callback"]`` once via
       ``_invoke_optional_after_agent_callback(callbacks, ctx)``, and yields strictly
       ONE terminal ``Event(message=..., output=..., state={"code": "", "findings": "", "fix_attempts": 0})``

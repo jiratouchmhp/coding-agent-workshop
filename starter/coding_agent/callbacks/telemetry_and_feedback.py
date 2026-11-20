@@ -1,6 +1,6 @@
-"""ADK OTel Telemetry Callbacks, Sandbox Cloud Logging & Feedback Client (starter — Lab 4).
+"""ADK OTel Telemetry Callbacks, Sandbox Cloud Logging & Feedback Client (starter — Lab 3).
 
-Complete the ``# TODO(lab-4)`` sections below to implement:
+Complete the ``# TODO(lab-3)`` sections below to implement:
 1. ``build_reasoning_engine_logger()`` bound to ``aiplatform.googleapis.com/ReasoningEngine``
    (mitigating the platform limitation that child resources — Managed Sandboxes, Sessions,
    Memory Bank, Code Execution — do NOT auto-stream logs to Cloud Logging).
@@ -203,14 +203,14 @@ def build_reasoning_engine_logger(
     reasoning_engine_id: str | None = None,
 ) -> Any:
     """Create a Cloud Logging logger bound to ``aiplatform.googleapis.com/ReasoningEngine``."""
-    # TODO(lab-4): Import ``google.cloud.logging``, instantiate
+    # TODO(lab-3): Import ``google.cloud.logging``, instantiate
     # ``google.cloud.logging.Client(project=project_id)`` and
     # ``google.cloud.logging.Resource(type="aiplatform.googleapis.com/ReasoningEngine",
     # labels={"location": location, "resource_container": project_id,
     # "reasoning_engine_id": reasoning_engine_id or os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID", "local-dev")})``,
     # and return ``logging_client.logger(name=log_id, resource=resource)``.
     _ = (project_id, location, log_id, reasoning_engine_id)
-    raise NotImplementedError("Complete TODO(lab-4): build_reasoning_engine_logger()")
+    raise NotImplementedError("Complete TODO(lab-3): build_reasoning_engine_logger()")
 
 
 @functools.lru_cache(maxsize=4)
@@ -261,10 +261,10 @@ def before_tool_callback(
     tool_context: Any,
 ) -> dict[str, Any] | None:
     """Record tool start timestamp and annotate the active OpenTelemetry span."""
-    # TODO(lab-4): Store ``time.monotonic()`` in ``tool_context.state[f"_tool_start_ts:{tool_name}"]``,
+    # TODO(lab-3): Store ``time.monotonic()`` in ``tool_context.state[f"_tool_start_ts:{tool_name}"]``,
     # set ``coding_agent.tool.name`` on ``trace.get_current_span()`` when recording, and return ``None``.
     _ = (tool, args, tool_context, time)
-    raise NotImplementedError("Complete TODO(lab-4): before_tool_callback()")
+    raise NotImplementedError("Complete TODO(lab-3): before_tool_callback()")
 
 
 def after_tool_callback(
@@ -277,7 +277,7 @@ def after_tool_callback(
     preview_max_chars: int = DEFAULT_PREVIEW_MAX_CHARS,
 ) -> dict[str, Any] | None:
     """Emit OTel tool attributes and parent-runtime structured Cloud Logs for sandbox output."""
-    # TODO(lab-4):
+    # TODO(lab-3):
     # 1. Pop start timestamp from ``tool_context.state`` and compute ``duration_ms``.
     # 2. Extract ``stdout``, ``stderr``, ``exit_code``, ``timed_out`` via ``_extract_tool_execution_fields``.
     # 3. Set OTel attributes (``coding_agent.tool.name``, ``coding_agent.tool.duration_ms``,
@@ -287,7 +287,7 @@ def after_tool_callback(
     #    or ``WARNING`` so Managed Sandbox outputs are preserved in parent ReasoningEngine logs!
     # 5. Return ``None`` so ADK keeps the original ``tool_response``.
     _ = (tool, args, tool_context, tool_response, cloud_logger, preview_max_chars)
-    raise NotImplementedError("Complete TODO(lab-4): after_tool_callback()")
+    raise NotImplementedError("Complete TODO(lab-3): after_tool_callback()")
 
 
 def make_telemetry_callbacks(
@@ -396,7 +396,7 @@ class FeedbackClient:
         if feedback_type not in VALID_FEEDBACK_TYPES:
             valid = ", ".join(sorted(VALID_FEEDBACK_TYPES))
             raise ValueError(f"Invalid feedback_type={feedback_type!r}. Expected one of: {valid}.")
-        # TODO(lab-4): Merge optional ``score`` and ``trace_id`` (or active OTel trace ID)
+        # TODO(lab-3): Merge optional ``score`` and ``trace_id`` (or active OTel trace ID)
         # into string-valued ``custom_metadata``, call ``self.client.feedback_entries.create(
         # name=self._require_runtime_name(), session_id=session_id, event_id=event_id,
         # feedback_type=feedback_type, config={...})``, and return ``_extract_entry_name(op)``.
@@ -411,7 +411,7 @@ class FeedbackClient:
             score,
             trace_id,
         )
-        raise NotImplementedError("Complete TODO(lab-4): FeedbackClient.submit_feedback()")
+        raise NotImplementedError("Complete TODO(lab-3): FeedbackClient.submit_feedback()")
 
     def get_feedback(self, entry_name: str) -> Any:
         """Fetch a single feedback entry by full resource name."""
@@ -446,19 +446,19 @@ class FeedbackClient:
         context_events: list[dict[str, Any]],
     ) -> Any:
         """Preserve transcript events in ``FeedbackContext`` even if the original session expires."""
-        # TODO(lab-4): Call ``self.client.feedback_entries.feedback_contexts.update(
+        # TODO(lab-3): Call ``self.client.feedback_entries.feedback_contexts.update(
         # name=entry_name, context_events=context_events)``.
         # Verified SDK path quirk: pass ``entry_name`` (WITHOUT ``/feedbackContext``) to update!
         _ = (entry_name, context_events)
-        raise NotImplementedError("Complete TODO(lab-4): FeedbackClient.attach_context_snapshot()")
+        raise NotImplementedError("Complete TODO(lab-3): FeedbackClient.attach_context_snapshot()")
 
     def get_context_snapshot(self, entry_name: str) -> Any:
         """Retrieve the persisted ``FeedbackContext`` for a feedback entry."""
-        # TODO(lab-4): Call ``self.client.feedback_entries.feedback_contexts.get(
+        # TODO(lab-3): Call ``self.client.feedback_entries.feedback_contexts.get(
         # name=f"{entry_name}/feedbackContext")``.
         # Verified SDK path quirk: pass ``f"{entry_name}/feedbackContext"`` to get!
         _ = entry_name
-        raise NotImplementedError("Complete TODO(lab-4): FeedbackClient.get_context_snapshot()")
+        raise NotImplementedError("Complete TODO(lab-3): FeedbackClient.get_context_snapshot()")
 
     def list_session_feedback(
         self,
@@ -467,11 +467,11 @@ class FeedbackClient:
         order_by: str = "create_time desc",
     ) -> list[Any]:
         """List feedback entries filtered to a single ``session_id``."""
-        # TODO(lab-4): Return ``list(self.client.feedback_entries.list(
+        # TODO(lab-3): Return ``list(self.client.feedback_entries.list(
         # name=self._require_runtime_name(),
         # config={"filter": f'session_id="{session_id}"', "order_by": order_by}))``.
         _ = (session_id, order_by)
-        raise NotImplementedError("Complete TODO(lab-4): FeedbackClient.list_session_feedback()")
+        raise NotImplementedError("Complete TODO(lab-3): FeedbackClient.list_session_feedback()")
 
     def delete_feedback(self, entry_name: str) -> None:
         """Delete a feedback entry (automatically deletes its child ``FeedbackContext``)."""

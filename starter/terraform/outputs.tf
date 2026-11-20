@@ -5,7 +5,7 @@
 #   the full resource path `projects/{PROJECT}/locations/{LOCATION}/reasoningEngines/{NUMERIC_ID}`,
 #   whereas `.name` returns only the short numeric ID.
 # - Always derive `reasoning_engine_short_id` explicitly so downstream REST URLs,
-#   `REASONING_ENGINE_NAME`, and `REASONING_ENGINE_ID` work reliably across Labs 3-6.
+#   `REASONING_ENGINE_NAME`, and `REASONING_ENGINE_ID` work reliably across Labs 5-7.
 
 locals {
   # NOTE: Terraform's `element(list, index)` strictly rejects negative indices
@@ -13,7 +13,7 @@ locals {
   # to extract the trailing numeric ReasoningEngine ID reliably.
   reasoning_engine_short_id = reverse(split("/", google_vertex_ai_reasoning_engine.coding_agent.id))[0]
 
-  # Optional Lab 5 reference: dynamic SPIFFE Agent Identity principal when using
+  # Optional Lab 7 Upgrade Path reference: dynamic SPIFFE Agent Identity principal when using
   # `provider = google-beta` and `identity_type = "AGENT_IDENTITY"` (survives recreate):
   # agent_identity_principal = "principal://agents.global.org-${var.organization_id}.system.id.goog/resources/aiplatform/projects/${var.project_number}/locations/${var.location}/reasoningEngines/${local.reasoning_engine_short_id}"
 }

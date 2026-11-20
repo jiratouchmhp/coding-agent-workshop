@@ -21,13 +21,13 @@ PYTHON ?= python3
 LOAD_ENV = set -a; [ -f .env ] && source .env; set +a
 
 .PHONY: help install lint build-sandbox push-sandbox sandbox-lifecycle-demo \
-        push-agent tf-plan tf-apply package-skill eval-offline eval-simulated \
+        package-skill push-agent tf-plan tf-apply eval-offline eval-simulated \
         validate-skills verify-lab
 
 help: ## Print available workshop targets and usage examples
 	@echo "Enterprise Coding Agent Workshop — Makefile Targets"
 	@echo ""
-	@echo "Usage: make <target> [TRACK=starter|solution] [LAB=1..7|all]"
+	@echo "Usage: make <target> [TRACK=starter|solution] [LAB=1..8|all]"
 	@echo "Current TRACK=$(TRACK)"
 	@echo ""
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-24s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -82,7 +82,11 @@ sandbox-lifecycle-demo: ## Lab 2: Run Template -> Sandbox -> Pause -> Resume -> 
 	echo "==> Running sandbox lifecycle demo in $(TRACK)/ (mode=$(SANDBOX_DEMO_MODE))..."; \
 	cd $(TRACK) && uv run python -m coding_agent.tools.sandbox_lifecycle demo --mode "$(SANDBOX_DEMO_MODE)" --ttl 1800s
 
-push-agent: ## Lab 3: Build and push trusted Agent Runtime BYOC image (AGENT_IMAGE_URI) via Cloud Build
+package-skill: ## Lab 4: Validate all 16 atomic Skill Registry rules and build skill .zip
+	@echo "==> Validating and packaging $(SKILL_DIR) -> $(SKILL_ZIP_OUT)..."
+	$(PYTHON) scripts/package_registry_skill.py "$(SKILL_DIR)" --output "$(SKILL_ZIP_OUT)"
+
+push-agent: ## Lab 5: Build and push trusted Agent Runtime BYOC image (AGENT_IMAGE_URI) via Cloud Build
 	@$(LOAD_ENV); \
 	if [ -z "$${GOOGLE_CLOUD_PROJECT:-}" ]; then \
 		echo "ERROR: GOOGLE_CLOUD_PROJECT is not set. Copy .env.example to .env first." >&2; \
@@ -95,21 +99,17 @@ push-agent: ## Lab 3: Build and push trusted Agent Runtime BYOC image (AGENT_IMA
 		--tag="$${URI}" \
 		--project="$${GOOGLE_CLOUD_PROJECT}"
 
-tf-plan: ## Lab 3: Initialize, format-check, validate, and plan Terraform in $(TRACK)/terraform
+tf-plan: ## Lab 5: Initialize, format-check, validate, and plan Terraform in $(TRACK)/terraform
 	@echo "==> Running Terraform init / fmt / validate / plan in $(TRACK)/terraform..."
 	terraform -chdir=$(TRACK)/terraform init
 	terraform -chdir=$(TRACK)/terraform fmt -check
 	terraform -chdir=$(TRACK)/terraform validate
 	terraform -chdir=$(TRACK)/terraform plan
 
-tf-apply: ## Lab 3: Initialize and apply Terraform in $(TRACK)/terraform
+tf-apply: ## Lab 5: Initialize and apply Terraform in $(TRACK)/terraform
 	@echo "==> Applying Terraform configuration in $(TRACK)/terraform..."
 	terraform -chdir=$(TRACK)/terraform init
 	terraform -chdir=$(TRACK)/terraform apply
-
-package-skill: ## Lab 5: Validate all 16 atomic Skill Registry rules and build skill .zip
-	@echo "==> Validating and packaging $(SKILL_DIR) -> $(SKILL_ZIP_OUT)..."
-	$(PYTHON) scripts/package_registry_skill.py "$(SKILL_DIR)" --output "$(SKILL_ZIP_OUT)"
 
 eval-offline: ## Lab 6: Run offline evaluation over split single-turn and multi-turn datasets
 	@$(LOAD_ENV); \
@@ -127,6 +127,6 @@ validate-skills: ## Validate all Antigravity workshop skills under .agents/skill
 	@echo "==> Validating .agents/skills/..."
 	$(PYTHON) scripts/validate_skills.py .agents/skills
 
-verify-lab: ## Verify Labs 1-7 checkpoints locally (usage: make verify-lab LAB=1..7|all)
+verify-lab: ## Verify Labs 1-8 checkpoints locally (usage: make verify-lab LAB=1..8|all)
 	@echo "==> Running verify_lab.sh for LAB=$(LAB) (TRACK=$(TRACK))..."
 	./scripts/verify_lab.sh "$(LAB)" --track "$(TRACK)"

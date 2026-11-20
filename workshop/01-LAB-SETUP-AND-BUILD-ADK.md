@@ -111,7 +111,7 @@ cp .env.example .env
 Edit `.env` with your GCP project values (do **not** commit `.env` to Git):
 
 ```dotenv
-# Agent Platform / Vertex AI ADC mode (recommended for Labs 1-7)
+# Agent Platform / Vertex AI ADC mode (recommended for Labs 1-8)
 GOOGLE_GENAI_USE_ENTERPRISE=TRUE
 GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID
 GOOGLE_CLOUD_PROJECT_NUMBER=YOUR_PROJECT_NUMBER
@@ -121,7 +121,7 @@ GOOGLE_CLOUD_LOCATION=us-central1
 MODEL_NAME=gemini-2.5-flash
 
 # Lab 1 ADK Architecture mode: simple (default) | collaborative | graph | dynamic
-# Keep `simple` as the default so Labs 2-7 stay 100% backward compatible.
+# Keep `simple` as the default so Labs 2-8 stay 100% backward compatible.
 AGENT_ARCHITECTURE=simple
 MAX_FIX_ROUNDS=3
 ENABLE_HITL_APPROVAL=false
@@ -133,11 +133,19 @@ ENABLE_HITL_APPROVAL=false
 # Lab 1 starts in local mode; Lab 2 switches this to `shell` or `byoc`
 SANDBOX_MODE=local
 
-# Populated progressively in Labs 2, 3, and 5
+# Populated progressively across Labs 2-5:
+# - Lab 2: Standalone backing instance (`REASONING_ENGINE_NAME`), BYOC sandbox image & template
+# - Lab 3: Reuses Lab 2's standalone `REASONING_ENGINE_NAME` for Managed Sessions & Memory Bank
+# - Lab 4: Vertex AI Skill Registry & Agent Registry discovery (`ENABLE_SKILL_REGISTRY`, `SKILL_REGISTRY_LOCATION`)
+# - Lab 5: Build `AGENT_IMAGE_URI` & deploy complete agent ONCE via Terraform (updates `REASONING_ENGINE_NAME`)
+# - Lab 6: Optimize (Observability, Eval, Alerts) | Optional Lab 7: Security & Governance | Lab 8: GKE Deep-Dive
 REASONING_ENGINE_NAME=
 SANDBOX_TEMPLATE_NAME=
 SANDBOX_IMAGE_URI=
 AGENT_IMAGE_URI=
+ENABLE_TELEMETRY_CALLBACKS=true
+ENABLE_MEMORY_BANK=false
+ENABLE_SKILL_REGISTRY=false
 SKILL_REGISTRY_LOCATION=us-central1
 AGENT_REGISTRY_LOCATION=us-central1
 ```
@@ -160,17 +168,17 @@ Explore the core starter package under `starter/`:
 | [`starter/agents-cli-manifest.yaml`](../starter/agents-cli-manifest.yaml) | **Lab 1:** `agents-cli` manifest setting `agent_directory: coding_agent` and `deployment_target: agent_runtime` (required for `agents-cli playground/run/deploy/eval`) |
 | [`starter/services.yaml`](../starter/services.yaml) | **Lab 1 Part B:** Declarative ADK Python 2.0+ custom service registration (`scheme`, `type: session\|artifact\|memory\|task_store`, `class`) for `adk web` / `adk api_server` |
 | [`starter/services.py`](../starter/services.py) | **Lab 1 Part B:** Programmatic ADK Python 2.0+ service registration via `get_service_registry()` (takes precedence over `services.yaml` on duplicate schemes) |
-| [`starter/Dockerfile`](../starter/Dockerfile) | **Lab 3:** Trusted Agent Runtime BYOC container image (non-root, listening on `0.0.0.0:8080`, distinct from Lab 2's untrusted `sandbox_image/Dockerfile`) |
-| [`starter/main.py`](../starter/main.py) | **Lab 3:** FastAPI/ADK HTTP server implementing the Agent Runtime contract (`GET /`, `POST /api/reasoning_engine`, `POST /api/stream_reasoning_engine`) |
-| [`starter/requirements.txt`](../starter/requirements.txt) | **Lab 3:** Runtime container dependencies for `container_spec` builds and `source_code_spec` Dockerfile archives |
+| [`starter/Dockerfile`](../starter/Dockerfile) | **Lab 5:** Trusted Agent Runtime BYOC container image (non-root, listening on `0.0.0.0:8080`, distinct from Lab 2's untrusted `sandbox_image/Dockerfile`) |
+| [`starter/main.py`](../starter/main.py) | **Lab 5:** FastAPI/ADK HTTP server implementing the Agent Runtime contract (`GET /`, `POST /api/reasoning_engine`, `POST /api/stream_reasoning_engine`) |
+| [`starter/requirements.txt`](../starter/requirements.txt) | **Lab 5:** Runtime container dependencies for `container_spec` builds and `source_code_spec` Dockerfile archives |
 | [`starter/coding_agent/config.py`](../starter/coding_agent/config.py) | Typed settings loader reading `.env` (`Settings` including `agent_architecture`, `max_fix_rounds`, `enable_hitl_approval`, `sandbox_mode`) |
 | [`starter/coding_agent/agent.py`](../starter/coding_agent/agent.py) | **Lab 1 Part A target:** Root ADK `LlmAgent` + `EnvironmentToolset` + `build_root_agent()` dispatcher + resumable `App` entrypoint |
 | [`starter/coding_agent/architectures.py`](../starter/coding_agent/architectures.py) | **Lab 1 Part B target:** ADK 2.0 Collaborative Team, Declarative Graph `Workflow`, Dynamic `@node(rerun_on_resume=True)` Workflow & optional `ManagedAgent` reference builder |
 | [`starter/coding_agent/tools/sandbox_lifecycle.py`](../starter/coding_agent/tools/sandbox_lifecycle.py) | **Lab 2:** Managed Sandbox, Template & Snapshot lifecycle manager |
 | [`starter/coding_agent/tools/sandbox_execution.py`](../starter/coding_agent/tools/sandbox_execution.py) | **Lab 2:** Shell `execute_bash`, BYOC `/exec`, Code Execution & `AgentPlatformSandboxEnvironment` |
-| [`starter/coding_agent/memory/`](../starter/coding_agent/memory/) | **Lab 4:** Managed Sessions & Memory Bank managers |
-| [`starter/coding_agent/callbacks/telemetry_and_feedback.py`](../starter/coding_agent/callbacks/telemetry_and_feedback.py) | **Lab 4:** OTel tracing, parent runtime sandbox logging & Feedback Service client |
-| [`starter/coding_agent/tools/registry_loader.py`](../starter/coding_agent/tools/registry_loader.py) | **Lab 5:** `GCPSkillRegistry` + `SkillToolset` & `AgentRegistry` loader |
+| [`starter/coding_agent/memory/`](../starter/coding_agent/memory/) | **Lab 3:** Managed Sessions & Memory Bank managers |
+| [`starter/coding_agent/callbacks/telemetry_and_feedback.py`](../starter/coding_agent/callbacks/telemetry_and_feedback.py) | **Lab 3:** OTel tracing, parent runtime sandbox logging & Feedback Service client |
+| [`starter/coding_agent/tools/registry_loader.py`](../starter/coding_agent/tools/registry_loader.py) | **Lab 4:** `GCPSkillRegistry` + `SkillToolset` & `AgentRegistry` loader |
 
 ---
 
@@ -205,9 +213,9 @@ ADK Python v2.4.0 Preview adds [`ManagedAgent`](https://adk.dev/agents/managed-a
 
 | Dimension | `ManagedAgent` (ADK Python v2.4.0 Preview) | Custom `LlmAgent` / ADK 2.0 Workflows *(This Workshop)* |
 |---|---|---|
-| **Tools & Execution** | **Server-side tools only** (`google_search`, `types.Tool(code_execution=...)`, `google.adk.tools.RemoteMcpServer`). Client Python callables & raw `types.Tool.mcp_servers` raise `NotImplementedError`. | Full control over custom Python tools, **`EnvironmentToolset`**, **BYOC gVisor sandboxes (Lab 2)**, MCP, `SkillToolset` (Lab 5), and callbacks (Lab 4). |
-| **Agent Platform Region** | **`global`-only** (regional endpoints raise an error). | Regional (`us-central1`, `europe-west4`, etc.) with CMEK, VPC-SC, PSC-I, and Artifact Registry BYOC containers. |
-| **Transport & State** | **Streaming only** (`stream=True`); server-owned interaction history & remote sandbox. | Unary, streaming, async jobs (up to 7d), Managed Sessions & Memory Bank (Lab 4). |
+| **Tools & Execution** | **Server-side tools only** (`google_search`, `types.Tool(code_execution=...)`, `google.adk.tools.RemoteMcpServer`). Client Python callables & raw `types.Tool.mcp_servers` raise `NotImplementedError`. | Full control over custom Python tools, **`EnvironmentToolset`**, **BYOC gVisor sandboxes (Lab 2)**, MCP, `SkillToolset` (Lab 4), and callbacks (Lab 3). |
+| **Agent Platform Region** | **`global`-only** (regional endpoints raise an error). | Regional (`us-central1`, `europe-west4`, etc.) with CMEK, VPC-SC, PSC-I (Optional Lab 7), and Artifact Registry BYOC containers (Lab 5). |
+| **Transport & State** | **Streaming only** (`stream=True`); server-owned interaction history & remote sandbox. | Unary, streaming, async jobs (up to 7d), Managed Sessions & Memory Bank (Lab 3). |
 | **Composition Pattern** | Composable inline inside an `LlmAgent`'s `sub_agents` via **`mode="single_turn"`**. | Can compose `ManagedAgent(mode="single_turn")` as a grounded web-research helper while keeping code execution inside your enterprise BYOC sandbox! |
 
 > **Why our Coding Agent uses `LlmAgent` / Workflows:** Enterprise coding teams need custom BYOC toolchains (`pytest`, `ruff`, `bandit`), customer VPC egress controls, regional compliance, and parent-runtime audit logging — all of which require `LlmAgent` + `EnvironmentToolset` (with optional `ManagedAgent` delegation for web research).
@@ -217,7 +225,7 @@ ADK Python v2.4.0 Preview adds [`ManagedAgent`](https://adk.dev/agents/managed-a
 Need custom enterprise backends for sessions, artifacts, memory, or A2A task stores? ADK Python 2.0+ supports automatic [Service Registration](https://adk.dev/agents/service-registration/) across `adk run`, `adk web`, and `adk api_server`:
 - **`services.yaml` / `services.yml`:** Declarative URI-scheme mapping (`scheme`, `type: session | artifact | memory | task_store`, `class`) for simple constructors (`MyService(uri="...")`).
 - **`services.py`:** Programmatic factory registration via `from google.adk.cli.service_registry import get_service_registry` (`register_session_service`, `register_artifact_service`, `register_memory_service`).
-- **Discovery & Precedence:** `adk run` discovers files in the **agent directory** (`coding_agent/`); `adk web` and `adk api_server` discover them in the **agents root directory** (`starter/`). When both exist, ADK loads `services.yaml` first and `services.py` second — **`services.py` overrides `services.yaml`** on duplicate schemes. We inspect working workshop templates in Part B (Step 8) and connect them to Managed Sessions & Memory Bank in Lab 4!
+- **Discovery & Precedence:** `adk run` discovers files in the **agent directory** (`coding_agent/`); `adk web` and `adk api_server` discover them in the **agents root directory** (`starter/`). When both exist, ADK loads `services.yaml` first and `services.py` second — **`services.py` overrides `services.yaml`** on duplicate schemes. We inspect working workshop templates in Part B (Step 8) and connect them to Managed Sessions & Memory Bank in Lab 3!
 
 #### 4.2 Multi-Agent Workflows: Collaborative Teams, Routing & 7 Patterns
 
@@ -312,7 +320,7 @@ Why our Coding Agent uses **`EnvironmentToolset`** across **all four** architect
 1. **Four coding-native tools out of the box:** `Execute`, `ReadFile`, `EditFile` (surgical text replacement built on `read_file` + `write_file`), and `WriteFile`.
 2. **Automatic prompt injection:** `EnvironmentToolset.process_llm_request()` injects workspace usage instructions (`ENVIRONMENT_INSTRUCTION` and `ENVIRONMENT_WORKING_DIR_INSTRUCTION`) into the LLM request automatically.
 3. **Clean backend swap across ALL architectures:** In Lab 1 you pass `LocalEnvironment`, and in Lab 2 you swap in `AgentPlatformSandboxEnvironment(BaseEnvironment)` — whether you run `simple`, `collaborative`, `graph`, or `dynamic`, zero orchestration logic needs to change!
-4. **Future `SkillToolset` sharing:** In Lab 5, `SkillToolset` shares the exact same `environment=` instance so skill scripts execute inside the same sandbox.
+4. **Future `SkillToolset` sharing:** In Lab 4, `SkillToolset` shares the exact same `environment=` instance so skill scripts execute inside the same sandbox.
 
 *(Note on `ExecuteBashTool`: If you ever build a local developer CLI agent where every command must pause for Human-in-the-Loop approval, ADK Python 2.0+ offers `ExecuteBashTool(workspace=Path(...), policy=BashToolPolicy(...))`. Always override its dangerous default `allowed_command_prefixes=("*",)` and set `blocked_operators` + `max_memory_bytes`/`max_child_processes` `RLIMIT_*` bounds!)*
 
@@ -603,7 +611,7 @@ Open [`starter/services.yaml`](../starter/services.yaml) and [`starter/services.
 1. **[`starter/services.yaml`](../starter/services.yaml)** registers custom URI schemes declaratively for simple constructors (`scheme`, `type: session | artifact | memory | task_store`, `class`).
 2. **[`starter/services.py`](../starter/services.py)** uses `from google.adk.cli.service_registry import get_service_registry` to register custom factory functions (`register_session_service`, `register_artifact_service`, `register_memory_service`) when initialization needs custom auth, pooling, or environment logic.
 3. **Loading Order & Precedence:** ADK loads `services.yaml` first and `services.py` second — if both define the same URI scheme (e.g., `enterprise-session`), **`services.py` wins**!
-4. Both starter templates guard custom registrations behind `ENABLE_CUSTOM_SERVICE_REGISTRY=true` (or commented examples) so local `adk web` / `adk run` work out of the box without extra database packages. In **Lab 4**, we pair this extensibility pattern with Google Cloud's Managed Sessions (`VertexAiSessionService`) and Memory Bank (`VertexAiMemoryBankService`).
+4. Both starter templates guard custom registrations behind `ENABLE_CUSTOM_SERVICE_REGISTRY=true` (or commented examples) so local `adk web` / `adk run` work out of the box without extra database packages. In **Lab 3**, we pair this extensibility pattern with Google Cloud's Managed Sessions (`VertexAiSessionService`) and Memory Bank (`VertexAiMemoryBankService`).
 
 ---
 
@@ -634,7 +642,7 @@ Return to the repository root and run the Lab 1 verifier:
 
 ## Next Lab
 
-Ready to replace local subprocess execution with a **gVisor-isolated, non-root BYOC Managed Sandbox** that plugs seamlessly into all four ADK architectures? Continue to **[Lab 2: Custom Sandbox (BYOC), Lifecycle & Execution](02-LAB-CUSTOM-SANDBOX-BYOC.md)**.
+Ready to replace local subprocess execution with a **gVisor-isolated, non-root BYOC Managed Sandbox** that plugs seamlessly into all four ADK architectures? Continue to **[Lab 2: Custom Sandbox (BYOC), Lifecycle & Execution](./02-LAB-CUSTOM-SANDBOX-BYOC.md)**.
 
 ---
 

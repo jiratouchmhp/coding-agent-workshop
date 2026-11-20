@@ -1,6 +1,6 @@
-"""Memory Bank integration, governance sanitizer & CLI (starter track — Lab 4).
+"""Memory Bank integration, governance sanitizer & CLI (starter track — Lab 3).
 
-Complete the ``# TODO(lab-4)`` sections below to wire:
+Complete the ``# TODO(lab-3)`` sections below to wire:
 1. **ADK Integration (`build_adk_memory_service`, `persist_turn_to_memory_callback`):**
    Return ``VertexAiMemoryBankService`` when configured (auto-scoped to
    ``{"user_id": USER_ID, "app_name": APP_NAME}``), else ``InMemoryMemoryService``.
@@ -184,14 +184,14 @@ def inspect_for_memory_poisoning(text: str) -> MemorySanitizationReport:
     2. Adversarial red-teaming on extraction and retrieval paths.
     3. Sandboxed execution + human review for critical actions.
     """
-    # TODO(lab-4): Implement defense-in-depth memory ingestion screening:
+    # TODO(lab-3): Implement defense-in-depth memory ingestion screening:
     # 1. Strip any blocks matching ``_UNTRUSTED_BLOCK_PATTERNS``.
     # 2. Check ``_INJECTION_PATTERNS`` — if any match, return a ``MemorySanitizationReport``
     #    with ``blocked=True`` and ``sanitized_text=""`` so poisoned directives never persist.
     # 3. Redact any credentials matching ``_SECRET_REDACTION_PATTERNS`` with ``[REDACTED]``.
     # 4. Return ``MemorySanitizationReport`` with normalized ``sanitized_text``.
     _ = text
-    raise NotImplementedError("Complete TODO(lab-4): inspect_for_memory_poisoning()")
+    raise NotImplementedError("Complete TODO(lab-3): inspect_for_memory_poisoning()")
 
 
 def sanitize_for_memory_ingestion(text: str) -> str:
@@ -218,14 +218,14 @@ def build_adk_memory_service(
     agent_engine_id: str | None = None,
 ) -> Any:
     """Return ``VertexAiMemoryBankService`` when configured, else ``InMemoryMemoryService``."""
-    # TODO(lab-4): Import ``InMemoryMemoryService`` and ``VertexAiMemoryBankService`` from
+    # TODO(lab-3): Import ``InMemoryMemoryService`` and ``VertexAiMemoryBankService`` from
     # ``google.adk.memory``. When BOTH ``project_id`` and ``agent_engine_id`` are truthy,
     # validate ``location`` with ``validate_memory_bank_location(location)``, set
     # ``GOOGLE_GENAI_USE_ENTERPRISE="TRUE"``, and return ``VertexAiMemoryBankService(
     # project=project_id, location=location, agent_engine_id=agent_engine_id)``.
     # Otherwise return ``InMemoryMemoryService()``.
     _ = (project_id, location, agent_engine_id)
-    raise NotImplementedError("Complete TODO(lab-4): build_adk_memory_service()")
+    raise NotImplementedError("Complete TODO(lab-3): build_adk_memory_service()")
 
 
 def build_adk_memory_service_from_settings(settings: Settings | None = None) -> Any:
@@ -263,13 +263,13 @@ def filter_and_sanitize_events_for_memory(events: list[Any]) -> list[Any]:
     ``inspect_for_memory_poisoning()``, and redacts secrets or untrusted tool
     blocks on cloned copies of remaining events without mutating ``session.events``.
     """
-    # TODO(lab-4): Iterate ``events``, screen text parts with
+    # TODO(lab-3): Iterate ``events``, screen text parts with
     # ``inspect_for_memory_poisoning()``, drop blocked events, deep-copy events
     # needing redaction (via ``event.model_copy(deep=True)`` or
     # ``copy.deepcopy(event)``) so live ``session.events`` is never mutated, and
     # return the filtered list of safe events.
     _ = events
-    raise NotImplementedError("Complete TODO(lab-4): filter_and_sanitize_events_for_memory()")
+    raise NotImplementedError("Complete TODO(lab-3): filter_and_sanitize_events_for_memory()")
 
 
 async def persist_turn_to_memory_callback(
@@ -280,14 +280,14 @@ async def persist_turn_to_memory_callback(
     sanitize: bool = True,
 ) -> None:
     """ADK ``after_agent_callback`` incrementally ingesting recent events to Memory Bank."""
-    # TODO(lab-4): Screen ``list(callback_context.session.events[-max_events:])`` with
+    # TODO(lab-3): Screen ``list(callback_context.session.events[-max_events:])`` with
     # ``filter_and_sanitize_events_for_memory()`` when ``sanitize=True`` (dropping poisoned
     # events and redacting secrets on cloned copies), then call
     # ``await callback_context.add_events_to_memory(events=safe_events,
     # custom_metadata={"wait_for_completion": True} if wait_for_completion else None)``
     # whenever ``safe_events`` is non-empty, then return ``None``.
     _ = (callback_context, wait_for_completion, max_events, sanitize)
-    raise NotImplementedError("Complete TODO(lab-4): persist_turn_to_memory_callback()")
+    raise NotImplementedError("Complete TODO(lab-3): persist_turn_to_memory_callback()")
 
 
 def make_persist_turn_callback(
@@ -520,11 +520,11 @@ class MemoryBankManager:
             revision_ttl_days=revision_ttl_days,
             scope_keys=scope_keys or ["user_id"],
         )
-        # TODO(lab-4): Call ``self.client.memory_banks.create(config={"display_name": display_name},
+        # TODO(lab-3): Call ``self.client.memory_banks.create(config={"display_name": display_name},
         # managed_semantic_memory_config=semantic_config)``, store ``self._memory_bank_name = str(mb.name)``,
         # and return ``self._memory_bank_name``.
         _ = (display_name, semantic_config)
-        raise NotImplementedError("Complete TODO(lab-4): MemoryBankManager.create_memory_bank()")
+        raise NotImplementedError("Complete TODO(lab-3): MemoryBankManager.create_memory_bank()")
 
     def configure_memory_bank(
         self,
@@ -543,12 +543,12 @@ class MemoryBankManager:
             revision_ttl_days=revision_ttl_days,
             scope_keys=scope_keys or ["user_id"],
         )
-        # TODO(lab-4): Call ``self.client.runtimes.update(name=target_name, config={
+        # TODO(lab-3): Call ``self.client.runtimes.update(name=target_name, config={
         # "context_spec": {"memory_bank_config": {...}}})``. Remember the verified SDK key
         # divergence: map ``semantic_config["unstructured_memory_configs"]`` to
         # ``"customization_configs"`` inside ``memory_bank_config``!
         _ = (target_name, semantic_config)
-        raise NotImplementedError("Complete TODO(lab-4): MemoryBankManager.configure_memory_bank()")
+        raise NotImplementedError("Complete TODO(lab-3): MemoryBankManager.configure_memory_bank()")
 
     # -- Memory Generation & Streaming Ingestion -----------------------------
 
@@ -567,7 +567,7 @@ class MemoryBankManager:
     ) -> Any:
         """Generate & consolidate memories from a Managed Session (with optional time window)."""
         target_name = self._require_memory_bank_name()
-        # TODO(lab-4): Call ``self.client.memory_banks.memories.generate(name=target_name,
+        # TODO(lab-3): Call ``self.client.memory_banks.memories.generate(name=target_name,
         # vertex_session_source={"session": session_name, ...}, scope=..., config={...})``.
         _ = (
             target_name,
@@ -582,7 +582,7 @@ class MemoryBankManager:
             metadata_merge_strategy,
         )
         raise NotImplementedError(
-            "Complete TODO(lab-4): MemoryBankManager.generate_memories_from_session()"
+            "Complete TODO(lab-3): MemoryBankManager.generate_memories_from_session()"
         )
 
     def generate_memories_from_text(
@@ -599,14 +599,14 @@ class MemoryBankManager:
         target_name = self._require_memory_bank_name()
         resolved_scope = scope or {"user_id": user_id}
         validate_memory_scope(resolved_scope)
-        # TODO(lab-4): Sanitize each utterance with ``self.sanitize_for_memory_ingestion(text)``
+        # TODO(lab-3): Sanitize each utterance with ``self.sanitize_for_memory_ingestion(text)``
         # (dropping empty/blocked strings), wrap remaining strings into
         # ``direct_contents_source={"events": [...]}``, and call
         # ``self.client.memory_banks.memories.generate(name=target_name,
         # direct_contents_source=..., scope=resolved_scope, config={...})``.
         _ = (target_name, utterances, wait_for_completion, sanitize, metadata)
         raise NotImplementedError(
-            "Complete TODO(lab-4): MemoryBankManager.generate_memories_from_text()"
+            "Complete TODO(lab-3): MemoryBankManager.generate_memories_from_text()"
         )
 
     def generate_memories_from_facts(
@@ -693,13 +693,13 @@ class MemoryBankManager:
         target_name = self._require_memory_bank_name()
         resolved_scope = scope or {"user_id": user_id}
         validate_memory_scope(resolved_scope)
-        # TODO(lab-4): Call ``self.client.memory_banks.memories.retrieve(name=target_name,
+        # TODO(lab-3): Call ``self.client.memory_banks.memories.retrieve(name=target_name,
         # scope=resolved_scope, similarity_search_params={"search_query": query, "top_k": top_k})``,
         # iterate over ``resp.page`` (NOT eager ``list(resp)``!), and return
         # ``[{"distance": item.distance, "name": item.memory.name, "fact": item.memory.fact}, ...]``.
         _ = (target_name, query, top_k)
         raise NotImplementedError(
-            "Complete TODO(lab-4): MemoryBankManager.retrieve_similar_memories()"
+            "Complete TODO(lab-3): MemoryBankManager.retrieve_similar_memories()"
         )
 
     def retrieve_scope_memories(
@@ -715,12 +715,12 @@ class MemoryBankManager:
         target_name = self._require_memory_bank_name()
         resolved_scope = scope or {"user_id": user_id}
         validate_memory_scope(resolved_scope)
-        # TODO(lab-4): Call ``self.client.memory_banks.memories.retrieve(name=target_name,
+        # TODO(lab-3): Call ``self.client.memory_banks.memories.retrieve(name=target_name,
         # scope=resolved_scope, config={"filter_groups": [...], "filter": ...})`` and return
         # ``[{"name": item.memory.name, "fact": item.memory.fact} for item in resp.page]``.
         _ = (target_name, topic_label, source_app, extra_filter)
         raise NotImplementedError(
-            "Complete TODO(lab-4): MemoryBankManager.retrieve_scope_memories()"
+            "Complete TODO(lab-3): MemoryBankManager.retrieve_scope_memories()"
         )
 
     def get_memory(self, memory_name: str) -> Any:
@@ -743,10 +743,10 @@ class MemoryBankManager:
 
     def list_revisions(self, memory_name: str, *, filter_expr: str | None = None) -> list[Any]:
         """List immutable revisions for a memory (retained up to 48h after deletion)."""
-        # TODO(lab-4): Return ``list(self.client.memory_banks.memories.revisions.list(
+        # TODO(lab-3): Return ``list(self.client.memory_banks.memories.revisions.list(
         # name=memory_name, ...))``.
         _ = (memory_name, filter_expr)
-        raise NotImplementedError("Complete TODO(lab-4): MemoryBankManager.list_revisions()")
+        raise NotImplementedError("Complete TODO(lab-3): MemoryBankManager.list_revisions()")
 
     def get_revision(self, revision_name: str) -> Any:
         """Fetch a single memory revision snapshot."""
@@ -754,27 +754,27 @@ class MemoryBankManager:
 
     def rollback_memory(self, memory_name: str, target_revision_id: str) -> Any:
         """Roll back a memory to an earlier revision ID."""
-        # TODO(lab-4): Return ``self.client.memory_banks.memories.rollback(
+        # TODO(lab-3): Return ``self.client.memory_banks.memories.rollback(
         # name=memory_name, target_revision_id=target_revision_id)``.
         _ = (memory_name, target_revision_id)
-        raise NotImplementedError("Complete TODO(lab-4): MemoryBankManager.rollback_memory()")
+        raise NotImplementedError("Complete TODO(lab-3): MemoryBankManager.rollback_memory()")
 
     def delete_memory(self, memory_name: str, *, wait_for_completion: bool = True) -> Any:
         """Delete a single memory by resource name."""
-        # TODO(lab-4): Return ``self.client.memory_banks.memories.delete(
+        # TODO(lab-3): Return ``self.client.memory_banks.memories.delete(
         # name=memory_name, config={"wait_for_completion": wait_for_completion})``.
         _ = (memory_name, wait_for_completion)
-        raise NotImplementedError("Complete TODO(lab-4): MemoryBankManager.delete_memory()")
+        raise NotImplementedError("Complete TODO(lab-3): MemoryBankManager.delete_memory()")
 
     def purge_user_memories(self, user_id: str, force: bool = False) -> int:
         """Dry-run (``force=False``) or permanently purge (``force=True``) a user's memories."""
         target_name = self._require_memory_bank_name()
         validate_memory_scope({"user_id": user_id})
-        # TODO(lab-4): Call ``self.client.memory_banks.memories.purge(name=target_name,
+        # TODO(lab-3): Call ``self.client.memory_banks.memories.purge(name=target_name,
         # filter=f'scope.user_id="{user_id}"', force=force, config={"wait_for_completion": True})``
         # and return ``int(getattr(op.response, "purge_count", 0) or 0)``.
         _ = (target_name, force)
-        raise NotImplementedError("Complete TODO(lab-4): MemoryBankManager.purge_user_memories()")
+        raise NotImplementedError("Complete TODO(lab-3): MemoryBankManager.purge_user_memories()")
 
     def run_demo(
         self,

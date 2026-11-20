@@ -1,4 +1,4 @@
-"""Agent Runtime HTTP Contract FastAPI Server (Starter Track — Lab 3).
+"""Agent Runtime HTTP Contract FastAPI Server (Starter Track — Lab 5).
 
 Implements the verified Gemini Enterprise Agent Platform BYOC runtime contract
 (``scale/runtime/runtime-contract``) on ``0.0.0.0:8080``:
@@ -11,7 +11,7 @@ Implements the verified Gemini Enterprise Agent Platform BYOC runtime contract
   (one JSON object per line, converted to SSE by Agent Runtime; max 15 min).
 - ``GET /is_busy``: Optional keep-alive probe endpoint (``200`` busy / ``412`` idle).
 
-Complete the ``# TODO(lab-3)`` blocks below and compare with ``solution/main.py``.
+Complete the ``# TODO(lab-5)`` blocks below and compare with ``solution/main.py``.
 """
 
 from __future__ import annotations
@@ -95,14 +95,14 @@ def get_runtime_app() -> Any:
     Lazy initialization ensures the container passes startup health probes (``GET /``)
     even on first deploy under Agent Identity before env vars/secrets are attached.
     """
-    # TODO(lab-3): Import `app as adk_app` and `root_agent` from `coding_agent.agent`,
+    # TODO(lab-5): Import `app as adk_app` and `root_agent` from `coding_agent.agent`,
     # import `AdkApp` from `agentplatform.frameworks` (falling back to
     # `vertexai.agent_engines`), inspect `inspect.signature(AdkApp.__init__).parameters`
     # to pass `AdkApp(app=adk_app)` when supported (else `AdkApp(agent=root_agent)`
     # with `plugins=list(adk_app.plugins)` if available), call `set_up()` if present,
     # and return the initialized `AdkApp` instance.
     raise NotImplementedError(
-        "Complete TODO(lab-3) in starter/main.py: get_runtime_app()."
+        "Complete TODO(lab-5) in starter/main.py: get_runtime_app()."
     )
 
 
@@ -123,26 +123,26 @@ def health_check() -> dict[str, str]:
 @app.post("/api/reasoning_engine")
 async def query_endpoint(request: QueryRequest) -> responses.JSONResponse:
     """Serve unary and async ``class_method`` invocations (``:query``)."""
-    # TODO(lab-3): Resolve `request.class_method` on `get_runtime_app()` using
+    # TODO(lab-5): Resolve `request.class_method` on `get_runtime_app()` using
     # `_resolve_public_method(...)` (returning HTTP 400 JSON `{"error": ...}` if missing),
     # invoke it via `await _invoke_method(method, request.input or {})`, and return
     # `responses.JSONResponse(content=encoders.jsonable_encoder({"output": output}))`.
     _ = request
     raise NotImplementedError(
-        "Complete TODO(lab-3) in starter/main.py: POST /api/reasoning_engine."
+        "Complete TODO(lab-5) in starter/main.py: POST /api/reasoning_engine."
     )
 
 
 @app.post("/api/stream_reasoning_engine")
 async def stream_query_endpoint(request: QueryRequest) -> responses.StreamingResponse:
     """Serve streaming ``class_method`` invocations (``:streamQuery?alt=sse``) as NDJSON."""
-    # TODO(lab-3): Resolve `request.class_method` on `get_runtime_app()` using
+    # TODO(lab-5): Resolve `request.class_method` on `get_runtime_app()` using
     # `_resolve_public_method(...)` (returning HTTP 400 StreamingResponse if missing),
     # invoke it via `await _invoke_method(method, request.input or {})`, and return
     # `responses.StreamingResponse(content=_ndjson_stream(output), media_type="application/json")`.
     _ = request
     raise NotImplementedError(
-        "Complete TODO(lab-3) in starter/main.py: POST /api/stream_reasoning_engine."
+        "Complete TODO(lab-5) in starter/main.py: POST /api/stream_reasoning_engine."
     )
 
 
