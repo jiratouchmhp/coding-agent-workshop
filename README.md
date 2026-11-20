@@ -17,9 +17,99 @@ Over the course of this hands-on workshop, you evolve a single ADK Coding Agent 
 | **2. Scale** | [Lab 3: Managed Sessions, Memory Bank, Telemetry & Feedback](workshop/03-LAB-SESSIONS-MEMORY-FEEDBACK.md) | Reuses Lab 2 standalone instance: `VertexAiSessionService` & Sessions API, `VertexAiMemoryBankService` (topics, TTL, similarity retrieval), Feedback Service, GenAI OTel Tracing, parent sandbox `stdout`/`stderr` Cloud Logging & PromQL Monitoring |
 | **3. Extend** | [Lab 4: Skill Registry & Agent Registry Discovery](workshop/04-LAB-SKILLS-AND-AGENT-REGISTRY.md) | Skill Registry 16-check ZIP/`SKILL.md` packaging, Vertex AI Skill Registry upload, `GCPSkillRegistry` + `SkillToolset`, `AgentRegistry` (`google-adk[a2a,agent-identity,mcp]`) wired into `coding_agent` before deployment |
 | **2. Scale** | [Lab 5: Deploy Complete Agent ONCE (CLI & Terraform)](workshop/05-LAB-DEPLOY-RUNTIME-TERRAFORM.md) | Build & deploy the 100% feature-complete Labs 1–4 agent **once** via `agents-cli deploy` & declarative `google_vertex_ai_reasoning_engine` (`container_spec` & `source_code_spec`), Custom SA + `roles/aiplatform.memoryUser`, dual service-agent IAM `depends_on`, unified vs. decoupled `REASONING_ENGINE_NAME`, revisions, traffic splitting, emergency stop |
-| **4. Optimize** | [Lab 6: Observability, Evaluation, Alerts & Optimize](workshop/06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md) | Offline Eval (traces vs. sessions), 2-Step Simulated User Eval, Failure Clustering (`vertexai.evals`), Online Evaluation Monitors, Cloud Monitoring Quality Alerts (`monitoring_v3`), Prompt Optimization (`agents-cli eval optimize`) |
+| **4. Optimize** | [Lab 6: Observability, Evaluation, Alerts & Optimize](workshop/06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md) | Offline Eval (traces vs. sessions), 2-Step Simulated User Eval, Failure Clustering (`vertexai.evals`), Online Evaluation Monitors, Cloud Monitoring Quality Alerts (`monitoring_v3`), Dual-Track Optimization Flywheel: Root Prompt Canary (`agents-cli eval optimize` + `trafficSplitManual`) **and** Zero-Redeploy Skill Updates (`GEPARootAgentOptimizer` → Skill Registry `client.skills.update` / Agent Registry `v2` revision rollout & `v1` rollback) |
 | **3. Govern (Optional)** | [Lab 7 (Optional / Skippable): Enterprise Security & Governance Hardening](workshop/07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md) | Agent Registry `ENABLED_BLOCKING` LLM scanning & lifecycle, Semantic Governance Policies (NLC) & Model Armor, SPIFFE `AGENT_IDENTITY` + Agent Gateway Terraform upgrade path, Multi-Tenant Session/Memory IAM Conditions, Memory Poisoning audit, CMEK/VPC-SC, WORM Audit Buckets + SIEM Pub/Sub + 3-Layer Agent Anomaly Detection → SCC *(skipping Lab 7 leaves Labs 1–6 100% green!)* |
 | **Architecture** | [Lab 8: Agent Runtime vs. Self-Hosted GKE](workshop/08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) | 14-Dimension Limitations & Trade-Off Matrix comparing Agent Runtime + Managed Sandbox vs. Self-Hosted GKE + `kubernetes-sigs/agent-sandbox` + GKE Agent Substrate |
+
+---
+
+## Reference Architecture
+
+The workshop follows a **Build → Isolate → Persist → Extend → Deploy ONCE → Optimize → (Optional Harden)** lifecycle built around one core security boundary: **never execute untrusted LLM-generated commands inside your trusted Agent Runtime**.
+
+```mermaid
+flowchart LR
+    subgraph BUILD["1. BUILD PILLAR (Lab 1)"]
+        DEV["Developer IDE + Antigravity<br/>.agents/skills/* + agents-cli"]
+        ADK["ADK 2.0 Coding Agent (Python)<br/>Simple -> Collaborative -> Graph -> Dynamic<br/>+ EnvironmentToolset & services.yaml/py"]
+        LOCAL["LocalEnvironment<br/>Lab 1 Laptop Workspace"]
+        DEV --> ADK
+        ADK --> LOCAL
+    end
+
+    subgraph STATE_SBX["2. ISOLATE & STATE (Labs 2-3)"]
+        SA_INST["Standalone Agent Platform Instance<br/>client.runtimes.create() (Labs 2-3)"]
+        SBX["Managed BYOC / Shell / Code Sandbox<br/>gVisor Container - Zero Ambient Creds (Lab 2)"]
+        SESS["Managed Sessions (Lab 3)<br/>VertexAiSessionService"]
+        MEM["Memory Bank (Lab 3)<br/>VertexAiMemoryBankService"]
+        FB["Feedback & Telemetry (Lab 3)<br/>OTel, Parent Sandbox Logs, Thumbs"]
+        VPC["Customer VPC (Optional PSC-I)<br/>Cloud NGFW / SWP / DNS Peering"]
+
+        SA_INST --> SBX
+        SA_INST --> SESS
+        SA_INST --> MEM
+        SBX -. "PSC-I Egress (Optional)" .-> VPC
+    end
+
+    subgraph REG["3. EXTEND WITH REGISTRIES (Lab 4)"]
+        SKREG["Skill Registry (v1beta1)<br/>16-Check Validated ZIP Packages"]
+        AGREG["Agent Registry Discovery<br/>GCPSkillRegistry + AgentRegistry ADK Clients"]
+        SKREG --> ADK
+        AGREG --> ADK
+    end
+
+    subgraph DEPLOY["4. DEPLOY ONCE TO RUNTIME (Lab 5)"]
+        AR_IMG["Artifact Registry<br/>Complete Agent Image + BYOC Sandbox Image"]
+        TF["Terraform IaC / agents-cli deploy<br/>google_vertex_ai_reasoning_engine + Custom SA"]
+        RT["Agent Runtime (ReasoningEngine)<br/>Trusted Orchestration Plane (Labs 1-4 Complete)"]
+
+        ADK -->|"Build & Push ONCE"| AR_IMG
+        TF --> RT
+        AR_IMG -- "gcp-sa-aiplatform-re" --> RT
+        AR_IMG -- "gcp-sa-vertex-sandbox" --> SBX
+        RT -- "execute_bash / /exec / CodeExec" --> SBX
+        RT <-->|"Unified or Decoupled State"| SESS
+        RT <-->|"roles/aiplatform.memoryUser"| MEM
+        RT --> FB
+    end
+
+    subgraph OPTIMIZE["5. OPTIMIZE PILLAR (Lab 6)"]
+        OTEL["GenAI OTel Traces, Cloud Logging<br/>& Cloud Monitoring (PromQL)"]
+        EVAL["Managed Evaluation Service<br/>Offline | Simulated | Online Monitors"]
+        ALERTS["Cloud Monitoring Quality Alerts<br/>& Failure Clustering"]
+        OPT["Dual-Track Optimize Flywheel<br/>Prompt Canary + Zero-Redeploy Skill Update"]
+
+        RT --> OTEL
+        FB --> EVAL
+        OTEL --> EVAL
+        EVAL --> ALERTS
+        EVAL --> OPT
+        OPT -. "Track A: Prompt + Canary Revision" .-> RT
+        OPT -. "Track B: client.skills.update / v2 Rev (Zero Redeploy)" .-> SKREG
+    end
+
+    subgraph HARDEN["6. OPTIONAL HARDENING (Lab 7 - Skippable)"]
+        SCAN["Agent Registry (v1) ENABLED_BLOCKING<br/>LLM Scanning + Custom Org Policy"]
+        SGP["Semantic Governance (NLC) & Model Armor<br/>Egress Agent Gateway"]
+        SPIFFE["SPIFFE AGENT_IDENTITY Upgrade<br/>3-Identity Delegation + IAM Conditions + CMEK/VPC-SC"]
+        SECOPS["WORM Audit Bucket + SIEM Pub/Sub<br/>+ 3-Layer Agent Anomaly Detection -> SCC"]
+
+        SCAN -.-> AGREG
+        SGP -. "Intercepts load_skill / scripts" .-> RT
+        SPIFFE -. "Immutable Runtime Upgrade" .-> RT
+        RT -.-> SECOPS
+    end
+```
+
+### Key Architectural Highlights
+
+- **Trusted Orchestration vs. Untrusted Execution:** **Agent Runtime (`ReasoningEngine`)** holds the runtime identity, calls Gemini models, reads/writes Managed Sessions & Memory Bank, and emits OTel telemetry; **Managed Sandboxes (`SandboxEnvironment`)** execute LLM-generated shell/test commands inside a **gVisor-isolated container** (`appuser`) with **zero IAM roles**, **no ADC**, and **no metadata server access (`169.254.169.254`)**.
+- **Build Complete Before Deploying Once:** Labs 2 & 3 run against a lightweight standalone Agent Platform backing instance (`client.runtimes.create()`, ~3 seconds), and Lab 4 wires Skill Registry + Agent Registry directly into `coding_agent/` — so Lab 5 containerizes and deploys the **100% feature-complete** agent **once** via `agents-cli` & Terraform.
+- **Portable ADK 2.0 Architectures:** Toggle `AGENT_ARCHITECTURE` across `simple` (default), `collaborative` (`single_turn`/`task` subagents + `GlobalInstructionPlugin`), `graph` (deterministic `Workflow`, `JoinNode`, `RetryConfig`, `RequestInput`), and `dynamic` (`@node(rerun_on_resume=True)`, `asyncio.gather(..., use_sub_branch=True)`) with zero changes to your sandbox or container contract.
+- **Dual-Track Optimization Flywheel:** Root-prompt fixes roll out safely via Agent Runtime `v1beta1` `trafficSplitManual` canaries, while domain skill improvements (`GEPARootAgentOptimizer`) hot-update live via `client.skills.update(...)` or immutable Agent Registry `v2` revisions with **zero agent container rebuild**.
+- **Cleanly Skippable Security & Governance (Lab 7):** Enterprise hardening (Agent Registry `ENABLED_BLOCKING` scanning, NLC Semantic Governance, Model Armor, SPIFFE `AGENT_IDENTITY`, IAM Conditions, CMEK/VPC-SC, WORM/SIEM/SCC) is isolated in [Optional Lab 7](workshop/07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md) so time-constrained workshops can skip directly from Lab 6 to [Lab 8 (Agent Runtime vs. GKE)](workshop/08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) with zero broken checkpoints.
+
+*(For full executive narrative, GCP quota math, and detailed prerequisites, see [workshop/00-WORKSHOP-OVERVIEW.md](workshop/00-WORKSHOP-OVERVIEW.md).)*
 
 ---
 

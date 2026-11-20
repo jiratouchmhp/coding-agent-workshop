@@ -70,14 +70,15 @@ flowchart LR
         OTEL["GenAI OTel Traces, Cloud Logging<br/>& Cloud Monitoring (PromQL)"]
         EVAL["Managed Evaluation Service<br/>Offline | Simulated | Online Monitors"]
         ALERTS["Cloud Monitoring Quality Alerts<br/>& Failure Clustering"]
-        OPT["Optimize Flywheel<br/>agents-cli eval optimize + Canary"]
+        OPT["Dual-Track Optimize Flywheel<br/>Prompt Canary + Zero-Redeploy Skill Update"]
 
         RT --> OTEL
         FB --> EVAL
         OTEL --> EVAL
         EVAL --> ALERTS
         EVAL --> OPT
-        OPT -. "Improved Instructions & Revision" .-> RT
+        OPT -. "Track A: Prompt + Canary Revision" .-> RT
+        OPT -. "Track B: client.skills.update / v2 Rev (Zero Redeploy)" .-> SKREG
     end
 
     subgraph HARDEN["6. OPTIONAL HARDENING (Lab 7 - Skippable)"]
