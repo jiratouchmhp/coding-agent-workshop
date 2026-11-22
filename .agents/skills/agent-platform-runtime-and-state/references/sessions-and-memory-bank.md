@@ -12,7 +12,7 @@ Production reference for stateful agent persistence on Gemini Enterprise Agent P
 | **Data Model** | Chronological `SessionEvent` stream + mutable `state` dict | Self-contained natural-language `Memory.fact` items AND/OR static-schema `STRUCTURED_PROFILE` records |
 | **ADK Service** | `VertexAiSessionService(project, location, agent_engine_id)` | `VertexAiMemoryBankService(project, location, agent_engine_id)` (auto-scopes to `{"user_id", "app_name"}`) |
 | **Direct SDK Namespace** | `client.sessions.{create,get,list,delete}` + `client.sessions.events.{list,append}` | `client.memory_banks.{create,delete,ingest_events}` + `client.memory_banks.memories.*` |
-| **Parent Resource** | Standalone `reasoningEngines` instance (no code deploy needed) or deployed runtime | Same (can pair a multi-regional `us` Memory Bank with a single-region `us-central1` deployed `AdkApp`) |
+| **Parent Resource** | Standalone `reasoningEngines` instance (no code deploy needed) or deployed runtime | Same (run both in `asia-southeast1` Singapore, or pair a multi-regional `us`/`eu` Memory Bank with a single-region deployed `AdkApp`) |
 
 ---
 
@@ -41,13 +41,13 @@ from google.genai import types
 os.environ["GOOGLE_GENAI_USE_ENTERPRISE"] = "TRUE"
 
 # 1. Standalone parent instance for Sessions (no code deployment required)
-client = agentplatform.Client(project="PROJECT_ID", location="us-central1")
+client = agentplatform.Client(project="PROJECT_ID", location="asia-southeast1")
 parent = client.runtimes.create(config={"display_name": "Workshop Session Store"})
 agent_engine_id = parent.api_resource.name.split("/")[-1]
 
 # 2. Wire ADK Runner to VertexAiSessionService
-root_agent = adk.Agent(model="gemini-3.5-flash", name="coding_agent", instruction="Help with code.")
-session_service = VertexAiSessionService(project="PROJECT_ID", location="us-central1", agent_engine_id=agent_engine_id)
+root_agent = adk.Agent(model="gemini-2.5-flash", name="coding_agent", instruction="Help with code.")
+session_service = VertexAiSessionService(project="PROJECT_ID", location="asia-southeast1", agent_engine_id=agent_engine_id)
 runner = Runner(agent=root_agent, app_name="coding_agent", session_service=session_service)
 
 async def main():
@@ -89,8 +89,8 @@ asyncio.run(main())
 ```python
 import datetime, agentplatform
 
-client = agentplatform.Client(project="PROJECT_ID", location="us-central1")
-runtime_name = "projects/PROJECT_ID/locations/us-central1/reasoningEngines/AGENT_ENGINE_ID"
+client = agentplatform.Client(project="PROJECT_ID", location="asia-southeast1")
+runtime_name = "projects/PROJECT_ID/locations/asia-southeast1/reasoningEngines/AGENT_ENGINE_ID"
 
 # LRO return-shape guard: handle both session_op.response.name and session_op.name across SDK builds
 session_op = client.sessions.create(
@@ -146,7 +146,7 @@ client.sessions.delete(name=session_name)
 - **Unsupported regions:** `asia-southeast2`, `australia-southeast2`, `northamerica-northeast2`. Multi-regional (`us`, `eu`) and `global` are supported.
 - **Generation LLM:** Defaults to **`gemini-3.5-flash`** effective **June 29, 2026** (earlier instances use `gemini-2.5-flash`). Routing: `us`/`us-*` -> `us`, `eu`/`eu-*` -> `eu`, others -> `global`.
 - **Embedding Model:** Defaults to **`text-embedding-005`** (multilingual alternatives: `gemini-embedding-2`, `gemini-embedding-001`, `text-multilingual-embedding-002`).
-  - **CRITICAL TRAP 1:** `gemini-embedding-2` ONLY accepts `global`, `us`, or `eu` in its model resource name—NOT regional locations like `us-central1`.
+  - **CRITICAL TRAP 1:** `gemini-embedding-2` ONLY accepts `global`, `us`, or `eu` in its model resource name—NOT regional locations like `asia-southeast1` or `us-central1`.
   - **CRITICAL TRAP 2:** The embedding model can **only be changed before the first memory is stored**.
 - **Verified Upstream SDK Key Discrepancies:**
   1. `client.memory_banks.create(managed_semantic_memory_config={...})` uses **`"unstructured_memory_configs"`**, whereas `client.runtimes.update(name=..., config={"context_spec": {"memory_bank_config": {...}}})` uses **`"customization_configs"`**.
@@ -158,14 +158,14 @@ client.sessions.delete(name=session_name)
 ```python
 import agentplatform
 
-client = agentplatform.Client(project="PROJECT_ID", location="us")
+client = agentplatform.Client(project="PROJECT_ID", location="asia-southeast1")  # Or multi-regional "us" / "eu" / "global"
 
 memory_cfg = {
     "generation_config": {
         "model": "projects/PROJECT_ID/locations/global/publishers/google/models/gemini-3.5-flash"
     },
     "similarity_search_config": {
-        "embedding_model": "projects/PROJECT_ID/locations/us/publishers/google/models/text-embedding-005"
+        "embedding_model": "projects/PROJECT_ID/locations/asia-southeast1/publishers/google/models/text-embedding-005"  # Use "global"/"us"/"eu" if switching to gemini-embedding-2
     },
     "ttl_config": {
         "granular_ttl": {
@@ -237,14 +237,15 @@ client.runtimes.update(
 - **Write callbacks:** Prefer incremental `callback_context.add_events_to_memory(events=...)` (backed by `IngestEvents`; pass `custom_metadata={"wait_for_completion": True}` in tests/demos) over full-session `add_session_to_memory()`.
 - **Read tools:** `PreloadMemoryTool()` (auto-injects every turn), `LoadMemoryTool()` (model-decided), or a custom `FunctionTool` calling `await tool_context.search_memory(query)`.
 - **ADK Web CLI:** `adk web --memory_service_uri=agentengine://$MEMORY_BANK_ID memory_agent` (default user is `user`; override with `?userId=USER_ID`). Also supported on `adk deploy cloud_run` and `adk deploy gke`.
-- **Pairing multi-regional (`us`) Memory Bank with single-region (`us-central1`) `AdkApp`:**
+- **Pairing a single-region (`asia-southeast1`) `AdkApp` with a regional or multi-regional (`us`) Memory Bank:**
 
 ```python
 from agentplatform.frameworks import AdkApp
 from google.adk.memory import VertexAiMemoryBankService
 
 def memory_bank_service_builder() -> VertexAiMemoryBankService:
-    return VertexAiMemoryBankService(project="PROJECT_ID", location="us", agent_engine_id="MEMORY_BANK_ID")
+    # Default regional APAC Memory Bank (`asia-southeast1`), or multi-regional `"us"` / `"eu"` / `"global"`
+    return VertexAiMemoryBankService(project="PROJECT_ID", location="asia-southeast1", agent_engine_id="MEMORY_BANK_ID")
 
 adk_app = AdkApp(agent=root_agent, memory_service_builder=memory_bank_service_builder)
 ```
@@ -265,14 +266,14 @@ adk_app = AdkApp(agent=root_agent, memory_service_builder=memory_bank_service_bu
 ```python
 import datetime, agentplatform
 
-client = agentplatform.Client(project="PROJECT_ID", location="us")
-mb_name = "projects/PROJECT_ID/locations/us/reasoningEngines/MEMORY_BANK_ID"
+client = agentplatform.Client(project="PROJECT_ID", location="asia-southeast1")  # Or multi-regional "us" / "eu" / "global"
+mb_name = "projects/PROJECT_ID/locations/asia-southeast1/reasoningEngines/MEMORY_BANK_ID"
 
 # 1. Generate from Managed Session (wait_for_completion=False recommended in prod; default True blocks!)
 op = client.memory_banks.memories.generate(
     name=mb_name,
     vertex_session_source={
-        "session": "projects/PROJECT_ID/locations/us/reasoningEngines/ENGINE_ID/sessions/SESSION_ID",
+        "session": "projects/PROJECT_ID/locations/asia-southeast1/reasoningEngines/ENGINE_ID/sessions/SESSION_ID",
         "start_time": datetime.datetime.now(tz=datetime.timezone.utc) - datetime.timedelta(hours=1),
         "end_time": datetime.datetime.now(tz=datetime.timezone.utc),
     },
@@ -416,6 +417,6 @@ False or malicious instructions in conversation history can be persisted into Me
 - **Verify Memory Bank:** Call `memories.generate(..., config={"wait_for_completion": True})`, call `memories.retrieve(..., similarity_search_params={"search_query": "...", "top_k": 3})`, inspect `.page`, then dry-run `memories.purge(..., force=False)` before `force=True`.
 - **Common errors:**
   - `adk web --session_service_uri` fails to find project/location -> export `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` in the shell (`.env` is ignored).
-  - `gemini-embedding-2` creation fails -> change model location segment to `global`, `us`, or `eu` (never `us-central1`).
+  - `gemini-embedding-2` creation fails -> change model location segment to `global`, `us`, or `eu` (never regional locations like `asia-southeast1` or `us-central1`).
   - `FAILED_PRECONDITION` deleting runtime after chat -> wait ~1 min for async memory generation to settle and retry.
   - `PERMISSION_DENIED` on `ListSessions` / `ListMemories` / `PurgeMemories` -> IAM Conditions are unsupported on those RPCs; grant unconditional role or use scoped `retrieve`.

@@ -85,6 +85,8 @@ ENTRYPOINT ["python3", "/opt/sandbox_runner/runner.py"]
 
 ## 2. Artifact Registry, Vulnerability Scanning & Service Agent IAM
 
+> **APAC Multi-Region Topology (Bangkok Primary + Singapore Sandbox):** Managed Scale Sandboxes and Agent Runtime are live in **Singapore (`asia-southeast1`)** and are not yet available in **Bangkok (`asia-southeast3`)**. APAC teams using Bangkok as their primary region pair **`BUILD_LOCATION=asia-southeast3`** (remote Cloud Build) and **`AR_LOCATION=asia-southeast3`** (Artifact Registry in Bangkok) with **`GOOGLE_CLOUD_LOCATION=asia-southeast1`** (Managed Sandbox in Singapore). If strict same-region image pulls are preferred for startup latency or egress policy, host or mirror the Artifact Registry repository in `asia-southeast1` (`AR_LOCATION=asia-southeast1`).
+
 ### Step 1: Create Artifact Registry Repo (Optional CMEK on AR Repo)
 
 > **CMEK Boundary:** Parent `ReasoningEngine` CMEK encrypts sandbox runtime boot disks and snapshot buckets, **not** source images stored in Artifact Registry. To encrypt BYOC images at rest with your own key, configure CMEK directly on the Artifact Registry repository (`--kms-key=...`).
@@ -92,7 +94,10 @@ ENTRYPOINT ["python3", "/opt/sandbox_runner/runner.py"]
 ```bash
 export PROJECT_ID="YOUR_PROJECT_ID"
 export PROJECT_NUMBER="$(gcloud projects describe "${PROJECT_ID}" --format='value(projectNumber)')"
-export REGION="us-central1"
+export PRIMARY_REGION="${PRIMARY_REGION:-asia-southeast3}"               # Bangkok primary region
+export GOOGLE_CLOUD_LOCATION="${GOOGLE_CLOUD_LOCATION:-asia-southeast1}" # Singapore (nearest supported Agent Platform / Sandbox region)
+export AR_LOCATION="${AR_LOCATION:-${PRIMARY_REGION}}"                   # Bangkok primary AR (or asia-southeast1 for same-region pull)
+export BUILD_LOCATION="${BUILD_LOCATION:-${PRIMARY_REGION}}"             # Bangkok remote Cloud Build (zero local Docker)
 export REPO_NAME="coding-agent-repo"
 
 # Enable required APIs
@@ -106,18 +111,18 @@ gcloud services enable \
 # Create Docker repository (add --kms-key=... if CMEK for source images is required)
 gcloud artifacts repositories create "${REPO_NAME}" \
     --repository-format=docker \
-    --location="${REGION}" \
+    --location="${AR_LOCATION}" \
     --description="BYOC sandbox and agent container images" \
     --project="${PROJECT_ID}"
 ```
 
 ### Step 2: Grant `roles/artifactregistry.reader` to the Agent Sandbox Service Agent
 
-**Critical:** Grant pull access to **`gcp-sa-vertex-sandbox`** (NOT `gcp-sa-aiplatform-re` or `gcp-sa-aiplatform`).
+**Critical:** Grant pull access to **`gcp-sa-vertex-sandbox`** (NOT `gcp-sa-aiplatform-re` or `gcp-sa-aiplatform`) on the repository in `${AR_LOCATION}`.
 
 ```bash
 gcloud artifacts repositories add-iam-policy-binding "${REPO_NAME}" \
-    --location="${REGION}" \
+    --location="${AR_LOCATION}" \
     --project="${PROJECT_ID}" \
     --member="serviceAccount:service-${PROJECT_NUMBER}@gcp-sa-vertex-sandbox.iam.gserviceaccount.com" \
     --role="roles/artifactregistry.reader"
@@ -134,27 +139,28 @@ data "google_project" "current" {
 
 resource "google_artifact_registry_repository_iam_member" "sandbox_pull_reader" {
   project    = var.project_id
-  location   = var.region
+  location   = var.ar_location # Default "asia-southeast3" (Bangkok primary AR; or "asia-southeast1" for same-region pull)
   repository = var.artifact_registry_repo
   role       = "roles/artifactregistry.reader"
   member     = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-vertex-sandbox.iam.gserviceaccount.com"
 }
 ```
 
-### Step 3: Build, Push & Scan the BYOC Image
+### Step 3: Build, Push & Scan the BYOC Image (Zero-Docker Primary Path)
 
-Prefer `linux/amd64` (match target sandbox server architecture, especially if you plan to take snapshots).
+Use **Cloud Build (`gcloud builds submit --region=...`)** as the **primary zero-Docker path** — no local Docker daemon is required, and Cloud Build compiles `linux/amd64` images directly in your target build region (matching sandbox CPU architecture for snapshot compatibility). Local `docker build` / `docker push` is strictly optional. For rapid prototyping without building any image, use Managed Shell Sandbox (`SANDBOX_MODE=shell`) as a zero-build fast-track.
 
 ```bash
-export IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/coding-sandbox:v1"
+export IMAGE_URI="${AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/coding-sandbox:v1"
 
-# Option A: Cloud Build (no local Docker daemon required; builds linux/amd64)
+# Primary (Zero-Docker): Remote Cloud Build (e.g., BUILD_LOCATION=asia-southeast3 in Bangkok)
 gcloud builds submit ./sandbox_image \
+    --region="${BUILD_LOCATION}" \
     --tag="${IMAGE_URI}" \
     --project="${PROJECT_ID}"
 
-# Option B: Local Docker build & push
-gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+# Optional (Local Docker workstation only): Local linux/amd64 build & push
+gcloud auth configure-docker "${AR_LOCATION}-docker.pkg.dev" --quiet
 docker build --platform linux/amd64 -t "${IMAGE_URI}" ./sandbox_image
 docker push "${IMAGE_URI}"
 
@@ -169,15 +175,19 @@ gcloud artifacts docker images list-vulnerabilities "${IMAGE_URI}" --project="${
 Creating a `SandboxEnvironmentTemplate` triggers **pre-warmed pools** associated with the template for faster, more reliable startup times. Always pass `http_options={"api_version": "v1beta1"}`.
 
 ```python
+import os
 import agentplatform
 
-PROJECT_ID = "YOUR_PROJECT_ID"
-LOCATION = "us-central1"
-IMAGE_URI = f"{LOCATION}-docker.pkg.dev/{PROJECT_ID}/coding-agent-repo/coding-sandbox:v1"
+PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "YOUR_PROJECT_ID")
+# Managed Sandbox region: Singapore (asia-southeast1) — nearest supported Agent Platform region
+SANDBOX_LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION", "asia-southeast1")
+# Artifact Registry region: Bangkok primary (asia-southeast3), or asia-southeast1 for same-region pull
+AR_LOCATION = os.environ.get("AR_LOCATION", "asia-southeast3")
+IMAGE_URI = f"{AR_LOCATION}-docker.pkg.dev/{PROJECT_ID}/coding-agent-repo/coding-sandbox:v1"
 
 client = agentplatform.Client(
     project=PROJECT_ID,
-    location=LOCATION,
+    location=SANDBOX_LOCATION,
     http_options={"api_version": "v1beta1"},
 )
 
@@ -238,8 +248,8 @@ Templates do **not** have a documented SDK in-place update method:
 
 | Symptom / Error | Root Cause | Fix |
 |---|---|---|
-| Image pull `PERMISSION_DENIED` / `403` during template or sandbox creation | `roles/artifactregistry.reader` granted to `gcp-sa-aiplatform-re` instead of `gcp-sa-vertex-sandbox`, or wrong project number | Bind `roles/artifactregistry.reader` on the AR repo to `service-PROJECT_NUMBER@gcp-sa-vertex-sandbox.iam.gserviceaccount.com`. |
-| Sandbox reaches `STATE_TERMINATED` immediately on startup | Container entrypoint requires `root`, `sudo`, privileged syscalls blocked by gVisor, or crashes on missing env vars | Test locally with `docker run --rm --cap-drop=ALL --security-opt=no-new-privileges`; verify `USER appuser` and read-only runner permissions. |
+| Image pull `PERMISSION_DENIED` / `403` during template or sandbox creation | `roles/artifactregistry.reader` granted to `gcp-sa-aiplatform-re` instead of `gcp-sa-vertex-sandbox`, wrong project number, or IAM bound in wrong `AR_LOCATION` | Bind `roles/artifactregistry.reader` on the AR repo in `${AR_LOCATION}` (e.g., `asia-southeast3` or `asia-southeast1`) to `service-PROJECT_NUMBER@gcp-sa-vertex-sandbox.iam.gserviceaccount.com`. |
+| Sandbox reaches `STATE_TERMINATED` immediately on startup | Container entrypoint requires `root`, `sudo`, privileged syscalls blocked by gVisor, or crashes on missing env vars | Smoke-test `runner.py` locally with pure Python first (zero Docker), and optionally run `docker run --rm --cap-drop=ALL --security-opt=no-new-privileges`; verify `USER appuser` and read-only runner permissions. |
 | API rejects `custom_container_environment` or `egress_control_config` fields | Client initialized without `v1beta1` | Pass `http_options={"api_version": "v1beta1"}` to `agentplatform.Client(...)`. |
 | First cold-start sandbox takes >30 seconds | Initial cold provisioning of unprovisioned capacity takes up to **2 minutes** | Reuse one `SandboxEnvironmentTemplate` so pre-warmed pools serve subsequent sandboxes in seconds. |
 | Snapshot restore fails after pushing a new image to `:latest` | Snapshot restore requires identical CPU architecture (`amd64` vs `arm64`), runtime version, and `image_uri` | Pin immutable tags (`:v1`, `:sha-...`) per template version. |
@@ -249,7 +259,40 @@ Templates do **not** have a documented SDK in-place update method:
 
 ## 5. Verification Steps
 
-### Local Container Smoke & Security Check
+### Option A (Primary — Zero-Docker): Pure-Python Local `runner.py` Smoke Test
+
+Verify the stdlib HTTP runner locally without requiring a Docker daemon:
+
+```bash
+# 1. Start runner.py locally bound to localhost against a temporary workspace
+mkdir -p /tmp/byoc-smoke-ws
+SANDBOX_WORKSPACE=/tmp/byoc-smoke-ws \
+SANDBOX_HOST=127.0.0.1 \
+SANDBOX_PORT=8080 \
+python3 ./sandbox_image/runner.py &
+RUNNER_PID=$!
+trap 'kill "${RUNNER_PID}" 2>/dev/null || true' EXIT
+sleep 1
+
+# 2. Verify /health reports non-root UID != 0 and confined workspace
+curl -sS http://127.0.0.1:8080/health | jq .
+
+# 3. Verify /exec returns the Shell-aligned JSON schema {"stdout","stderr","returncode","duration_ms"}
+curl -sS -X POST http://127.0.0.1:8080/exec \
+    -H "Content-Type: application/json" \
+    -d '{"command": "id && pwd", "cwd": "/tmp/byoc-smoke-ws", "timeout": 15}' | jq .
+
+# 4. Expect HTTP 400 when attempting cwd escape outside SANDBOX_WORKSPACE
+curl -sS -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:8080/exec \
+    -H "Content-Type: application/json" \
+    -d '{"command": "ls", "cwd": "/etc"}'
+
+kill "${RUNNER_PID}"
+```
+
+### Option B (Optional — Local Docker): Container Capability & Non-Root Check
+
+Run when a local Docker daemon is available to validate dropped Linux capabilities and `USER appuser` image hardening:
 
 ```bash
 # 1. Run container locally with dropped capabilities and verify non-root UID
@@ -276,9 +319,9 @@ docker stop byoc-smoke
 ### Cloud IAM & Provisioning Check
 
 ```bash
-# Confirm gcp-sa-vertex-sandbox holds roles/artifactregistry.reader
+# Confirm gcp-sa-vertex-sandbox holds roles/artifactregistry.reader in AR_LOCATION
 gcloud artifacts repositories get-iam-policy "${REPO_NAME}" \
-    --location="${REGION}" \
+    --location="${AR_LOCATION}" \
     --project="${PROJECT_ID}" \
     --format="yaml(bindings)" | grep -B2 -A4 "gcp-sa-vertex-sandbox"
 ```

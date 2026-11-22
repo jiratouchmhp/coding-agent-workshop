@@ -139,7 +139,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--project", help="GCP project ID (defaults to GOOGLE_CLOUD_PROJECT).")
     parser.add_argument(
         "--location",
-        help=f"Eval region ({len(SUPPORTED_EVAL_LOCATIONS)} supported regions incl. global).",
+        help=(
+            f"Eval region ({len(SUPPORTED_EVAL_LOCATIONS)} supported locations: "
+            "14 US/EU regions + global; defaults to EVAL_LOCATION / 'global')."
+        ),
     )
     parser.add_argument("--count", type=int, default=5, help="Number of scenarios to synthesize.")
     parser.add_argument(
@@ -182,7 +185,9 @@ def main(argv: list[str] | None = None) -> int:
     settings = get_settings()
 
     location = validate_eval_location(
-        args.location or os.environ.get("EVAL_LOCATION") or settings.google_cloud_location
+        (args.location or "").strip()
+        or os.environ.get("EVAL_LOCATION", "").strip()
+        or settings.eval_location
     )
     project_id = args.project or settings.google_cloud_project
 
@@ -205,13 +210,14 @@ def main(argv: list[str] | None = None) -> int:
         ],
         "equivalent_agents_cli_commands": [
             (
-                f"agents-cli eval dataset synthesize --count {args.count} "
+                f"GOOGLE_CLOUD_LOCATION={location} agents-cli eval dataset synthesize --count {args.count} "
                 f"--instruction {json.dumps(args.generation_instruction)} "
                 f"--environment-context {json.dumps(args.environment_context)} "
                 "-o artifacts/traces/synth_traces.json"
             ),
             (
-                "agents-cli eval grade --traces artifacts/traces/synth_traces.json "
+                f"agents-cli eval grade --traces artifacts/traces/synth_traces.json "
+                f"--region {location} "
                 "--metrics multi_turn_task_success,multi_turn_tool_use_quality,multi_turn_trajectory_quality"
             ),
         ],

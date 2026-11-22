@@ -2,7 +2,7 @@
 
 Source-verified reference covering all 6 official ADK 2.0 Graph & Dynamic Workflow guides (`adk.dev/graphs/`, `routes`, `data-handling`, `human-input`, `retry`, `dynamic`) plus ADK 2.0 compatibility notes (`adk.dev/2.0/`).
 
-> **Model ID Note:** Upstream `adk.dev` snippets often use `"gemini-flash-latest"`, which can return `404` on regional Agent Platform endpoints (such as `us-central1`). The Python examples below use explicit versioned IDs (e.g., `"gemini-2.5-flash"`).
+> **Model ID Note:** Upstream `adk.dev` snippets often use `"gemini-flash-latest"`, which can return `404` on regional Agent Platform endpoints (such as `asia-southeast1`). The Python examples below use explicit versioned IDs (e.g., `"gemini-2.5-flash"`).
 
 ---
 

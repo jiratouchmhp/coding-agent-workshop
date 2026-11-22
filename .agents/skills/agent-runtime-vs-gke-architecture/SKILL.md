@@ -56,6 +56,7 @@ What constraint dominates your agent architecture?
 | **> 1,000 concurrent sandboxes/region or > 100 VPC-SC instances** | **GKE Agent Substrate** (CPU) or **GKE Agent Sandbox** (GPU/Pod) | Managed Code Exec defaults to 1,000 entities/region; VPC-SC/PSC-I caps Agent Runtime `max_instances` at `100`. |
 | **Zero-ops 3LO OAuth user consent + native Gemini app publish** | **Agent Runtime** (optionally Pattern B for heavy execution) | Cloud Run/GKE lack managed 3LO OAuth and only support A2A `publish gemini` (not native ADK `:streamQuery`). |
 | **No-downtime instant rollback via CLI** | **GKE (`kubectl rollout undo`)**, **Cloud Run (`update-traffic`)**, or **Agent Runtime `v1beta1` `trafficSplitManual`** | `agents-cli` has no revision rollback command on `agent_runtime`; Agent Runtime Gateway changes irreversibly archive prior revisions. |
+| **Strict in-country compute residency (e.g., Thailand PDPA / BoT)** | **Self-Hosted GKE + GKE Agent Sandbox (`asia-southeast3` Bangkok)** | GKE, AR, Cloud Build, Secret Manager & Agent Registry are live in Bangkok (`asia-southeast3`) today; Agent Runtime/Managed Sandboxes run in Singapore (`asia-southeast1`). |
 
 ### Hard Limits At-a-Glance Cheatsheet
 
@@ -122,10 +123,10 @@ print(sb.commands.run("echo ok").stdout)
 
 ### 3. Hybrid Pattern A (GKE/Cloud Run Agent -> Managed Scale Sandbox) & `agents-cli` Target Switch
 ```python
-# Run from GKE/Cloud Run/local with roles/aiplatform.user (no code deployed to Agent Runtime needed)
+# Run from GKE (e.g., Bangkok asia-southeast3) / Cloud Run / local with roles/aiplatform.user (no code deployed to Agent Runtime needed)
 import agentplatform
-client = agentplatform.Client(project="PROJECT_ID", location="us-central1", http_options={"api_version": "v1beta1"})
-parent_name = client.runtimes.create().api_resource.name  # Minimal parent ReasoningEngine for sandboxes
+client = agentplatform.Client(project="PROJECT_ID", location="asia-southeast1", http_options={"api_version": "v1beta1"})
+parent_name = client.runtimes.create().api_resource.name  # Minimal parent ReasoningEngine for Managed Sandboxes in Singapore
 ```
 ```bash
 # Graduate an existing agents-cli project from agent_runtime -> gke (preview first with --dry-run)

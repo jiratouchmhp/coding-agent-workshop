@@ -54,7 +54,7 @@ Verified reference for `google/agents-cli` (`~= 1.15.0`) covering installation, 
 |---|---|---|---|
 | `--agent` | `-a` | `adk_python` (with `-y`) | Built-in: `adk_python` (alias `adk`), `adk_go`. Custom: `local@/path` or `<org>/<repo>[/<path>][@<ref>]` (e.g., `google/agents-cli-extensions/core/langchain/template`). |
 | `--deployment-target` | `-d` | `agent_runtime` (with `-y`) | `agent_runtime`, `cloud_run`, `gke`, or `none` (code-only, still generates `Dockerfile`). |
-| `--region` | — | `us-east1` | GCP region (e.g., `us-central1`). |
+| `--region` | — | `us-east1` | GCP region (workshop Agent Runtime default: `asia-southeast1` Singapore). |
 | `--prototype` | `-p` | off | Skip CI/CD and Terraform (recommended first pass; upgrade later with `scaffold enhance`). |
 | `--adk` | — | off | Quickstart shortcut: `adk_python` + `agent_runtime` + `--prototype`, skips prompts. **Python only** (for Go use `--agent adk_go --prototype --yes`). |
 | `--session-type` | — | — | `in_memory`, `cloud_sql`, `agent_platform_sessions` — for `cloud_run` / `gke` ONLY (`agent_runtime` manages sessions itself and overrides/clears `session_type`). |

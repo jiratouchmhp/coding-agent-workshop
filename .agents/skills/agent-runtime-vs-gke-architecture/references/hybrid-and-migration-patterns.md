@@ -19,10 +19,10 @@ from google.adk.code_executors.agent_engine_sandbox_code_executor import (
     AgentEngineSandboxCodeExecutor,
 )
 
-# One-time setup: create a minimal parent ReasoningEngine (no runtime container deployed)
+# One-time setup: create a minimal parent ReasoningEngine in Singapore (no runtime container deployed)
 client = agentplatform.Client(
     project="PROJECT_ID",
-    location="us-central1",
+    location="asia-southeast1",
     http_options={"api_version": "v1beta1"},
 )
 parent_engine_name = client.runtimes.create().api_resource.name
@@ -57,7 +57,7 @@ remote_agent = client.runtimes.create(
     agent=local_agent,
     config={
         "psc_interface_config": {
-            "network_attachment": "projects/PROJECT_ID/regions/us-central1/networkAttachments/gke-bridge-na",
+            "network_attachment": "projects/PROJECT_ID/regions/asia-southeast1/networkAttachments/gke-bridge-na",
             "dns_peering_configs": [
                 {
                     "domain": "sandbox.internal.",
@@ -95,11 +95,11 @@ gcloud projects add-iam-policy-binding "projects/${GOOGLE_CLOUD_PROJECT}" \
   --member="principal://iam.googleapis.com/projects/${GOOGLE_CLOUD_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GOOGLE_CLOUD_PROJECT}.svc.id.goog/subject/ns/default/sa/default" \
   --condition=None
 
-# Deploy (Python ONLY — Go must deploy manually via gcloud builds submit + kubectl)
+# Deploy (Python ONLY — Go must deploy manually via gcloud builds submit + kubectl; Bangkok GKE default)
 adk deploy gke \
   --project="${GOOGLE_CLOUD_PROJECT}" \
   --cluster_name="${CLUSTER_NAME}" \
-  --region="${GOOGLE_CLOUD_LOCATION}" \
+  --region="${GKE_LOCATION:-asia-southeast3}" \
   --service_type=ClusterIP \
   --with_ui \
   --log_level=info \
@@ -138,8 +138,8 @@ curl -X POST "${APP_URL}/run_sse" -H "Content-Type: application/json" \
 ### 3.1 Progressive Graduation Workflow (`agent_runtime` -> `cloud_run` / `gke`)
 
 ```bash
-# 1. Start fast on Agent Runtime (or cloud_run for Eventarc/IAP/WebSockets)
-agents-cli create coding-agent --agent adk_python -d agent_runtime --bq-analytics
+# 1. Start fast on Agent Runtime in Singapore (or cloud_run for Eventarc/IAP/WebSockets)
+agents-cli create coding-agent --agent adk_python -d agent_runtime --region asia-southeast1 --bq-analytics
 # Run Terraform infra BEFORE first deploy if you want GCS/BQ prompt-response logging
 agents-cli infra single-project --apply --project "${DEV_PROJECT_ID}"
 agents-cli eval run

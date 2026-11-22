@@ -12,7 +12,7 @@ Google Cloud exposes **two separate skill registry surfaces** (both in Preview).
 |---|---|---|
 | **REST Endpoint** | `https://LOCATION-aiplatform.googleapis.com/v1beta1/projects/PROJECT_ID/locations/LOCATION/skills` | `https://agentregistry.googleapis.com/v1/projects/PROJECT_ID/locations/LOCATION/skills` |
 | **CLI / SDK Surface** | Python `import agentplatform` (`google-cloud-aiplatform`), Node.js `@google-cloud/agentplatform`, REST `v1beta1` | `gcloud agent-registry skills ...`, `gcloud agent-registry skills revisions ...`, `gcloud agent-registry findings ...`, REST `v1` |
-| **Supported Locations** | `us-central1` (Iowa), `europe-west4` (Netherlands), `us-east5` (Columbus, Ohio) | `global`, multi-regions (`us`, `eu`), or regional (`us-central1`, `europe-west1`, etc.) |
+| **Supported Locations** | `us-central1` (Iowa), `europe-west4` (Netherlands), `us-east5` (Columbus, Ohio) (`SKILL_REGISTRY_LOCATION`) | `global`, multi-regions (`us`, `eu`), or regional (`asia-southeast3` Bangkok primary, `asia-southeast1`, `us-central1`, etc.) |
 | **Compressed ZIP Max** | **10 MB** | **1 MB** |
 | **Uncompressed Max** | **500 MB** total | **10 MB** total & **1 MB** per individual file (when scanning is enabled) |
 | **Skill ID Rules** | `SKILL_ID` 1–63 chars (`[a-z0-9-]`), starts with letter, ends with letter/number, **cannot start with `gcp-`**. Immutable; delete locks reuse for at least 24h (see §3). | Registry auto-assigns default `private` publisher and prepends **`private-`** (`private-SKILL_ID`). Must use `private-SKILL_ID` on all subsequent operations. |
@@ -115,9 +115,12 @@ BASE64_ZIPPED_BODY=$(base64 -w 0 -i /tmp/skill.zip)
 ### Python (`google-cloud-aiplatform`)
 
 ```python
+import os
 import agentplatform
 
-client = agentplatform.Client(project="PROJECT_ID", location="us-central1")
+# Vertex AI Skill Registry Preview is strictly 3 regions: us-central1, europe-west4, us-east5
+SKILL_REGISTRY_LOCATION = os.environ.get("SKILL_REGISTRY_LOCATION", "us-central1")
+client = agentplatform.Client(project="PROJECT_ID", location=SKILL_REGISTRY_LOCATION)
 
 # --- CREATE ---
 # google-cloud-aiplatform >= 1.154.0 (skill_id is a top-level keyword arg):

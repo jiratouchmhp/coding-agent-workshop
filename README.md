@@ -115,16 +115,32 @@ flowchart LR
 
 ## Quickstart (5 Minutes)
 
+> [!TIP]
+> **No Local Docker Required!** Every lab in this workshop runs **100% cleanly without a local Docker daemon** (`docker` CLI is strictly optional). Local smoke tests (`make test-sandbox-local`, `make test-agent-local`) run pure Python on localhost, container builds run remotely on **Cloud Build in Bangkok (`--region=asia-southeast3`)**, and Lab 5 also supports **zero-Docker, zero-Artifact-Registry** deploys via `make pack-agent-source` + Terraform `source_code_spec`.
+
+### Regional Architecture: Bangkok (`asia-southeast3`) Primary + Singapore (`asia-southeast1`) Secondary
+
+| Role | Region / Setting | Workshop Services Hosted Here |
+|---|---|---|
+| **Primary Region (Bangkok)** | `PRIMARY_REGION=asia-southeast3` (`AR_LOCATION`, `BUILD_LOCATION`, `AGENT_REGISTRY_LOCATION`, `GKE_LOCATION`) | Artifact Registry (`asia-southeast3-docker.pkg.dev`), Cloud Build (`--region=asia-southeast3`), Secret Manager, Agent Registry, Lab 8 Self-Hosted GKE *(Thailand PDPA / BoT compute residency)* |
+| **Secondary — Agent Platform (Singapore)** | `GOOGLE_CLOUD_LOCATION=asia-southeast1` | Agent Runtime (`ReasoningEngine`), Managed Sandboxes (Shell / BYOC / Code Exec), Managed Sessions, Memory Bank, Agent Gateway, Gemini 2.5 Flash *(nearest supported Agent Platform region — all officially live in `asia-southeast1`, not yet in `asia-southeast3`)* |
+| **Service Overrides** | `SKILL_REGISTRY_LOCATION=us-central1` · `EVAL_LOCATION=global` | Vertex AI Skill Registry (`v1beta1` 3-region Preview: `us-central1`, `europe-west4`, `us-east5`) & Gen AI Evaluation Service (`global` is APAC-ready and supports `generate_loss_clusters` in the same client) |
+
+*(See the full verified Regional Availability Matrix and single-region US/EMEA alternatives in [00-WORKSHOP-OVERVIEW.md](workshop/00-WORKSHOP-OVERVIEW.md#regional-availability-matrix-bangkok-primary--singapore-secondary).)*
+
 ### Prerequisites
 
 - **Python 3.11+** (required by `google/agents-cli` and ADK 2.0)
-- **[`uv`](https://docs.astral.sh/uv/)** (fast Python package & virtualenv manager)
+- **[`uv`](https://docs.astral.sh/uv/)** (fast Python package & virtualenv manager — install standalone via `curl -LsSf https://astral.sh/uv/install.sh | sh`; works even on fresh Debian/Linux workstations without `python3-venv` or `docker`!)
 - **Google Cloud CLI (`gcloud`)** authenticated against a **Standard billing-enabled GCP project** (see [Express Mode vs. Standard GCP caveats](workshop/00-WORKSHOP-OVERVIEW.md#express-mode-vs-standard-gcp-project-important))
-- **Docker** or **Cloud Build** (Labs 2 & 5), **Terraform >= 1.5.0** (Lab 5), **Node.js** (optional, for `npx skills add`)
+- **Cloud Build** (zero local Docker required — local `docker` CLI is strictly optional), **Terraform >= 1.5.0** (Lab 5), **Node.js** (optional, for `npx skills add`)
 
-### 1. Install `google/agents-cli` & Project Dependencies
+### 1. Install `uv`, `google/agents-cli` & Authenticate GCP
 
 ```bash
+# Install standalone uv if not present (works even without python3-venv or docker!)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
 # Install google/agents-cli and its 7 global IDE workflow skills
 uvx google-agents-cli setup
 
@@ -136,11 +152,15 @@ gcloud auth login
 gcloud auth application-default login
 ```
 
-### 2. Configure Workshop Environment & Sync `starter/`
+### 2. Configure Workshop Environment, Run Pre-Flight & Sync `starter/`
 
 ```bash
-# Copy environment template and fill in GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_PROJECT_NUMBER, and GOOGLE_CLOUD_LOCATION (e.g., us-central1)
+# Copy environment template and fill in GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_PROJECT_NUMBER
+# (pre-configured for Bangkok asia-southeast3 primary + Singapore asia-southeast1 Agent Platform + us-central1 Skill Registry + global Eval)
 cp .env.example .env
+
+# Run automated pre-flight checks (gcloud, ADC, APIs, uv, regions — confirms zero Docker needed!)
+make preflight
 
 # Install Python dependencies for starter/ and solution/ via uv
 make install
@@ -148,6 +168,8 @@ make install
 # Run pre-flight skill and repo validation
 make validate-skills
 ```
+
+*(After completing the workshop, tear down all temporary sandboxes, templates, runtimes, and alert policies safely with **`make cleanup`**.)*
 
 ### 3. Open in Antigravity (Automatic `.agents/skills/` Discovery)
 
@@ -254,10 +276,13 @@ gemini-coding-agent-workshop/
 ├── solution/                                       # Complete reference mirror of starter/ (0 TODO markers, incl. architectures.py, services.yaml/py, Dockerfile, main.py)
 ├── .agents/skills/                                 # 6 modular production Antigravity skills (auto-discovered)
 │   └── adk-coding-agent-build/references/          # Modular ADK build refs (incl. agent-architectures-and-workflows.md & graph-and-dynamic-workflows.md)
-├── scripts/                                        # Verification & packaging tooling
+├── scripts/                                        # Pre-flight, verification, packaging, E2E validation & teardown tooling
+│   ├── preflight_check.sh                          # Attendee pre-flight validator (gcloud, ADC, APIs, uv, regions; zero Docker!)
 │   ├── verify_lab.sh                               # Attendee checkpoint verifier (./scripts/verify_lab.sh <1..8|all>)
 │   ├── validate_skills.py                          # Validates .agents/skills/ frontmatter, line limits & links
-│   └── package_registry_skill.py                   # Packages & checks all 16 atomic Skill Registry ZIP/SKILL.md rules
+│   ├── package_registry_skill.py                   # Packages & checks all 16 atomic Skill Registry ZIP/SKILL.md rules
+│   ├── live_gcp_e2e_validate.sh                    # Instructor live GCP E2E dry-run rehearsal validator
+│   └── cleanup_workshop.sh                         # Safe post-workshop teardown for sandboxes, templates, runtimes & alerts
 └── automation/                                 # Reproducible corpus harvest & provenance manifest
     ├── harvest_corpus.py
     ├── run_workshop_builder.py
@@ -274,19 +299,25 @@ Run `make help` at any time from the repository root to list available targets. 
 | Target | Purpose | Lab |
 |---|---|---|
 | `make help` | Print all available targets and usage notes | All |
+| `make preflight` | Run `scripts/preflight_check.sh` (verifies `gcloud`, ADC, APIs, `uv`, Bangkok/Singapore regions; zero Docker needed) | Lab 0 / Lab 1 |
 | `make install` | Sync Python 3.11+ dependencies via `uv` (`starter/` and `solution/`) | Lab 1 |
+| `make install-pip` | Pure `python3 -m venv` + `pip` dependency install fallback (zero `uv` required) | Lab 1 |
 | `make lint` | Run `ruff check` across `starter/`, `solution/`, and `scripts/` | All |
-| `make build-sandbox` | Build the non-root BYOC coding sandbox Docker image locally | Lab 2 |
-| `make push-sandbox` | Build/push the BYOC sandbox image (`SANDBOX_IMAGE_URI`) to `coding-agent-repo` | Lab 2 |
-| `make sandbox-lifecycle-demo` | Run the Sandbox Template -> Create -> Exec -> Pause -> Resume -> Snapshot -> Delete demo | Lab 2 |
-| `make push-agent` | Build/push the complete Labs 1–4 Agent Runtime BYOC image (`AGENT_IMAGE_URI`) to `coding-agent-repo` | Lab 5 |
-| `make tf-plan` | Initialize and run `terraform plan` in `$(TRACK)/terraform` | Lab 5 |
-| `make tf-apply` | Apply Terraform configuration for Agent Runtime + IAM bindings | Lab 5 |
+| `make test-sandbox-local` | Pure-Python `runner.py` localhost smoke test (`/health` + `/exec`) — **zero Docker!** | Lab 2 |
+| `make push-sandbox` | Build/push the BYOC sandbox image (`SANDBOX_IMAGE_URI`) via Cloud Build (`--region=asia-southeast3`) — **zero Docker!** | Lab 2 |
+| `make build-sandbox` | *(Optional)* Build the non-root BYOC coding sandbox image locally if Docker is installed | Lab 2 |
+| `make sandbox-lifecycle-demo` | Run the Sandbox Template -> Create -> Exec -> Pause -> Resume -> Snapshot -> Delete demo in Singapore (`asia-southeast1`) | Lab 2 |
 | `make package-skill` | Validate all 16 atomic Skill Registry ZIP/`SKILL.md` checks and build the `.zip` archive | Lab 4 |
-| `make eval-offline` | Run offline evaluation over split JSON datasets (`eval/datasets/coding_agent_{single,multi}_turn.json`) | Lab 6 |
-| `make eval-simulated` | Run 2-step simulated user evaluation personas | Lab 6 |
+| `make test-agent-local` | Pure-Python `uvicorn main:app` localhost smoke test (verifies `GET / -> 200 {"status":"ok"}` liveness/readiness contract) — **zero Docker!** | Lab 5 |
+| `make push-agent` | Build/push the complete Labs 1–4 Agent Runtime BYOC image (`AGENT_IMAGE_URI`) via Cloud Build (`--region=asia-southeast3`) — **zero Docker!** | Lab 5 |
+| `make pack-agent-source` | Package root-level `coding_agent_source.tar.gz` (<= 8 MB) for zero-Docker, zero-AR Terraform `source_code_spec` deploy | Lab 5 |
+| `make tf-plan` | Initialize and run `terraform plan` in `$(TRACK)/terraform` | Lab 5 |
+| `make tf-apply` | Apply Terraform configuration for Agent Runtime (Singapore `asia-southeast1`) + IAM bindings | Lab 5 |
+| `make eval-offline` | Run offline evaluation (`EVAL_LOCATION=global`) over split JSON datasets (`eval/datasets/coding_agent_{single,multi}_turn.json`) | Lab 6 |
+| `make eval-simulated` | Run 2-step simulated user evaluation personas (`EVAL_LOCATION=global`) | Lab 6 |
 | `make validate-skills` | Run `scripts/validate_skills.py` on `.agents/skills/` | Lab 1 / All |
 | `make verify-lab LAB=1` | Run `./scripts/verify_lab.sh <1..8\|all>` checkpoint verification (`all` checks core Labs 1–6; `7` Optional Hardening; `8` GKE Overlay) | Labs 1–8 |
+| `make cleanup` | Run `scripts/cleanup_workshop.sh` to safely delete workshop sandboxes, templates, alert policies, and runtimes *(supports `CLEANUP_ARGS=--dry-run`)* | Post-Workshop |
 
 ---
 

@@ -38,7 +38,7 @@ Google Cloud and ADK documentation span **five Python package/import namespaces*
 
 | Mode | Required Environment Variables | Notes & Gotchas |
 |---|---|---|
-| **Google Cloud / Agent Platform (ADC — Recommended)** | `GOOGLE_GENAI_USE_ENTERPRISE=TRUE`<br>`GOOGLE_CLOUD_PROJECT=<project-id>`<br>`GOOGLE_CLOUD_LOCATION=<region-or-global>` | Run `gcloud auth application-default login` locally. `GOOGLE_GENAI_USE_ENTERPRISE=TRUE` is the canonical ADK 2.0 enterprise authentication switch. ADC credentials expire after **1 hour** by default. |
+| **Google Cloud / Agent Platform (ADC — Recommended)** | `GOOGLE_GENAI_USE_ENTERPRISE=TRUE`<br>`GOOGLE_CLOUD_PROJECT=<project-id>`<br>`GOOGLE_CLOUD_LOCATION=asia-southeast1` *(or `<region-or-global>`)* | Run `gcloud auth application-default login` locally. `GOOGLE_GENAI_USE_ENTERPRISE=TRUE` is the canonical ADK 2.0 enterprise authentication switch. ADC credentials expire after **1 hour** by default. |
 | **Google AI Studio (Local Dev)** | `GEMINI_API_KEY=<key>` (or `GOOGLE_API_KEY=<key>`) | **Comment out** `GOOGLE_GENAI_USE_ENTERPRISE`, `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_LOCATION` in `.env` so the SDK routes to Google AI Studio. |
 | **Agent Platform Express Mode (Prototyping)** | `GOOGLE_GENAI_USE_ENTERPRISE=TRUE`<br>`GOOGLE_GENAI_API_KEY=<express-key>` | Rapid API-key prototyping only; standard GCP billing project is required for production runtime, IAM, and sandboxes. |
 | **External Service Account** | `GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json` | Not needed on Agent Runtime, Cloud Run, or GKE (Workload Identity / runtime SA / Agent Identity provides credentials automatically). Never commit key files or `.env`. |
@@ -110,7 +110,7 @@ app = App(
 ```
 
 ### Critical Model & Configuration Rules
-1. **Regional Endpoints vs. `gemini-flash-latest`:** The alias `gemini-flash-latest` may fail with 404 on regional Agent Platform endpoints (such as `us-central1`). Always pass an explicit versioned Gemini model ID (verify available models in your `GOOGLE_CLOUD_LOCATION` via `genai.Client(vertexai=True, location=...).models.list()`).
+1. **Regional Endpoints vs. `gemini-flash-latest`:** The alias `gemini-flash-latest` may fail with 404 on regional Agent Platform endpoints (such as `asia-southeast1`). Always pass an explicit versioned Gemini model ID (verify available models in your `GOOGLE_CLOUD_LOCATION` via `genai.Client(vertexai=True, location=...).models.list()`).
 2. **`App.name` Directory Match:** `App(name=...)` **must** equal the basename of the folder holding `agent.py` (e.g., `app` for `app/`, `coding_agent` for `coding_agent/`, `my_agent` for `src/my_agent/`). Any mismatch triggers `"Session not found"` during `adk` / `agents-cli eval` execution.
 3. **`output_schema` with `tools` (Python Behavior & Reliability Best Practice):** In ADK Python, `output_schema` and `tools` **can** be combined on the same `LlmAgent` — tools stay available while the agent works, and `output_schema` applies only to the final response. Gemini models on Google Cloud (and `LiteLlm` providers supporting response schemas) accept both in a single request, whereas other models fall back to an injected `set_model_response` function tool that may behave unreliably. For cross-model reliability, prefer separating tool execution from structured formatting in a dedicated sub-agent or downstream `Workflow` node.
 4. **429 `RESOURCE_EXHAUSTED` Client Retries:** Configure `types.HttpRetryOptions(initial_delay=1, attempts=2)` either on `Gemini(retry_options=...)` (adapter object) OR via `GenerateContentConfig(http_options=types.HttpOptions(retry_options=...))` (when `model` is a string).
@@ -360,7 +360,7 @@ Follow these positive architectural invariants across all ADK Python 2.0+ agents
 | Error / Symptom | Root Cause | Exact Fix |
 |---|---|---|
 | `Session not found` in eval or runtime | `App(name=...)` does not match agent directory name, OR `google-cloud-aiplatform <= 1.128.0` after Gemini publish | Set `App(name="<folder_basename>", root_agent=root_agent)` and upgrade `google-cloud-aiplatform`. |
-| `404 Model not found` on `us-central1` | Using `gemini-flash-latest` alias on a regional endpoint | Use explicit versioned ID (e.g., `gemini-2.5-flash`) verified via `genai.Client(...).models.list()`. |
+| `404 Model not found` on regional endpoint (e.g., `asia-southeast1`) | Using `gemini-flash-latest` alias on a regional endpoint | Use explicit versioned ID (e.g., `gemini-2.5-flash`) verified via `genai.Client(...).models.list()`. |
 | `KeyError: 'var_name'` on first turn | `{var_name}` in `instruction` is missing from `session.state` | Initialize all template variables in `before_agent_callback` with `callback_context.state.setdefault(...)`. |
 | Unreliable tool calls or malformed JSON after adding `output_schema` | Model falls back to injected `set_model_response` tool when combining `output_schema` + `tools` (non-Gemini-on-GCP / unsupported `LiteLlm` providers) | Use Gemini on Google Cloud (supports both in one request) or separate tool execution (`LlmAgent` without `output_schema`) from structured formatting (`LlmAgent` with `output_schema` in a sub-agent or downstream `Workflow` node). |
 | `ValidationError: Input should be a valid dictionary or instance of BaseAgent` | Passed sub-agent factory function reference instead of calling it | Call factory: `sub_agents=[create_sub_agent()]`. |
@@ -371,7 +371,7 @@ Follow these positive architectural invariants across all ADK Python 2.0+ agents
    ```bash
    uv run --with google-genai python -c "
    from google import genai
-   client = genai.Client(vertexai=True, location='us-central1')
+   client = genai.Client(vertexai=True, location='asia-southeast1')
    print([m.name for m in client.models.list() if 'gemini' in m.name][:10])
    "
    ```

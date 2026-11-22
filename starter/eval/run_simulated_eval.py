@@ -124,7 +124,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--project", help="GCP project ID (defaults to GOOGLE_CLOUD_PROJECT).")
     parser.add_argument(
         "--location",
-        help=f"Eval region ({len(SUPPORTED_EVAL_LOCATIONS)} supported regions incl. global).",
+        help=(
+            f"Eval region ({len(SUPPORTED_EVAL_LOCATIONS)} supported locations: "
+            "14 US/EU regions + global; defaults to EVAL_LOCATION / 'global')."
+        ),
     )
     parser.add_argument("--count", type=int, default=5)
     parser.add_argument("--max-turns", type=int, default=5)
@@ -146,7 +149,9 @@ def main(argv: list[str] | None = None) -> int:
     settings = get_settings()
 
     location = validate_eval_location(
-        args.location or os.environ.get("EVAL_LOCATION") or settings.google_cloud_location
+        (args.location or "").strip()
+        or os.environ.get("EVAL_LOCATION", "").strip()
+        or settings.eval_location
     )
     project_id = args.project or settings.google_cloud_project
 

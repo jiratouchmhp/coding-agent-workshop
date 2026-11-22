@@ -1,7 +1,7 @@
 """Offline Evaluation & Automatic Failure Clustering for the Coding Agent (Lab 6 — Starter).
 
 Complete the ``# TODO(lab-6)`` blocks following ``workshop/06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md``:
-1. Initialize ``vertexai.Client`` in a supported Evaluation region (15 US/EU regions + ``global``).
+1. Initialize ``vertexai.Client`` in a supported Evaluation region (14 US/EU regions + ``global``).
 2. Register custom LLM (``types.LLMMetric``) and Code Execution (``types.CodeExecutionMetric``)
    metrics via ``client.evals.create_evaluation_metric(metric=...)``.
 3. Evaluate single-turn and multi-turn datasets separately (NEVER mix single-turn metrics
@@ -254,7 +254,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--project", help="GCP project ID (defaults to GOOGLE_CLOUD_PROJECT).")
     parser.add_argument(
         "--location",
-        help="Evaluation region (15 supported regions or global; defaults to EVAL_LOCATION or GOOGLE_CLOUD_LOCATION).",
+        help="Evaluation region (14 supported US/EU regions or global; defaults to EVAL_LOCATION / 'global').",
     )
     parser.add_argument(
         "--single-turn-dataset",
@@ -290,7 +290,9 @@ def main(argv: list[str] | None = None) -> int:
     settings = get_settings()
 
     location = validate_eval_location(
-        args.location or os.environ.get("EVAL_LOCATION") or settings.google_cloud_location
+        (args.location or "").strip()
+        or os.environ.get("EVAL_LOCATION", "").strip()
+        or settings.eval_location
     )
     project_id = args.project or settings.google_cloud_project
 

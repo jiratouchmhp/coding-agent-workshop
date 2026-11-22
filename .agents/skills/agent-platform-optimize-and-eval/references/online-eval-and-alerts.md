@@ -216,7 +216,7 @@ conditions:
       AND metric.labels.evaluation_metric_name="task_success"
     # Optional multi-agent scoping (verified in monitoring/api/metrics_gcp_a_b):
     # AND resource.type="aiplatform.googleapis.com/OnlineEvaluator"
-    # AND metric.labels.agent_resource_name="projects/YOUR_PROJECT_ID/locations/us-central1/reasoningEngines/ENGINE_ID"
+    # AND metric.labels.agent_resource_name="projects/YOUR_PROJECT_ID/locations/asia-southeast1/reasoningEngines/ENGINE_ID"
     comparison: COMPARISON_LT
     thresholdValue: 0.8
     duration: 1800s
@@ -252,7 +252,7 @@ policy = {
                 # Optional narrowing filters verified from monitoring/api/metrics_gcp_a_b:
                 # ' AND resource.type="aiplatform.googleapis.com/OnlineEvaluator"'
                 ' AND metric.labels.evaluation_metric_name="task_success"'
-                # ' AND metric.labels.agent_resource_name="projects/YOUR_PROJECT_ID/locations/us-central1/reasoningEngines/ENGINE_ID"'
+                # ' AND metric.labels.agent_resource_name="projects/YOUR_PROJECT_ID/locations/asia-southeast1/reasoningEngines/ENGINE_ID"'
                 # ' AND metric.labels.runtime_revision_id="REVISION_ID"'
             ),
             "comparison": monitoring_v3.ComparisonType.COMPARISON_LT,

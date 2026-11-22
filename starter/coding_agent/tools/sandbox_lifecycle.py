@@ -256,7 +256,7 @@ class SandboxLifecycleManager:
         self,
         *,
         project_id: str,
-        location: str = "us-central1",
+        location: str = "asia-southeast1",
         instance_name: str | None = None,
         api_version: str = "v1beta1",
         client: Any | None = None,

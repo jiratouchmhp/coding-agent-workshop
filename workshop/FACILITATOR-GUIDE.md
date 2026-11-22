@@ -15,16 +15,41 @@
 | **1 Dedicated GCP Project per Attendee** *(Strongly Recommended)* | Any (`5` to `100+`) | Eliminates shared `90 QPM`, `10 write/min`, `100 resources`, and `300 session appends/min` stampedes; isolates `OnlineEvaluator` P4SA permissions and Agent Registry namespaces. | Requires temporary sandbox project provisioning (e.g., Qwiklabs/Cloud Skills Boost, Argolis, or customer sandbox vending). |
 | **Shared GCP Project (Small Cohort)** | **<= 8–10 attendees max** | Fast setup when only one customer sandbox project is available. | **Mandatory quota increases at T-7d** (especially `10 write/min` and `300 session appends/min`!); attendees must use unique `ATTENDEE_ID` prefixes for Terraform display names, AR images, templates, and Skill IDs; any admin creating an `OnlineEvaluator` can observe all agents in the project. |
 
-### 1.2 Golden Regions Supporting ALL 8 Labs
+### 1.2 Verified Regional Architecture: Bangkok (`asia-southeast3`) Primary + Singapore (`asia-southeast1`) Secondary
 
-Do **not** pick an arbitrary GCP region—several Gemini Enterprise Agent Platform services have distinct regional availability matrices:
-- **Vertex AI Skill Registry (`aiplatform.googleapis.com/v1beta1`, Lab 4):** ONLY `us-central1`, `europe-west4`, and `us-east5`.
-- **Semantic Governance Policy Engine (Optional Lab 7):** 8 regions (`us-central1`, `us-east1`, `us-east4`, `us-west1`, `europe-southwest1`, `europe-west1`, `europe-west4`, `europe-west8`).
-- **Gen AI Evaluation Service (Lab 6):** 15 regions (`us-central1`, `us-east1`, `us-east4`, `us-east5`, `us-south1`, `us-west1`, `us-west4`, `europe-central2`, `europe-north1`, `europe-southwest1`, `europe-west1`, `europe-west4`, `europe-west8`, `europe-west9`) + `global`.
-- **Memory Bank (Lab 3):** Excludes `asia-southeast2`, `australia-southeast2`, `northamerica-northeast2`.
+Do **not** pick an arbitrary single region—several Gemini Enterprise Agent Platform services have distinct regional availability matrices:
+- **Bangkok (`asia-southeast3` — Primary Region):** Hosts **Artifact Registry** (`AR_LOCATION=asia-southeast3`), **Cloud Build** (`BUILD_LOCATION=asia-southeast3`, zero local Docker!), **Secret Manager**, **Agent Registry** (`AGENT_REGISTRY_LOCATION=asia-southeast3`), and **Lab 8 Self-Hosted GKE + GKE Agent Sandbox** (`GKE_LOCATION=asia-southeast3` — Thailand PDPA / BoT compute residency). *(Optional: set `AR_LOCATION=asia-southeast1` if you want strict same-region image pulls into Singapore Agent Runtime/Sandboxes.)*
+- **Singapore (`asia-southeast1` — Secondary / Nearest Supported Agent Platform Region):** Hosts **Agent Runtime** (`ReasoningEngine`), **Managed Sandboxes** (Shell, BYOC, Code Exec), **Managed Sessions**, **Memory Bank**, **Agent Gateway**, and **Gemini 2.5 Flash** (`GOOGLE_CLOUD_LOCATION=asia-southeast1`) — all officially live in `asia-southeast1` with zero restrictions, and **not yet launched in `asia-southeast3`**.
+- **Vertex AI Skill Registry (`aiplatform.googleapis.com/v1beta1`, Lab 4):** Preview is strictly **3 regions** — `us-central1`, `europe-west4`, and `us-east5`. Keep **`SKILL_REGISTRY_LOCATION=us-central1`** explicitly in `.env`.
+- **Gen AI Evaluation Service (Lab 6):** Supports **14 US/EU regions** (`us-central1`, `us-east1`, `us-east4`, `us-east5`, `us-south1`, `us-west1`, `us-west4`, `europe-central2`, `europe-north1`, `europe-southwest1`, `europe-west1`, `europe-west4`, `europe-west8`, `europe-west9`) + **`global`**. Keep **`EVAL_LOCATION=global`** explicitly in `.env` — it is 100% APAC-ready AND supports `generate_loss_clusters` / `agents-cli eval analyze` in the same client!
+- **Semantic Governance Policy Engine (Optional Lab 7 NLC):** 8 US/EU regions (`us-central1`, `us-east1`, `us-east4`, `us-west1`, `europe-southwest1`, `europe-west1`, `europe-west4`, `europe-west8`).
+- **Memory Bank & Agent Gateway Exclusions:** Memory Bank excludes `asia-southeast2`, `australia-southeast2`, `northamerica-northeast2`; Agent Gateway excludes `asia-east2`, `asia-northeast3`, `asia-southeast2` (both are **fully live in `asia-southeast1`**).
 
 > [!IMPORTANT]
-> **Golden Workshop Regions:** Standardize on **`us-central1`** (Americas/Global) or **`europe-west4`** (EMEA). Both regions support **100% of Labs 1–8** (Agent Runtime, BYOC Sandboxes, Sessions, Memory Bank, Skill Registry, Agent Registry, Semantic Governance, Gen AI Evaluation Service, and GKE Agent Sandbox).
+> **Authoritative Workshop Defaults:** Standardize APAC cohorts on **Bangkok (`asia-southeast3`) Primary + Singapore (`asia-southeast1`) Agent Platform + `SKILL_REGISTRY_LOCATION=us-central1` + `EVAL_LOCATION=global`**. *(For Americas or EMEA cohorts preferring a single-region setup, `us-central1` or `europe-west4` supports Labs 1–8 natively while still setting `EVAL_LOCATION=global` for `generate_loss_clusters`.)*
+
+---
+
+## 1.3 Bangkok / Singapore Regional Pre-Flight & No-Docker Attendee Playbook
+
+Many enterprise attendees join on locked-down corporate laptops or fresh Debian/Linux cloud workstations **without Docker Desktop, without root privileges, and without `python3-venv`**. Every lab in this workshop is verified **100% Zero-Docker**:
+
+1. **Org Policy Regional Allowlist (Check at T-7d):** Ensure `constraints/gcp.resourceLocations` permits **`asia-southeast3`**, **`asia-southeast1`**, **`us-central1`** (Lab 4 Vertex AI Skill Registry Preview), and **`global`** (Lab 6 Gen AI Evaluation Service & loss clustering).
+2. **Standalone `uv` Bootstrapping (No `python3-venv`, No `docker`):** Have attendees install standalone `uv` via `curl -LsSf https://astral.sh/uv/install.sh | sh` and run **`make preflight`** (`scripts/preflight_check.sh`) right after `cp .env.example .env`. It validates `gcloud`, ADC, enabled APIs, `uv`, and Bangkok/Singapore region variables — explicitly flagging local Docker as optional.
+3. **Zero-Docker Lab 2 Playbook (BYOC Sandbox):**
+   - Step 1: `make test-sandbox-local` — pure-Python stdlib localhost smoke test of `runner.py` (`/health` + `/exec`), zero Docker!
+   - Step 2: `make push-sandbox` — remote Cloud Build in Bangkok (`gcloud builds submit --region=asia-southeast3`) pushing to `asia-southeast3-docker.pkg.dev/...` (or set `AR_LOCATION=asia-southeast1` if strict same-region AR pulls into Singapore sandboxes are preferred).
+   - Fast-Track Escape Hatch: Set `SANDBOX_MODE=shell` in `.env` for instant Google-managed gVisor Shell Sandboxes in Singapore (`asia-southeast1`) with zero image build!
+4. **Zero-Docker Lab 5 Playbook (3 Deployment Paths):**
+   - **Path 1 (Primary):** `make test-agent-local` (pure-Python local FastAPI smoke test!) → `make push-agent` (Cloud Build `--region=asia-southeast3`) → `make tf-apply` (`container_spec` → Singapore `asia-southeast1`).
+   - **Path 2 (Zero-Docker AND Zero-AR):** `make pack-agent-source` (level-0 `coding_agent_source.tar.gz`, `<= 8 MB`) → Terraform `source_code_spec` + empty `image_spec {}`.
+   - **Path 3 (Rapid Dev):** `agents-cli deploy --region asia-southeast1`.
+5. **Mandatory Instructor Live GCP End-to-End Dry-Run Rehearsal (Run at T-1d):**
+   Before putting attendees in the room, validate your entire Bangkok/Singapore sandbox project end-to-end against live GCP APIs with one command:
+   ```bash
+   ./scripts/live_gcp_e2e_validate.sh --project <SANDBOX_PROJECT_ID>
+   ```
+   Confirm every Bangkok (`asia-southeast3`), Singapore (`asia-southeast1`), Skill Registry (`us-central1`), and Evaluation (`global`) check reports `PASS` before T-0!
 
 ---
 
@@ -32,16 +57,16 @@ Do **not** pick an arbitrary GCP region—several Gemini Enterprise Agent Platfo
 
 ### T-7 Days — Quotas, Org Policies & Environment Design
 - [ ] Confirm **Standard GCP Billing** projects (NEVER Express Mode free tier—see §4).
-- [ ] Select **`us-central1`** or **`europe-west4`** as the uniform `GOOGLE_CLOUD_LOCATION`.
-- [ ] Run the **Multi-Attendee Quota Sizing Formula** (§3) and submit Cloud Quotas increase requests for shared projects (allow 2–5 business days for approval).
+- [ ] Confirm the regional split in `.env.example` / cohort slide deck: **`PRIMARY_REGION=asia-southeast3`** (Bangkok AR, Cloud Build, Secret Manager, Agent Registry, Lab 8 GKE), **`GOOGLE_CLOUD_LOCATION=asia-southeast1`** (Singapore Agent Runtime, Sandboxes, Sessions, Memory Bank, Gateway, Gemini 2.5 Flash), **`SKILL_REGISTRY_LOCATION=us-central1`**, and **`EVAL_LOCATION=global`** *(or `us-central1` / `europe-west4` for US/EMEA cohorts)*.
+- [ ] Run the **Multi-Attendee Quota Sizing Formula** (§3) and submit Cloud Quotas increase requests for shared projects in **`asia-southeast1`** (allow 2–5 business days for approval).
 - [ ] Audit Organization Policies in target project(s):
   - Disable `constraints/iam.managed.disableAccessPolicyBindings` if running **Optional Lab 7** IAM UAPs (enabled by default in new orgs).
-  - Verify `constraints/gcp.resourceLocations` allows your chosen region (plus `global` if running `agents-cli eval analyze` or global Gemini endpoints).
-  - Confirm Artifact Registry Docker push and Cloud Build (or local Docker push) are permitted.
-- [ ] Decide **Optional Lab 7** mode upfront: **Include Live** (Full-Day cohorts with Org/Governance focus) vs. **Skip Cleanly** (Half-Day Fast-Track, tight schedules, or sandbox projects without Org-level Agent Gateway — zero impact on Labs 1–6 or Lab 8!).
-- [ ] Decide **Lab 8** GKE mode: **Walkthrough + Manifest Review** (default, zero cluster cost) vs. **Live Instructor Demo Cluster** (if demonstrating GKE Pod Snapshots live, provision GKE **`>= 1.35.3-gke.1234000`** Rapid channel with `--enable-pod-snapshots`, `--sandbox=type=gvisor`, and **non-E2** nodes such as `n2-standard-4`).
+  - Verify `constraints/gcp.resourceLocations` allows **`asia-southeast3`**, **`asia-southeast1`**, **`us-central1`**, and **`global`**.
+  - Confirm Artifact Registry Docker push (`asia-southeast3` / `asia-southeast1`) and Cloud Build (`--region=asia-southeast3`) are permitted so attendees need **zero local Docker**.
+- [ ] Decide **Optional Lab 7** mode upfront: **Include Live** (Full-Day cohorts with Org/Governance focus — noting Agent Registry scanning runs in Bangkok `asia-southeast3`, Agent Gateway/SPIFFE in Singapore `asia-southeast1`, and NLC Semantic Governance Preview requires one of the 8 US/EU regions) vs. **Skip Cleanly** (Half-Day Fast-Track, tight schedules, or sandbox projects without Org-level Agent Gateway — zero impact on Labs 1–6 or Lab 8!).
+- [ ] Decide **Lab 8** GKE mode: **Walkthrough + Manifest Review** (default, zero cluster cost; highlight Bangkok `asia-southeast3` Thailand PDPA / BoT compute residency as the primary real-world GKE trigger!) vs. **Live Instructor Demo Cluster** in `GKE_LOCATION=asia-southeast3` (if demonstrating GKE Pod Snapshots live, provision GKE **`>= 1.35.3-gke.1234000`** Rapid channel with `--enable-pod-snapshots`, `--sandbox=type=gvisor`, and **non-E2** nodes such as `n2-standard-4`).
 
-### T-1 Day — API Enablement, Service Agents, Pre-Warming & Dry Run
+### T-1 Day — API Enablement, Service Agents, Pre-Warming & Live E2E Dry Run
 - [ ] Enable all required APIs across workshop project(s):
   ```bash
   gcloud services enable \
@@ -65,15 +90,18 @@ Do **not** pick an arbitrary GCP region—several Gemini Enterprise Agent Platfo
     modelarmor.googleapis.com \
     --project="${GOOGLE_CLOUD_PROJECT}"
   ```
-- [ ] **Trigger Service Identity Creation & Pre-Grant BOTH Service Agents** (eliminates the #1 workshop blocker, `IMAGE_PULL_BACKOFF`):
+- [ ] **Trigger Service Identity Creation & Pre-Grant ALL THREE Service Agents** (eliminates the #1 workshop blocker, `IMAGE_PULL_BACKOFF`):
   ```bash
   export PROJECT_NUMBER=$(gcloud projects describe "${GOOGLE_CLOUD_PROJECT}" --format="value(projectNumber)")
+  export AR_LOCATION="${AR_LOCATION:-asia-southeast3}"        # Bangkok primary AR (or asia-southeast1 for same-region pulls)
+  export BUILD_LOCATION="${BUILD_LOCATION:-asia-southeast3}"  # Bangkok remote Cloud Build (zero local Docker!)
+
   gcloud beta services identity create --service=aiplatform.googleapis.com --project="${GOOGLE_CLOUD_PROJECT}"
 
-  # Create Artifact Registry repository for BYOC runtime + sandbox images
+  # Create Artifact Registry repository in Bangkok (asia-southeast3) for BYOC runtime + sandbox images
   gcloud artifacts repositories create coding-agent-repo \
     --repository-format=docker \
-    --location="${GOOGLE_CLOUD_LOCATION}" \
+    --location="${AR_LOCATION}" \
     --project="${GOOGLE_CLOUD_PROJECT}" || true
 
   # 1. Agent Runtime Service Agent (pulls BYOC Agent Runtime images)
@@ -83,7 +111,7 @@ Do **not** pick an arbitrary GCP region—several Gemini Enterprise Agent Platfo
 
   # 2. Agent Sandbox Service Agent (pulls BYOC Sandbox images — DISTINCT from gcp-sa-aiplatform-re!)
   gcloud artifacts repositories add-iam-policy-binding coding-agent-repo \
-    --location="${GOOGLE_CLOUD_LOCATION}" \
+    --location="${AR_LOCATION}" \
     --project="${GOOGLE_CLOUD_PROJECT}" \
     --member="serviceAccount:service-${PROJECT_NUMBER}@gcp-sa-vertex-sandbox.iam.gserviceaccount.com" \
     --role="roles/artifactregistry.reader"
@@ -93,28 +121,33 @@ Do **not** pick an arbitrary GCP region—several Gemini Enterprise Agent Platfo
     --member="serviceAccount:service-${PROJECT_NUMBER}@gcp-sa-aiplatform.iam.gserviceaccount.com" \
     --role="roles/secretmanager.secretAccessor"
   ```
-- [ ] **Pre-Build & Pre-Warm the Instructor Demo Assets:**
-  - Build and push `solution/sandbox_image/` to `${GOOGLE_CLOUD_LOCATION}-docker.pkg.dev/${GOOGLE_CLOUD_PROJECT}/coding-agent-repo/coding-sandbox:v1` AND `solution/` (`Dockerfile`, `main.py`, `requirements.txt`, `coding_agent/`) to `${GOOGLE_CLOUD_LOCATION}-docker.pkg.dev/${GOOGLE_CLOUD_PROJECT}/coding-agent-repo/coding-agent:v1` so attendees who fall behind in Lab 2 or Lab 5 can reference known-good images immediately.
-  - Create one warm `SandboxEnvironmentTemplate` in your instructor project so live sandbox spin-up takes **seconds** instead of waiting up to **2 minutes** on stage.
+- [ ] **Pre-Build & Pre-Warm the Instructor Demo Assets (Zero Local Docker!):**
+  - Build and push via Bangkok Cloud Build (`--region=asia-southeast3`): `solution/sandbox_image/` to `${AR_LOCATION}-docker.pkg.dev/${GOOGLE_CLOUD_PROJECT}/coding-agent-repo/coding-sandbox:v1` AND `solution/` (`Dockerfile`, `main.py`, `requirements.txt`, `coding_agent/`, `skills_to_register/`) to `${AR_LOCATION}-docker.pkg.dev/${GOOGLE_CLOUD_PROJECT}/coding-agent-repo/coding-agent:v1` so attendees who fall behind in Lab 2 or Lab 5 can reference known-good images immediately.
+  - Create one warm `SandboxEnvironmentTemplate` in your instructor project in **Singapore (`asia-southeast1`)** so live sandbox spin-up takes **seconds** instead of waiting up to **2 minutes** on stage.
   - Create one **Online Evaluation Monitor** in your instructor project at least **30+ minutes before Lab 6** (avoids presenting the normal first-monitor transient `"Failed"` / `"permission denied"` P4SA propagation state during the live walkthrough).
-- [ ] Run end-to-end automated static validation on the repo (target `--track solution` because `starter/` intentionally retains `# TODO(lab-N)` markers):
+- [ ] Run end-to-end automated static validation AND the live GCP E2E rehearsal script:
   ```bash
+  # 1. Static repo, skill & lab verification (target --track solution because starter/ retains # TODO markers)
   python3 scripts/validate_skills.py .agents/skills
   python3 scripts/package_registry_skill.py solution/skills_to_register/secure-code-review --dry-run
   ./scripts/verify_lab.sh all --track solution && ./scripts/verify_lab.sh 7 --track solution && ./scripts/verify_lab.sh 8 --track solution
+
+  # 2. Instructor Live GCP End-to-End Dry-Run Rehearsal (validates Bangkok/Singapore/us-central1/global end-to-end!)
+  ./scripts/live_gcp_e2e_validate.sh --project <SANDBOX_PROJECT_ID>
   ```
 
 ### T-0 (60 Minutes Before Kickoff) — Room & Attendee Readiness
-- [ ] Verify attendee workstation prerequisites: `python >= 3.11`, `uv`, `gcloud` (updated), `terraform >= 1.5`, `docker` (or Cloud Build permissions), `uv tool install google-agents-cli`, and Antigravity IDE open at the repo root (confirm all 6 skills in `.agents/skills/` are auto-discovered).
-- [ ] Verify ADC and quota project on every laptop:
+- [ ] Verify attendee workstation prerequisites (**zero local Docker needed!**): `python >= 3.11`, standalone `uv` (`curl -LsSf https://astral.sh/uv/install.sh | sh` — works without `python3-venv` or `docker`), `gcloud` (updated), `terraform >= 1.5`, `uvx google-agents-cli setup`, and Antigravity IDE open at the repo root (confirm all 6 skills in `.agents/skills/` are auto-discovered).
+- [ ] Verify ADC, quota project, and automated pre-flight on every laptop:
   ```bash
   gcloud auth login
   gcloud auth application-default login
   gcloud config set project "${GOOGLE_CLOUD_PROJECT}"
   gcloud auth application-default set-quota-project "${GOOGLE_CLOUD_PROJECT}"
+  make preflight
   ```
-- [ ] Post the shared slide/cheat-sheet showing: `GOOGLE_CLOUD_LOCATION=us-central1` (or `europe-west4`), pre-built fallback `SANDBOX_IMAGE_URI`, and the exact **starter → solution** cutover command (§5).
-- [ ] Remind attendees **NOT** to use Cloud Shell if they plan to run local Docker builds or Lab 8 Agent Substrate commands (Cloud Shell has a 5 GB persistent disk ceiling).
+- [ ] Post the shared slide/cheat-sheet showing: `PRIMARY_REGION=asia-southeast3` (Bangkok AR/Build/Agent Registry), `GOOGLE_CLOUD_LOCATION=asia-southeast1` (Singapore Agent Platform), `SKILL_REGISTRY_LOCATION=us-central1`, `EVAL_LOCATION=global`, pre-built fallback `SANDBOX_IMAGE_URI`, `SANDBOX_MODE=shell` escape hatch, and the exact **starter → solution** cutover command (§5).
+- [ ] Remind attendees that Cloud Shell works cleanly for all zero-Docker labs (`make push-sandbox`, `make push-agent`, `make pack-agent-source`), though they should **not** run local Docker builds or Lab 8 Agent Substrate installs inside Cloud Shell (5 GB persistent disk ceiling).
 
 ---
 
@@ -182,7 +215,10 @@ env | grep -E "GOOGLE_GENAI_API_KEY|GEMINI_API_KEY|GOOGLE_CLOUD_PROJECT|GOOGLE_G
 unset GOOGLE_GENAI_API_KEY GEMINI_API_KEY
 export GOOGLE_GENAI_USE_ENTERPRISE="TRUE"
 export GOOGLE_CLOUD_PROJECT="your-billing-enabled-project-id"
-export GOOGLE_CLOUD_LOCATION="us-central1"
+export PRIMARY_REGION="asia-southeast3"
+export GOOGLE_CLOUD_LOCATION="asia-southeast1"
+export SKILL_REGISTRY_LOCATION="us-central1"
+export EVAL_LOCATION="global"
 ```
 
 ---
@@ -193,7 +229,7 @@ export GOOGLE_CLOUD_LOCATION="us-central1"
 
 | Module | Full-Day Window (420m) | Half-Day Fast-Track (210m) | Async Wait Choreography (Do NOT Stand Idle!) |
 |---|---|---|---|
-| **[00. Overview & Setup](./00-WORKSHOP-OVERVIEW.md)** | `0:00–0:20` (20m) | `0:00–0:10` (10m) | Verify `gcloud`, `uv`, Antigravity `.agents/skills/` auto-discovery & golden region (`us-central1` / `europe-west4`) |
+| **[00. Overview & Setup](./00-WORKSHOP-OVERVIEW.md)** | `0:00–0:20` (20m) | `0:00–0:10` (10m) | Verify `gcloud`, standalone `uv`, `make preflight`, Antigravity `.agents/skills/` auto-discovery & Bangkok (`asia-southeast3`) / Singapore (`asia-southeast1`) regional split |
 | **[01. Build ADK Agent](./01-LAB-SETUP-AND-BUILD-ADK.md)** | `0:20–1:20` (60m: Part A 30m + Part B 30m) | `0:10–0:45` (35m: Part A 30m hands-on, Part B 5m walkthrough) | Part A: local `LlmAgent` + `EnvironmentToolset(LocalEnvironment)` (`AGENT_ARCHITECTURE=simple`); Part B: evolve across `collaborative`, `graph` (`JoinNode` + `RetryConfig`), and `dynamic` (`ctx.run_node` + `RequestInput`) + inspect `services.yaml`/`services.py`, then reset `AGENT_ARCHITECTURE=simple` before Lab 2 |
 | **[02. Custom BYOC Sandbox](./02-LAB-CUSTOM-SANDBOX-BYOC.md)** | `1:20–2:20` (60m) | `0:45–1:25` (40m) | Create lightweight standalone Agent Platform instance (`client.runtimes.create()`), **kick off** `make push-sandbox` (`coding-agent-repo/coding-sandbox:v1`) + `SandboxEnvironmentTemplate` warm pool (**up to 2m cold start**) → teach security boundaries & egress while it builds! |
 | *Morning Break* | `2:20–2:30` (10m) | `1:25–1:35` (10m) | *Coffee / Stretch Break* |
@@ -245,7 +281,7 @@ Every failure mode and fix below is verified directly against official Google Cl
 | **7** | Code inside Managed Sandbox cannot call Vertex AI, Skill Registry, PyPI, or `169.254.169.254` | Lab 2 / Lab 4 | Managed Sandboxes default to `internet_access: False`, run as `sandbox-untrusted`/`appuser` with **zero IAM roles**, and block `169.254.169.254:80` and RFC 1918. `GCPSkillRegistry` fails inside air-gapped sandboxes. | Keep Vertex AI / Skill Registry calls in the **parent Agent Runtime** and pass data into the sandbox; bake Python/Node dependencies into the BYOC image (`sandbox_image/Dockerfile`); for controlled VPC/FQDN egress, attach **PSC-I** (`network_attachment`, min `/28`) + Cloud NGFW/SWP + Cloud DNS peering. |
 | **8** | `AttributeError: 'str' object has no attribute 'resolve'` on `LocalEnvironment`, or `DeprecationWarning` losing `ctx.state` in `BaseEnvironment` | Lab 1 / Lab 2 | `LocalEnvironment._resolve_path()` calls `.resolve()` on `working_dir` without casting `str` → `Path`. `BaseEnvironment.__init_subclass__` wraps overrides that omit `*, ctx: Context \| None = None`, stripping `ctx`! | Always pass `LocalEnvironment(working_dir=Path("/tmp/workspace"))` (a `pathlib.Path`), put `max_output_chars` on `EnvironmentToolset(...)` (not `LocalEnvironment`), and include `*, ctx: Context \| None = None` on all 5 `BaseEnvironment` overrides (`initialize`, `execute`, `read_file`, `read_file_stream`, `write_file`). |
 | **9** | ADK `"Session not found"` during `adk web`, `eval generate`, or Gemini publish | Lab 1 / Lab 3 / Lab 6 | (a) `App(root_agent=..., name="...")` does not match the containing folder name; (b) `adk web --session_service_uri=agentengine://...` **ignores `.env`**; (c) `google-cloud-aiplatform <= 1.128.0` bug. | Ensure `App.name` matches the agent package directory name; export `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` directly in your shell before `adk web --session_service_uri=...`; upgrade `google-cloud-aiplatform>=1.154.0` / `google-cloud-agentplatform>=2.0.1`. |
-| **10** | `400 FAILED_PRECONDITION` / API error during Evaluation or `generate_loss_clusters` | Lab 6 | (a) Eval Service supports **15 regions + `global`**, and **`generate_loss_clusters` / `eval analyze` are `global`-only** (`generate_loss_clusters` also requires explicit `metric=` for multi-metric results); (b) mixing multi-turn cases into a single-turn dataset fails with HTTP 400 (`Single-turn metric ... received agent_eval_data with N turns`); (c) `gemini-flash-latest` alias can fail on regional endpoints. | Target `us-central1`/`europe-west4` for regional eval and **`location="global"`** with explicit `metric=types.RubricMetric.MULTI_TURN_TASK_SUCCESS` for `generate_loss_clusters`; keep `coding_agent_single_turn.json` and `coding_agent_multi_turn.json` strictly separated; pin explicit versioned Gemini model IDs (e.g., `gemini-2.5-flash`). |
+| **10** | `400 FAILED_PRECONDITION` / API error during Evaluation or `generate_loss_clusters` | Lab 6 | (a) Eval Service supports **14 US/EU regions + `global`** (NOT `asia-southeast1`/`asia-southeast3`), and **`generate_loss_clusters` / `eval analyze` are `global`-only** (`generate_loss_clusters` also requires explicit `metric=` for multi-metric results); (b) mixing multi-turn cases into a single-turn dataset fails with HTTP 400 (`Single-turn metric ... received agent_eval_data with N turns`); (c) `gemini-flash-latest` alias can fail on regional endpoints. | Set **`EVAL_LOCATION=global`** in `.env` (works seamlessly for APAC `asia-southeast1` runtimes AND supports `generate_loss_clusters` with explicit `metric=types.RubricMetric.MULTI_TURN_TASK_SUCCESS` in the same client!); keep `coding_agent_single_turn.json` and `coding_agent_multi_turn.json` strictly separated; pin explicit versioned Gemini model IDs (e.g., `gemini-2.5-flash`). |
 | **11** | First Online Evaluation Monitor shows **`Failed`** (`"permission denied"`) right after creation | Lab 6 | Expected transient IAM propagation delay for the project-level service account (**P4SA**) on the project's very first `OnlineEvaluator`. | **Do not delete.** Wait 10–30 minutes for the scheduled 10-minute retry loop to turn it **Active**. Only inspect P4SA IAM if still `Failed` after **30 minutes**. |
 | **12** | Traces appear, but prompt/response text is blank or Online Monitor sees zero gradeable events | Lab 3 / Lab 5 / Lab 6 | Passed `"true"` instead of enum `"EVENT_ONLY"` for ADK Python `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` (silently falls back to `NO_CONTENT`!), or used ADK `< 2.1` after May 22, 2026 for `user.id`, or missed `GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=true`. | For ADK Python, set `GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY="true"`, `OTEL_SEMCONV_STABILITY_OPT_IN="gen_ai_latest_experimental"`, and `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT="EVENT_ONLY"` (for ADK Go, use `"1"`/`"true"` instead!). |
 | **13** | Semantic Governance fails to block tool calls OR breaks Agent Runtime startup | Lab 7 (Optional) | (a) Policy Engine **does NOT support streamed model responses** (`:streamGenerateContent` / `"stream": true`); (b) `AuthzPolicy` `when` CEL omitted `!request.headers['content-type'].startsWith('application/grpc')`, intercepting Cloud Resource Manager gRPC calls, or used `.endsWith()` instead of `.contains()`. | Disable streaming on governed LLM calls; include `!request.headers['content-type'].startsWith('application/grpc') && (request.path.contains(':generateContent') ...)` in `AuthzPolicy`; deploy engine with immutable `identity_type = "AGENT_IDENTITY"` + `agent_gateway_config`. |
@@ -261,10 +297,25 @@ Every failure mode and fix below is verified directly against official Google Cl
 
 ## 7. Post-Workshop Teardown & Cost-Hygiene Checklist
 
-Run this ordered cleanup sequence after the workshop so sandbox warm pools, `min_instances >= 1` runtimes, and Online Monitors do not continue accruing charges:
+Run this ordered cleanup sequence after the workshop so sandbox warm pools, `min_instances >= 1` runtimes, and Online Monitors do not continue accruing charges.
 
-1. **Disable/Delete Online Evaluation Monitors** (`Agent Platform → Evaluation → Online monitors → More options → Disable / Delete`) and delete temporary Cloud Monitoring alerting policies.
-2. **Delete Sandboxes, Snapshots, and Templates** (note: deleting a sandbox does **NOT** delete its backing template, and deleting a template fails while warm-pool or sandbox creation is still active):
+### Automated One-Command Teardown (`make cleanup`)
+
+Have every attendee (and your instructor rehearsal project) run the bundled cleanup script from the repository root first:
+
+```bash
+# Preview teardown first with --dry-run, then run live cleanup:
+make cleanup CLEANUP_ARGS=--dry-run
+# Runs scripts/cleanup_workshop.sh — tears down sandboxes, templates, alert policies, and runtimes cleanly
+make cleanup
+```
+
+### Manual Verification & Deep-Clean Checklist
+
+Confirm each resource category is empty after `make cleanup` (or tear down manually if any step requires custom confirmation):
+
+1. **Disable/Delete Online Evaluation Monitors** (`Agent Platform → Evaluation → Online monitors → More options → Disable / Delete`) and confirm temporary Cloud Monitoring alerting policies are removed.
+2. **Delete Sandboxes, Snapshots, and Templates in Singapore (`asia-southeast1`)** (note: deleting a sandbox does **NOT** delete its backing template, and deleting a template fails while warm-pool or sandbox creation is still active):
    ```bash
    cd solution && uv run python -m coding_agent.tools.sandbox_lifecycle cleanup-all --include-templates
    ```
@@ -273,8 +324,8 @@ Run this ordered cleanup sequence after the workshop so sandbox warm pools, `min
    - Run `terraform destroy` inside `starter/terraform/` (or `solution/terraform/`) for the Lab 5 deployed runtime, AND delete your Lab 2/3 standalone parent instance via `client.runtimes.delete(name=..., force=True)` if created separately.
    - Remind attendees who completed Optional Lab 7 that deleting an `AGENT_IDENTITY` runtime permanently invalidates its SPIFFE identity—clean up any dangling `principal://...` entries in UAPs or IAM policies.
 4. **Clean Up Optional Lab 7 Log Sinks & Buckets (if created):** Delete `agent-siem-sink`, `agent-siem-events` Pub/Sub topic, and `agent-audit-worm` log bucket (note: only unlocked log buckets can be deleted before their retention period expires!).
-5. **Clean Up Optional Lab 8 GKE Resources (Safe Namespace-Only Delete):**
+5. **Clean Up Optional Lab 8 GKE Resources in Bangkok (`asia-southeast3`) (Safe Namespace-Only Delete):**
    ```bash
    kubectl delete -f solution/gke_reference/ --ignore-not-found
-   # Only delete a dedicated workshop cluster as a whole via `gcloud container clusters delete`
+   # Only delete a dedicated workshop cluster as a whole via `gcloud container clusters delete --region=asia-southeast3`
    ```

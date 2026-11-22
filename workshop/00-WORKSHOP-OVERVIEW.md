@@ -139,6 +139,12 @@ This workshop follows a **Build → Isolate → Persist → Extend → Deploy ON
 
 ## GCP Prerequisites & Environment Setup
 
+> [!TIP]
+> **No Local Docker Required!** Every lab in this workshop is designed for **100% zero-Docker attendee execution** (`docker` CLI is strictly optional):
+> - **Standalone `uv` without `python3-venv` or Docker:** Install `uv` with `curl -LsSf https://astral.sh/uv/install.sh | sh` — works out of the box even on fresh Debian/Linux workstations or cloud dev environments without `python3-venv` or `docker`.
+> - **Lab 2 (Sandboxes):** Verify your BYOC runner locally via pure Python (`make test-sandbox-local`), build and push remotely via Cloud Build in Bangkok (`make push-sandbox` → `gcloud builds submit --region=asia-southeast3`), or use the zero-build `SANDBOX_MODE=shell` fast-track.
+> - **Lab 5 (Agent Runtime):** Smoke-test `main.py` locally via pure Python (`make test-agent-local`), then deploy via (1) `make push-agent` (Cloud Build `--region=asia-southeast3`) + Terraform `container_spec`, (2) `make pack-agent-source` + Terraform `source_code_spec` + empty `image_spec {}` (zero Docker AND zero Artifact Registry push!), or (3) `agents-cli deploy`.
+
 ### Express Mode vs. Standard GCP Project (Important!)
 
 Gemini Enterprise Agent Platform offers an **Express Mode** free tier (`GOOGLE_GENAI_API_KEY` + `GOOGLE_GENAI_USE_ENTERPRISE=TRUE`), as well as AI Studio (`GEMINI_API_KEY`). **Do NOT use Express Mode for Labs 2–8.**
@@ -156,24 +162,47 @@ Gemini Enterprise Agent Platform offers an **Express Mode** free tier (`GOOGLE_G
 - **Lab 1 only:** You may use AI Studio (`GEMINI_API_KEY`) or Express Mode strictly for local ADK prototyping if your GCP project is still provisioning.
 - **Labs 2–8:** Require a **Standard GCP project with billing enabled** and Application Default Credentials (`gcloud auth application-default login`).
 
-### Recommended Region Selection
+### Regional Availability Matrix (Bangkok Primary + Singapore Secondary)
 
-Standardize strictly on **`us-central1`** (Americas/Global) or **`europe-west4`** (EMEA) for this workshop. Both golden regions support **100% of Labs 1–8** without cross-region workarounds:
-- **Vertex AI Skill Registry (`aiplatform.googleapis.com/v1beta1`, Lab 4) is ONLY available** in `us-central1`, `europe-west4`, and `us-east5`. *(If your organization requires deploying Agent Runtime in another supported region such as `us-east1` or `europe-west1`, you MUST set `SKILL_REGISTRY_LOCATION=us-central1` or `europe-west4` in `.env` so Lab 4 succeeds.)*
-- **Memory Bank is NOT available** in `asia-southeast2`, `australia-southeast2`, or `northamerica-northeast2`.
-- **Agent Gateway is NOT available** in `asia-east2`, `asia-northeast3`, or `asia-southeast2`.
+This workshop standardizes on **Bangkok (`asia-southeast3`) as the Primary Region** paired with **Singapore (`asia-southeast1`) as the Secondary Agent Platform Region**, plus two explicit service-mandated overrides (`us-central1` and `global`). Every placement below is source-verified against Google Cloud's live regional availability tables:
+
+| Region / Env Var | Role in This Workshop | Services Hosted Here | Verified Availability Notes |
+|---|---|---|---|
+| **Bangkok (`asia-southeast3`)**<br/>`PRIMARY_REGION=asia-southeast3`<br/>`AR_LOCATION=asia-southeast3`<br/>`BUILD_LOCATION=asia-southeast3`<br/>`AGENT_REGISTRY_LOCATION=asia-southeast3`<br/>`GKE_LOCATION=asia-southeast3` | **Primary Region** *(Build, Artifacts, Secrets, Agent Registry & Self-Hosted GKE)* | • **Artifact Registry** (`asia-southeast3-docker.pkg.dev`)<br/>• **Cloud Build** (`--region=asia-southeast3`, zero local Docker!)<br/>• **Secret Manager** (`asia-southeast3` / automatic)<br/>• **Agent Registry** (discovery, standalone skills & `ENABLED_BLOCKING` scanning)<br/>• **Lab 8 Self-Hosted GKE + GKE Agent Sandbox** | Keeps container builds, image storage, secrets, registry catalog, and optional self-hosted GKE clusters in Bangkok (ideal for Thailand PDPA / Bank of Thailand compute residency). *(Optional: set `AR_LOCATION=asia-southeast1` if you prefer strict same-region image pulls into Singapore Agent Runtime/Sandboxes.)* |
+| **Singapore (`asia-southeast1`)**<br/>`GOOGLE_CLOUD_LOCATION=asia-southeast1` | **Secondary / Nearest Supported Agent Platform Region** | • **Agent Runtime** (`ReasoningEngine`)<br/>• **Managed Sandboxes** (Shell, BYOC, Code Exec)<br/>• **Managed Sessions** (`VertexAiSessionService`)<br/>• **Memory Bank** (`VertexAiMemoryBankService`)<br/>• **Agent Gateway** & **Gemini 2.5 Flash** | All Agent Platform Runtime, Sandbox, State, Gateway, and Gemini 2.5 Flash capabilities are **officially live in `asia-southeast1` with zero restrictions** — and are **not yet launched in `asia-southeast3`** (Bangkok). |
+| **Iowa (`us-central1`)**<br/>`SKILL_REGISTRY_LOCATION=us-central1` | **Service-Mandated Override (Lab 4)** | • **Vertex AI Skill Registry** (`aiplatform.googleapis.com/v1beta1`) | Preview is strictly limited to **3 regions**: `us-central1`, `europe-west4`, and `us-east5`. Keeping `SKILL_REGISTRY_LOCATION=us-central1` explicitly in `.env` ensures Lab 4 succeeds cleanly from APAC. |
+| **Global (`global`)**<br/>`EVAL_LOCATION=global` | **Service-Mandated Override (Lab 6)** | • **Gen AI Evaluation Service** (offline, simulated, `generate_loss_clusters` / `agents-cli eval analyze`) | Managed Evaluation supports **14 US/EU regions + `global`** (not yet `asia-southeast1`/`asia-southeast3`). Using `EVAL_LOCATION=global` is 100% APAC-ready AND runs `generate_loss_clusters` in the same client without `Unsupported region` errors! |
+
+Additional verified regional boundaries to keep in mind:
+- **Memory Bank is NOT available** in `asia-southeast2`, `australia-southeast2`, or `northamerica-northeast2` (fully supported in **`asia-southeast1`**).
+- **Agent Gateway is NOT available** in `asia-east2`, `asia-northeast3`, or `asia-southeast2` (fully supported in **`asia-southeast1`**).
+- **Semantic Governance Policy Engine (Optional Lab 7 NLC)** is currently available in 8 US/EU regions (`us-central1`, `us-east1`, `us-east4`, `us-west1`, `europe-southwest1`, `europe-west1`, `europe-west4`, `europe-west8`).
 - **`global`** supports Memory Bank, Sessions, and Gen AI Evaluation (`generate_loss_clusters` / `agents-cli eval analyze` are **`global`-only**), but does **not** support `client.runtimes.create()` deployment or CMEK.
+- *(Running a cohort in Americas or EMEA instead of APAC? You can optionally set all regional env vars to a single golden region — `us-central1` or `europe-west4` — while keeping `EVAL_LOCATION=global` for `generate_loss_clusters`.)*
 - See [Supported locations](https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/agent-locations) for the full 23-region matrix.
 
 ### 1. Set Core Environment Variables
 
 ```bash
 export GOOGLE_CLOUD_PROJECT="YOUR_PROJECT_ID"
-export GOOGLE_CLOUD_LOCATION="us-central1"
 export GOOGLE_CLOUD_PROJECT_NUMBER="$(gcloud projects describe "$GOOGLE_CLOUD_PROJECT" --format='value(projectNumber)')"
 
+# Bangkok (asia-southeast3) Primary: Artifact Registry, Cloud Build, Secret Manager, Agent Registry, Lab 8 GKE
+export PRIMARY_REGION="asia-southeast3"
+export AR_LOCATION="asia-southeast3"             # Optional: set asia-southeast1 for same-region AR pulls
+export BUILD_LOCATION="asia-southeast3"
+export AGENT_REGISTRY_LOCATION="asia-southeast3"
+export GKE_LOCATION="asia-southeast3"
+
+# Singapore (asia-southeast1) Secondary: Agent Runtime, Sandboxes, Sessions, Memory Bank, Gateway, Gemini 2.5 Flash
+export GOOGLE_CLOUD_LOCATION="asia-southeast1"
+
+# Service-mandated overrides: Skill Registry (3-region Preview) & Gen AI Evaluation (APAC-ready + loss clustering)
+export SKILL_REGISTRY_LOCATION="us-central1"
+export EVAL_LOCATION="global"
+
 gcloud config set project "$GOOGLE_CLOUD_PROJECT"
-echo "Project: $GOOGLE_CLOUD_PROJECT (#${GOOGLE_CLOUD_PROJECT_NUMBER}) in $GOOGLE_CLOUD_LOCATION"
+echo "Project: $GOOGLE_CLOUD_PROJECT (#${GOOGLE_CLOUD_PROJECT_NUMBER}) | Primary: $PRIMARY_REGION | Agent Platform: $GOOGLE_CLOUD_LOCATION | Skill Registry: $SKILL_REGISTRY_LOCATION | Eval: $EVAL_LOCATION"
 ```
 
 ### 2. Enable Required Google Cloud APIs
@@ -259,15 +288,21 @@ Before running a live workshop (especially if multiple attendees share one GCP p
   - `Required Session Event Appends/min = (U * X) * Y * 1.5`
 - For **15+ concurrent attendees** in a single project, request increases on `reasoning_engine_service_query_requests` (from 90 to >= 150 QPM) and `reasoning_engine_service_write_requests` (from 10 to >= 30/min) at least 48 hours ahead—or assign **1 dedicated GCP project per attendee**.
 
-Quick pre-flight command to verify authentication, enabled services, and local toolchain:
+Quick pre-flight command to verify authentication, enabled services, regional overrides, and local toolchain (zero Docker required!):
 
 ```bash
+# Recommended automated pre-flight check (runs scripts/preflight_check.sh)
+make preflight
+
+# Or inspect individual components manually:
 gcloud auth list --filter=status:ACTIVE --format="value(account)"
 gcloud services list --enabled --project="$GOOGLE_CLOUD_PROJECT" \
   --filter="config.name:(aiplatform|artifactregistry|cloudbuild|secretmanager|logging|monitoring|telemetry|cloudtrace|agentregistry|storage-component|pubsub)" \
   --format="table(config.name)"
 python3 --version && uv --version && terraform version | head -n 1
 ```
+
+*(When you finish the workshop, run **`make cleanup`** — backed by `scripts/cleanup_workshop.sh` — to safely delete sandboxes, templates, alert policies, and runtimes.)*
 
 ---
 

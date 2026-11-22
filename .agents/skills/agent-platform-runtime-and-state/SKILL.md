@@ -30,7 +30,10 @@ Standardize new Python code on **`agentplatform.Client`** (`google-cloud-agentpl
 pip install --upgrade "google-adk[gcp]" "google-cloud-agentplatform>=2.0.1"
 export GOOGLE_GENAI_USE_ENTERPRISE="TRUE"   # Required for Feedback Service & enterprise ADK
 export GOOGLE_CLOUD_PROJECT="PROJECT_ID"
-export GOOGLE_CLOUD_LOCATION="us-central1"
+export PRIMARY_REGION="asia-southeast3"     # Bangkok primary (AR, Cloud Build, Secret Manager)
+export GOOGLE_CLOUD_LOCATION="asia-southeast1" # Singapore (nearest supported Agent Platform region)
+export AR_LOCATION="${PRIMARY_REGION}"      # Bangkok primary AR (or asia-southeast1 for same-region pulls)
+export BUILD_LOCATION="${PRIMARY_REGION}"   # Remote Cloud Build (zero local Docker)
 ```
 
 > **API Version Rule:** Pass `http_options={"api_version": "v1beta1"}` on `agentplatform.Client(...)` for **REST `/v1beta1/...` calls** and SDK **Revisions/Traffic Splitting** or **Agent Identity**; standard `v1` Runtime CRUD/query as well as `agentplatform.Client` `feedback_entries` and `sessions` SDK methods work with default client options (plus `GOOGLE_GENAI_USE_ENTERPRISE="TRUE"`). Note that **no `gcloud` deploy command exists** for Agent Runtime—deploy via Terraform, `agentplatform` SDK, REST, or `agents-cli deploy`.
@@ -64,7 +67,7 @@ export GOOGLE_CLOUD_LOCATION="us-central1"
 6. **Switch traffic to `traffic_split_always_latest` BEFORE changing `agent_gateway_config` — never patch while a manual split is active.**
    - *Why:* Changing an Agent Gateway binding irreversibly archives all prior revisions and returns `FAILED_PRECONDITION` if any manual split exists (even 100% on latest).
 7. **Watch Memory Bank SDK key & model traps: `unstructured_memory_configs` on `create` vs `customization_configs` on `runtimes.update`, and `gemini-embedding-2` accepts ONLY `global`/`us`/`eu`.**
-   - *Why:* Using the wrong dictionary key silently drops customization; regional locations like `us-central1` fail on `gemini-embedding-2`; and the embedding model is immutable once the first memory is stored.
+   - *Why:* Using the wrong dictionary key silently drops customization; regional locations like `asia-southeast1` or `us-central1` fail on `gemini-embedding-2`; and the embedding model is immutable once the first memory is stored.
 8. **Never use IAM Conditions to restrict `ListSessions`, `ListMemories`, or `PurgeMemories`, and never assume Memory Bank blocks prompt injection.**
    - *Why:* Those three RPCs do not support IAM Conditions (max 1,500 principals per policy). Built-in PII exclusion is not infallible—pair Memory Bank with Model Armor, red-teaming, and sandboxed execution + human review.
 9. **Set Feedback `event_id` to the OTel span UUID `gcp.vertex.agent.event_id` (or `raw_event.id`) — and note `feedback_contexts.update` vs `.get` path asymmetry.**
@@ -100,7 +103,8 @@ resource "google_vertex_ai_reasoning_engine" "agent" {
     agent_framework = "google-adk"
     identity_type   = "AGENT_IDENTITY" # Immutable; or omit & set `service_account = "<email>"`
     container_spec {
-      image_uri = "${var.location}-docker.pkg.dev/${var.project_id}/agents-repo/agent:${var.image_tag}"
+      # var.ar_location defaults to Bangkok primary (asia-southeast3); or asia-southeast1 for same-region pulls
+      image_uri = "${var.ar_location}-docker.pkg.dev/${var.project_id}/agents-repo/agent:${var.image_tag}"
     }
     deployment_spec {
       env { name = "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY"; value = "true" }
@@ -137,8 +141,8 @@ curl -X POST \
 
 ```python
 import agentplatform
-client = agentplatform.Client(project="PROJECT_ID", location="LOCATION", http_options={"api_version": "v1beta1"})
-engine = "projects/PROJECT_ID/locations/LOCATION/reasoningEngines/RESOURCE_ID"
+client = agentplatform.Client(project="PROJECT_ID", location="asia-southeast1", http_options={"api_version": "v1beta1"})
+engine = "projects/PROJECT_ID/locations/asia-southeast1/reasoningEngines/RESOURCE_ID"
 # 100% rollback to known-good ACTIVE revision, or immediate kill switch (terminates containers + SPIFFE identity)
 client.runtimes.update(name=engine, config={"traffic_config": {"trafficSplitManual": {"targets": [{"runtimeRevisionName": f"{engine}/runtimeRevisions/REV_GOOD", "percent": 100}]}}})
 client.runtimes.delete(name=engine, force=True)  # Full revision CRUD/split examples -> references/runtime-management-and-quotas.md
@@ -157,7 +161,7 @@ async def save_turn_to_memory(callback_context: CallbackContext) -> None:
     await callback_context.add_events_to_memory(events=callback_context.session.events[-5:])
 
 agent = adk.Agent(
-    model="gemini-3.5-flash",
+    model="gemini-2.5-flash",
     name="coding_agent",
     instruction="Use recalled user preferences safely.",
     tools=[PreloadMemoryTool()],
@@ -166,8 +170,8 @@ agent = adk.Agent(
 runner = adk.Runner(
     agent=agent,
     app_name="coding_agent",
-    session_service=VertexAiSessionService(project="PROJECT_ID", location="us-central1", agent_engine_id="ENGINE_ID"),
-    memory_service=VertexAiMemoryBankService(project="PROJECT_ID", location="us", agent_engine_id="MEMORY_BANK_ID"),
+    session_service=VertexAiSessionService(project="PROJECT_ID", location="asia-southeast1", agent_engine_id="ENGINE_ID"),
+    memory_service=VertexAiMemoryBankService(project="PROJECT_ID", location="asia-southeast1", agent_engine_id="MEMORY_BANK_ID"),
 )
 ```
 
@@ -177,8 +181,8 @@ runner = adk.Runner(
 import os, agentplatform, google.cloud.logging
 
 os.environ["GOOGLE_GENAI_USE_ENTERPRISE"] = "TRUE"
-client = agentplatform.Client(project="PROJECT_ID", location="us-central1")
-engine_name = "projects/PROJECT_ID/locations/us-central1/reasoningEngines/RESOURCE_ID"
+client = agentplatform.Client(project="PROJECT_ID", location="asia-southeast1")
+engine_name = "projects/PROJECT_ID/locations/asia-southeast1/reasoningEngines/RESOURCE_ID"
 
 op = client.feedback_entries.create(
     name=engine_name,
@@ -193,7 +197,7 @@ logger = log_client.logger(
     name="agent-events",
     resource=google.cloud.logging.Resource(
         type="aiplatform.googleapis.com/ReasoningEngine",
-        labels={"location": "us-central1", "resource_container": "PROJECT_ID", "reasoning_engine_id": os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID", "")},
+        labels={"location": "asia-southeast1", "resource_container": "PROJECT_ID", "reasoning_engine_id": os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID", "")},
     ),
 )
 logger.log_struct({"event": "feedback_recorded", "entry": op.response.name}, severity="INFO")

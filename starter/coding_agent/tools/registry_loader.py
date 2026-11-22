@@ -234,7 +234,7 @@ def discover_agent_registry_catalog(
 
 def build_agent_registry_integrations(
     project_id: str,
-    location: str = "us-central1",
+    location: str = "asia-southeast3",
     mcp_server_name: str | None = None,
     remote_a2a_agent_name: str | None = None,
     continue_uri: str | None = None,

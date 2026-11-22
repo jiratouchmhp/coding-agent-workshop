@@ -33,8 +33,8 @@ import os
 import agentplatform
 
 os.environ["GOOGLE_GENAI_USE_ENTERPRISE"] = "TRUE"
-client = agentplatform.Client(project="PROJECT_ID", location="us-central1")
-engine_name = "projects/PROJECT_ID/locations/us-central1/reasoningEngines/AGENT_ENGINE_ID"
+client = agentplatform.Client(project="PROJECT_ID", location="asia-southeast1")
+engine_name = "projects/PROJECT_ID/locations/asia-southeast1/reasoningEngines/AGENT_ENGINE_ID"
 
 # 1. Create feedback entry (returns LRO)
 # IMPORTANT: `event_id` MUST match the OTel span UUID `gcp.vertex.agent.event_id`

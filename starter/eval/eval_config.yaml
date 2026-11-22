@@ -2,7 +2,7 @@
 # Usage (run from inside `starter/` where `agents-cli-manifest.yaml` resides):
 #   agents-cli eval generate --dataset eval/datasets/coding_agent_single_turn.json -o artifacts/traces/
 #   agents-cli eval grade --traces artifacts/traces/ \
-#     --config eval/eval_config.yaml --qps 5 --region us-central1
+#     --config eval/eval_config.yaml --qps 5 --region global
 #
 # IMPORTANT:
 # 1. `final_response_quality`, `tool_use_quality`, and `hallucination` require generated

@@ -1,0 +1,47 @@
+# =============================================================================
+# Cloud Build Upload Ignore Rules (`gcloud builds submit`)
+# =============================================================================
+# Excludes local virtual environments, Python/linter caches, Terraform state
+# and secrets, and generated evaluation artifacts from Cloud Build uploads
+# (Lab 5 Zero-Docker path: `make push-agent` & `scripts/live_gcp_e2e_validate.sh`).
+#
+# Preserves all runtime and workshop assets required for builds & manifests:
+#   Dockerfile, main.py, requirements.txt, pyproject.toml,
+#   agents-cli-manifest.yaml, services.py, services.yaml,
+#   coding_agent/, skills_to_register/
+# =============================================================================
+
+# Ignore metadata and VCS files
+.gcloudignore
+.git
+.gitignore
+
+# Python virtual environments, bytecode, and build/test caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# Local environment secrets (never upload populated .env files)
+.env
+.env.*
+
+# Terraform directory, caches, state, variables, and generated archives
+terraform/
+.terraform/
+*.tfstate*
+*.tfvars*
+*.tar.gz
+
+# Generated evaluation traces, reports, and optimization outputs
+artifacts/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db

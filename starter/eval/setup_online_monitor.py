@@ -72,7 +72,8 @@ def validate_otel_prerequisites(env: dict[str, str] | None = None) -> TelemetryC
     # 3. OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT is in VALID_PYTHON_CAPTURE_ENUMS
     #    (explicitly reject boolean strings like "true"/"false" because ADK Python silently
     #    falls back to NO_CONTENT!).
-    # 4. EVAL_LOCATION / GOOGLE_CLOUD_LOCATION is in SUPPORTED_EVAL_LOCATIONS.
+    # 4. EVAL_LOCATION (defaulting to "global" when unset — never falling back to
+    #    GOOGLE_CLOUD_LOCATION such as asia-southeast1) is in SUPPORTED_EVAL_LOCATIONS.
     # Return TelemetryCheckResult(passed=not errors, errors=..., warnings=..., observed_env=...).
     raise NotImplementedError(
         f"TODO(lab-6): Validate OTel prerequisites against {len(source)} env entries "
@@ -85,6 +86,7 @@ def build_online_monitor_spec(
     project_id: str,
     location: str,
     reasoning_engine_name: str,
+    runtime_location: str | None = None,
     sampling_rate: float = 0.20,
     max_samples_per_run: int = 25,
     trace_filter: str = "ALL_TRACES",
@@ -94,16 +96,17 @@ def build_online_monitor_spec(
     # TODO(lab-6): Validate sampling_rate in (0.0, 1.0] and max_samples_per_run > 0, then return
     # a dict documenting:
     # - Console provisioning URL (`https://console.cloud.google.com/agent-platform/agent-evaluation`)
+    # - `target_agent_engine` using `runtime_location` (e.g., asia-southeast1) as fallback region
     # - 10-minute cadence, sampling_percentage, max_samples_per_run, trace_filter, metrics
     # - Exported Cloud Monitoring metrics (`aiplatform.googleapis.com/online_evaluator/scores`
     #   and `aiplatform.googleapis.com/online_evaluator/evaluations_count`)
     # - Operational warnings (first-monitor transient Failed up to 30m; P4SA project scope)
-    # - Logs Explorer queries (`resource.labels.online_evaluator`, `labels.reasoning_engine_id`, `labels.trace`)
+    # - Logs Explorer queries (`resource.labels.online_evaluator` in eval `location`, `labels.reasoning_engine_id`, `labels.trace`)
     raise NotImplementedError(
         f"TODO(lab-6): Build Online Monitor spec for project={project_id!r}, "
-        f"location={location!r}, engine={reasoning_engine_name!r}, "
-        f"rate={sampling_rate}, max_samples={max_samples_per_run}, "
-        f"filter={trace_filter!r}, metrics={metrics!r}."
+        f"eval_location={location!r}, runtime_location={runtime_location!r}, "
+        f"engine={reasoning_engine_name!r}, rate={sampling_rate}, "
+        f"max_samples={max_samples_per_run}, filter={trace_filter!r}, metrics={metrics!r}."
     )
 
 
@@ -139,7 +142,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         description="Validate OTel telemetry prerequisites and generate Online Evaluation Monitor config.",
     )
     parser.add_argument("--project", help="GCP project ID (defaults to GOOGLE_CLOUD_PROJECT).")
-    parser.add_argument("--location", help="Eval region (defaults to EVAL_LOCATION or GOOGLE_CLOUD_LOCATION).")
+    parser.add_argument(
+        "--location",
+        help="Eval region (14 supported US/EU regions or global; defaults to EVAL_LOCATION / 'global').",
+    )
+    parser.add_argument(
+        "--runtime-location",
+        help="Agent Runtime region for --verify-runtime and target_agent_engine fallback (defaults to GOOGLE_CLOUD_LOCATION).",
+    )
     parser.add_argument("--agent-resource-name", help="Full ReasoningEngine resource name.")
     parser.add_argument(
         "--sampling-rate",
@@ -168,14 +178,20 @@ def main(argv: list[str] | None = None) -> int:
     settings = get_settings()
 
     project_id = args.project or settings.google_cloud_project
-    location = args.location or os.environ.get("EVAL_LOCATION") or settings.google_cloud_location
+    runtime_location = (args.runtime_location or "").strip() or settings.google_cloud_location
+    eval_location = (
+        (args.location or "").strip()
+        or os.environ.get("EVAL_LOCATION", "").strip()
+        or settings.eval_location
+    )
     runtime_name = args.agent_resource_name or settings.reasoning_engine_name
     metrics = [m.strip() for m in args.metrics.split(",") if m.strip()]
 
     otel_check = validate_otel_prerequisites()
     monitor_spec = build_online_monitor_spec(
         project_id=project_id,
-        location=location,
+        location=eval_location,
+        runtime_location=runtime_location,
         reasoning_engine_name=runtime_name,
         sampling_rate=args.sampling_rate,
         max_samples_per_run=args.max_samples_per_run,
@@ -191,7 +207,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.verify_runtime:
         if not project_id or not runtime_name:
             raise ValueError("--verify-runtime requires GOOGLE_CLOUD_PROJECT and REASONING_ENGINE_NAME.")
-        output["runtime_verification"] = verify_deployed_runtime(project_id, location, runtime_name)
+        output["runtime_verification"] = verify_deployed_runtime(
+            project_id, runtime_location, runtime_name
+        )
 
     print(json.dumps(output, indent=2))
     if args.strict_env and not otel_check.passed:

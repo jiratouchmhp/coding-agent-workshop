@@ -102,13 +102,17 @@ cd starter && uv sync
 ```
 
 > [!IMPORTANT]
-> **Supported Regions for GenAI Evaluation Service (15 Regions + `global`):**
-> Managed evaluation runs only in:
+> **APAC Regional Pairing — `EVAL_LOCATION=global` + `GOOGLE_CLOUD_LOCATION=asia-southeast1` (Singapore):**
+> Managed Gen AI Evaluation Service currently supports **14 US/EU regions + `global`**:
 > - **US (7):** `us-central1`, `us-east1`, `us-east4`, `us-east5`, `us-south1`, `us-west1`, `us-west4`
 > - **Europe (7):** `europe-central2`, `europe-north1`, `europe-southwest1`, `europe-west1`, `europe-west4`, `europe-west8`, `europe-west9`
-> - **Global (1):** `global` *(default for `agents-cli eval run/grade/submit`; `agents-cli eval analyze` is **`global`-only**)*
+> - **Global (1):** **`global`** *(default for this workshop's APAC Bangkok/Singapore cohorts AND for `agents-cli eval run/grade/submit`; `generate_loss_clusters` / `agents-cli eval analyze` are **`global`-only**!)*
 >
-> Calling the evaluation service from any other region returns `400 FAILED_PRECONDITION: Unsupported region for Vertex Evaluation Service`. If your organization has strict regional data residency outside these 15 regions, run local custom Python metrics (`custom_function`, `execution: local`) in `agents-cli eval` to grade in-process.
+> Calling the evaluation service with `asia-southeast1` or `asia-southeast3` returns `400 FAILED_PRECONDITION: Unsupported region for Vertex Evaluation Service`. Keeping **`EVAL_LOCATION=global`** alongside **`GOOGLE_CLOUD_LOCATION=asia-southeast1`** in `.env` means:
+> 1. Offline eval (`make eval-offline`), 2-step simulated user eval (`make eval-simulated`), and `generate_loss_clusters` all work seamlessly from Bangkok/Singapore in the **same `global` client** with zero `Unsupported region` errors!
+> 2. `setup_online_monitor.py --verify-runtime` inspects your deployed `ReasoningEngine` in **`GOOGLE_CLOUD_LOCATION=asia-southeast1`** (Singapore) while validating evaluation configuration against **`EVAL_LOCATION=global`** — avoiding both "Unsupported region" and "ReasoningEngine not found in global" errors.
+>
+> *(If your organization has strict regional data residency outside these 14 regions + `global`, run local custom Python metrics — `custom_function`, `execution: local` — in `agents-cli eval` to grade in-process.)*
 
 > [!NOTE]
 > **SDK Namespace Transparency (`vertexai` vs. `agentplatform`):**
@@ -231,7 +235,7 @@ Therefore, our 8 coding-agent evaluation cases are **explicitly split** into two
 
 Open [`starter/eval/run_offline_eval.py`](../starter/eval/run_offline_eval.py) and complete the `# TODO(lab-6)` blocks:
 
-1. **Initialize `vertexai.Client`** targeting your eval-supported region (`us-central1`, `europe-west4`, or `global`).
+1. **Initialize `vertexai.Client`** targeting `EVAL_LOCATION` (default **`global`** for Bangkok/Singapore cohorts — APAC-ready and compatible with `generate_loss_clusters` in the same client; US/EU cohorts can alternatively use `us-central1` or `europe-west4`).
 2. **Register a Custom LLM Metric (`types.LLMMetric`)** (`coding_rigor_rubric`) and a **Custom Code Metric (`types.CodeExecutionMetric`)** (`multi_turn_has_turns`) via `client.evals.create_evaluation_metric(...)`:
    ```python
    from vertexai import Client, types
@@ -325,14 +329,15 @@ agents-cli eval grade \
 
 # Decoupled workflow: generate traces once, re-grade repeatedly with eval_config.yaml and custom QPS/region
 agents-cli eval generate --dataset eval/datasets/coding_agent_single_turn.json -o artifacts/traces/
-agents-cli eval grade --traces artifacts/traces/ --config eval/eval_config.yaml --qps 5 --region us-central1
+agents-cli eval grade --traces artifacts/traces/ --config eval/eval_config.yaml --qps 5 --region "${EVAL_LOCATION:-global}"
 
-# Optional: Cloud-side batch evaluation against your deployed ReasoningEngine
+# Optional: Cloud-side batch evaluation against your deployed ReasoningEngine in Singapore (asia-southeast1)
+# Note: use EVAL_LOCATION=global for the evaluation service region while REASONING_ENGINE_NAME points to asia-southeast1!
 agents-cli eval submit \
   --dataset eval/datasets/coding_agent_single_turn.json \
   --dest "gs://${EVAL_GCS_BUCKET}/eval-runs" \
   --resource-name "${REASONING_ENGINE_NAME}" \
-  --region "${GOOGLE_CLOUD_LOCATION}"
+  --region "${EVAL_LOCATION:-global}"
 ```
 
 > [!NOTE]
@@ -419,8 +424,9 @@ cd starter && uv run python eval/run_simulated_eval.py --count 5 --max-turns 5
 ### 3.2 Alternative: `agents-cli eval dataset synthesize` & Console Simulation
 
 ```bash
-# Experimental (ADK Python ONLY — ensure GOOGLE_CLOUD_LOCATION is one of the 15 eval regions or global!)
-agents-cli eval dataset synthesize \
+# Experimental (ADK Python ONLY — override GOOGLE_CLOUD_LOCATION to EVAL_LOCATION=global because
+# `eval dataset synthesize` uses GOOGLE_CLOUD_LOCATION rather than a `--region` flag!)
+GOOGLE_CLOUD_LOCATION="${EVAL_LOCATION:-global}" agents-cli eval dataset synthesize \
   --count 6 \
   --instruction "Developer asks coding agent to fix failing unit tests and then changes constraints mid-session." \
   --environment-context "Python 3.12 repo inside /workspace with pytest and ruff." \
@@ -429,6 +435,7 @@ agents-cli eval dataset synthesize \
 # Because synthesize already produces simulated traces, skip `eval generate` and grade directly:
 agents-cli eval grade \
   --traces artifacts/traces/synth_traces.json \
+  --region "${EVAL_LOCATION:-global}" \
   --metrics multi_turn_task_success,multi_turn_tool_use_quality,multi_turn_trajectory_quality
 ```
 
@@ -514,8 +521,9 @@ Complete the `# TODO(lab-6)` validation checks in [`starter/eval/setup_online_mo
 
 ```bash
 cd starter && uv run python eval/setup_online_monitor.py
-# Optional flags: add --strict-env (exit non-zero if OTel vars are invalid)
-# and/or --verify-runtime (verify live ReasoningEngine state via API)
+# Optional flags: add --strict-env (exit non-zero if OTel vars or EVAL_LOCATION=global are invalid)
+# and/or --verify-runtime (verifies your live ReasoningEngine in GOOGLE_CLOUD_LOCATION=asia-southeast1
+# while validating eval config against EVAL_LOCATION=global — zero region mismatch!)
 ```
 
 Then create the Online Monitor in the Console (**2 minutes**):
@@ -533,7 +541,7 @@ Then create the Online Monitor in the Console (**2 minutes**):
 
 Verify monitor execution in **Logs Explorer** using the verified filter templates:
 ```text
-resource.labels.online_evaluator="projects/${GOOGLE_CLOUD_PROJECT}/locations/${GOOGLE_CLOUD_LOCATION}/onlineEvaluators/YOUR_MONITOR_ID"
+resource.labels.online_evaluator="projects/${GOOGLE_CLOUD_PROJECT}/locations/${EVAL_LOCATION:-global}/onlineEvaluators/YOUR_MONITOR_ID"
 # Or filter by agent or specific trace:
 labels.reasoning_engine_id="${REASONING_ENGINE_ID}"
 labels.trace="YOUR_TRACE_ID"
@@ -780,7 +788,7 @@ When Failure Clusters or `THUMBS_DOWN` feedback point to a **domain skill gap** 
 3. **Path B2 (Governed / Optional Lab 7 — Immutable Revisions & Instant Rollback): Promote `v2` in Agent Registry:**
    If your enterprise registers standalone skills in **Agent Registry (`agentregistry.googleapis.com/v1`)** (see [Optional Lab 7 Part A](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md#part-a-standalone-skill-security-scanning--lifecycle-governance-agentregistrygoogleapiscomv1)), publish an immutable `v2` revision, let automated `ENABLED_BLOCKING` security scanning verify it, and flip `--default-revision`:
    ```bash
-   export AGENT_REGISTRY_LOCATION="${AGENT_REGISTRY_LOCATION:-us-central1}"
+   export AGENT_REGISTRY_LOCATION="${AGENT_REGISTRY_LOCATION:-asia-southeast3}"  # Bangkok primary Agent Registry region
 
    # 1. Upload immutable v2 skill revision (triggers automated LLM security scan if ENABLED_BLOCKING)
    gcloud agent-registry skills revisions create v2 \
@@ -867,5 +875,8 @@ Confirm all six checkpoints pass before choosing your next track:
 
 Choose your path based on your schedule and enterprise security goals:
 
-- **Full-Day / Security Track:** [Lab 7 (Optional): Enterprise Security & Governance Hardening](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md) — Add Agent Registry `ENABLED_BLOCKING` skill scanning, Semantic Governance NLC policies & Model Armor, SPIFFE `AGENT_IDENTITY` + Agent Gateway Terraform upgrade, multi-tenant Session/Memory IAM Conditions, CMEK/VPC-SC, and WORM/SIEM/SCC SecOps.
+- **Full-Day / Security Track:** [Lab 7 (Optional): Enterprise Security & Governance Hardening](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md) — Add Agent Registry `ENABLED_BLOCKING` skill scanning (Bangkok `asia-southeast3`), Semantic Governance NLC policies & Model Armor, SPIFFE `AGENT_IDENTITY` + Agent Gateway Terraform upgrade (Singapore `asia-southeast1`), multi-tenant Session/Memory IAM Conditions, CMEK/VPC-SC, and WORM/SIEM/SCC SecOps.
 - **Short on Time / Half-Day Fast-Track (Skip Lab 7 cleanly):** [Lab 8: Architecture & Limitations Deep-Dive — Agent Runtime vs. Self-Hosted GKE](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) — Skipping Optional Lab 7 leaves Labs 1–6 100% working and green!
+
+> [!TIP]
+> **Post-Workshop Cleanup:** Complete [Optional Lab 7](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md) and [Lab 8](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) first while your deployed runtime is active. When you are completely finished with the workshop, run **`make cleanup`** (backed by `scripts/cleanup_workshop.sh`) from the repository root to safely tear down sandboxes, templates, alert policies, and Agent Runtime instances so no idle charges accrue!

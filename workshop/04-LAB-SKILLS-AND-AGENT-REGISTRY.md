@@ -33,25 +33,25 @@ If you are running on the **3.5-hour Half-Day Fast-Track**, Lab 4 is already str
 flowchart LR
     SkillDir["starter/skills_to_register/secure-code-review/"] -->|"scripts/package_registry_skill.py (16 Atomic Checks)"| Zip["Validated skill.zip"]
 
-    Zip -->|"agentplatform.Client.skills.create"| SkillReg["Vertex AI Skill Registry (aiplatform v1beta1, <=10MB ZIP)"]
+    Zip -->|"agentplatform.Client.skills.create (us-central1)"| SkillReg["Vertex AI Skill Registry (aiplatform v1beta1, 3-region Preview, <=10MB ZIP)"]
 
-    subgraph Runtime["Feature-Complete Local Coding Agent (Ready to Deploy ONCE in Lab 5)"]
+    subgraph Runtime["Feature-Complete Local Coding Agent (Ready to Deploy ONCE in Lab 5 to asia-southeast1)"]
         Toolset["SkillToolset (list/search/load/run_skill_script)"]
         ADKSkillReg["GCPSkillRegistry (with Air-Gapped Local Fallback)"]
-        SandboxEnv["AgentPlatformSandboxEnvironment (Reused from Lab 2!)"]
+        SandboxEnv["AgentPlatformSandboxEnvironment (Reused from Lab 2 in asia-southeast1!)"]
         ADKAgentReg["AgentRegistry (MCP Toolsets & Remote A2A Discovery)"]
         Toolset --> ADKSkillReg
         Toolset -->|"environment=sandbox_env"| SandboxEnv
     end
 
     ADKSkillReg -.->|"Dynamic Discovery & Caching"| SkillReg
-    ADKAgentReg -.->|"Discover MCP / A2A Catalog"| AgentReg["Agent Registry (MCP Servers & A2A Agents)"]
+    ADKAgentReg -.->|"Discover MCP / A2A Catalog (asia-southeast3)"| AgentReg["Agent Registry (Bangkok asia-southeast3)"]
 ```
 
 > [!NOTE]
-> **Vertex AI Skill Registry vs. Agent Registry Standalone Skills:**
-> - **Vertex AI / Agent Platform Skill Registry (`aiplatform.googleapis.com/v1beta1`, used in this lab):** Developer-facing skill catalog via `agentplatform.Client.skills.*` (`<= 10 MB` ZIP, `<= 500 MB` unzipped; supported regions: `us-central1`, `europe-west4`, `us-east5`; includes built-in `gcp-skill-registry`).
-> - **Agent Registry Standalone Skills (`agentregistry.googleapis.com/v1`, covered in Optional Lab 7):** Enterprise governance catalog (`gcloud agent-registry skills ...`) adding automatic `private-*` prefixing, `<= 1 MB` ZIP limits, automated LLM security scanning (`ENABLED_BLOCKING`), `Finding` triage, lifecycle states, and Custom Org Policies — see [Lab 7 (Optional): Enterprise Security & Governance Hardening](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md).
+> **Verified Multi-Region Split — Vertex AI Skill Registry (`us-central1`) vs. Agent Registry (`asia-southeast3` Bangkok):**
+> - **Vertex AI / Agent Platform Skill Registry (`aiplatform.googleapis.com/v1beta1`, Part B):** Developer-facing skill catalog via `agentplatform.Client.skills.*` (`<= 10 MB` ZIP, `<= 500 MB` unzipped; includes built-in `gcp-skill-registry`). Preview is **strictly 3 regions: `us-central1`, `europe-west4`, and `us-east5`** (not yet in `asia-southeast3` or `asia-southeast1`), so keep **`SKILL_REGISTRY_LOCATION=us-central1`** explicitly in `.env` while running Agent Runtime & Sandboxes in Singapore (`asia-southeast1`).
+> - **Agent Registry Discovery & Standalone Skills (`agentregistry.googleapis.com`, Part C & Optional Lab 7):** Supports **`AGENT_REGISTRY_LOCATION=asia-southeast3` (Bangkok!)** directly for MCP server/A2A catalog discovery (`AgentRegistry` in Part C) and enterprise standalone skill governance (`gcloud agent-registry skills ...` adding automatic `private-*` prefixing, `<= 1 MB` ZIP limits, automated LLM security scanning `ENABLED_BLOCKING`, `Finding` triage, lifecycle states, and Custom Org Policies — see [Lab 7 (Optional): Enterprise Security & Governance Hardening](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md)).
 
 ---
 
@@ -107,7 +107,7 @@ Confirm all validation checks pass (`0 errors`) and note the generated `.zip` pa
 
 ### Step B1: Publish `secure-code-review` to Vertex AI Skill Registry (`aiplatform.googleapis.com/v1beta1`)
 
-Set your Skill Registry region (must be one of `us-central1`, `europe-west4`, or `us-east5`):
+Set your Skill Registry override region explicitly to **`us-central1`** (Vertex AI Skill Registry Preview is **strictly 3 regions**: `us-central1`, `europe-west4`, or `us-east5` — it is not yet launched in Bangkok `asia-southeast3` or Singapore `asia-southeast1`):
 
 ```bash
 source .env
@@ -248,9 +248,9 @@ def build_skill_registry_toolset(
     )
 ```
 
-### Step C3: Implement `build_agent_registry_integrations()` (`AgentRegistry` + Auth Providers)
+### Step C3: Implement `build_agent_registry_integrations()` (`AgentRegistry` in Bangkok `asia-southeast3` + Auth Providers)
 
-`AgentRegistry` (ADK Python 2.0+) discovers registered A2A sub-agents, MCP servers, and endpoints using either short relative names (`"agents/AGENT_ID"`, `"mcpServers/SERVER_ID"`) or full resource names. Wire all **three verified authentication patterns** cleanly:
+`AgentRegistry` (ADK Python 2.0+) discovers registered A2A sub-agents, MCP servers, and endpoints in your primary Bangkok region (**`AGENT_REGISTRY_LOCATION=asia-southeast3`**) using either short relative names (`"agents/AGENT_ID"`, `"mcpServers/SERVER_ID"`) or full resource names. Wire all **three verified authentication patterns** cleanly:
 
 ```python
 import google.auth
@@ -280,7 +280,7 @@ class GoogleApiAuth(httpx.Auth):
 
 def build_agent_registry_integrations(
     project_id: str,
-    location: str,
+    location: str = "asia-southeast3",  # Bangkok primary region (AGENT_REGISTRY_LOCATION)
     mcp_server_name: str | None = None,
     remote_a2a_agent_name: str | None = None,
     continue_uri: str | None = None,

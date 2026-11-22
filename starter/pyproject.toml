@@ -9,10 +9,12 @@ description = "Enterprise Coding Agent workshop starter built on Google ADK and 
 requires-python = ">=3.11"
 dependencies = [
     # ADK Python 2.0+ unlocks collaborative subagent modes, declarative graph workflows,
-    # dynamic workflows, and service registration (extras required for
-    # EnvironmentToolset, GCPSkillRegistry, AgentRegistry, and Auth Manager MCP).
-    "google-adk[a2a,agent-identity,mcp]>=2.0.0",
-    # Vertex AI / Agent Platform SDK (agent_engines, evaluation, and agentplatform namespace in >=1.154.0).
+    # dynamic workflows, and service registration (extras required for EnvironmentToolset,
+    # GCPSkillRegistry, AgentRegistry, Auth Manager MCP, and GEPA eval/optimize).
+    "google-adk[a2a,agent-identity,mcp,eval]>=2.0.0",
+    # Standalone Gemini Enterprise Agent Platform SDK (`agentplatform.Client` + ADK/eval integrations).
+    "google-cloud-agentplatform[adk,evaluation]>=2.0.1",
+    # Vertex AI / Agent Platform SDK (agent_engines and evaluation integrations).
     "google-cloud-aiplatform[agent_engines,evaluation]>=1.154.0",
     # Runtime observability (Lab 3 & Lab 6).
     "google-cloud-logging>=3.11.0",
@@ -30,11 +32,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Optional standalone Gemini Enterprise Agent Platform SDK (`agentplatform.Client`).
-# Install via `uv sync --extra agentplatform` or `pip install "google-cloud-agentplatform>=2.0.1"`
-# if your environment separates `agentplatform` from `google-cloud-aiplatform>=1.154.0`.
+# Included in core `dependencies` above; kept as a backwards-compatible extra alias.
 agentplatform = [
-    "google-cloud-agentplatform>=2.0.1",
+    "google-cloud-agentplatform[adk,evaluation]>=2.0.1",
 ]
 dev = [
     "pytest>=8.3.0",

@@ -81,9 +81,7 @@ def validate_otel_prerequisites(env: dict[str, str] | None = None) -> TelemetryC
     capture_mode = source.get("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "").strip()
     upload_hook = source.get("OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK", "").strip()
     upload_base = source.get("OTEL_INSTRUMENTATION_GENAI_UPLOAD_BASE_PATH", "").strip()
-    eval_location = (
-        source.get("EVAL_LOCATION") or source.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
-    ).strip()
+    eval_location = (source.get("EVAL_LOCATION") or "").strip() or "global"
 
     if enable_telemetry.lower() != "true":
         errors.append(
@@ -118,7 +116,7 @@ def validate_otel_prerequisites(env: dict[str, str] | None = None) -> TelemetryC
 
     if eval_location not in SUPPORTED_EVAL_LOCATIONS:
         errors.append(
-            f"Evaluation location {eval_location!r} is not in the 15 supported regions + global."
+            f"Evaluation location {eval_location!r} is not in the 14 supported US/EU regions + global."
         )
 
     if upload_hook == "upload" and not upload_base.startswith("gs://"):
@@ -148,6 +146,7 @@ def build_online_monitor_spec(
     project_id: str,
     location: str,
     reasoning_engine_name: str,
+    runtime_location: str | None = None,
     sampling_rate: float = 0.20,
     max_samples_per_run: int = 25,
     trace_filter: str = "ALL_TRACES",
@@ -162,12 +161,18 @@ def build_online_monitor_spec(
     selected_metrics = metrics or list(DEFAULT_ONLINE_METRICS)
     engine_id = reasoning_engine_name.rstrip("/").split("/")[-1] if reasoning_engine_name else "<REASONING_ENGINE_ID>"
     proj = project_id or "<YOUR_PROJECT_ID>"
+    resolved_runtime_location = (runtime_location or "").strip() or location
 
     return {
         "monitor_display_name": "coding-agent-online-quality-monitor",
+        "eval_location": location,
+        "runtime_location": resolved_runtime_location,
         "provisioning_channel": "Google Cloud Console (Agent Platform > Agents > Evaluation > Online monitors)",
         "console_url": f"https://console.cloud.google.com/agent-platform/agent-evaluation?project={proj}",
-        "target_agent_engine": reasoning_engine_name or f"projects/{proj}/locations/{location}/reasoningEngines/{engine_id}",
+        "target_agent_engine": (
+            reasoning_engine_name
+            or f"projects/{proj}/locations/{resolved_runtime_location}/reasoningEngines/{engine_id}"
+        ),
         "schedule_cadence": "Approximately every 10 minutes (Query -> Evaluate -> Report)",
         "sampling_config": {
             "sampling_percentage": round(sampling_rate * 100, 2),
@@ -255,7 +260,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         description="Validate OTel telemetry prerequisites and generate Online Evaluation Monitor config.",
     )
     parser.add_argument("--project", help="GCP project ID (defaults to GOOGLE_CLOUD_PROJECT).")
-    parser.add_argument("--location", help="Eval region (defaults to EVAL_LOCATION or GOOGLE_CLOUD_LOCATION).")
+    parser.add_argument(
+        "--location",
+        help="Eval region (14 supported US/EU regions or global; defaults to EVAL_LOCATION / 'global').",
+    )
+    parser.add_argument(
+        "--runtime-location",
+        help="Agent Runtime region for --verify-runtime and target_agent_engine fallback (defaults to GOOGLE_CLOUD_LOCATION).",
+    )
     parser.add_argument(
         "--agent-resource-name",
         help="Full ReasoningEngine resource name (defaults to REASONING_ENGINE_NAME).",
@@ -301,14 +313,20 @@ def main(argv: list[str] | None = None) -> int:
     settings = get_settings()
 
     project_id = args.project or settings.google_cloud_project
-    location = args.location or os.environ.get("EVAL_LOCATION") or settings.google_cloud_location
+    runtime_location = (args.runtime_location or "").strip() or settings.google_cloud_location
+    eval_location = (
+        (args.location or "").strip()
+        or os.environ.get("EVAL_LOCATION", "").strip()
+        or settings.eval_location
+    )
     runtime_name = args.agent_resource_name or settings.reasoning_engine_name
     metrics = [m.strip() for m in args.metrics.split(",") if m.strip()]
 
     otel_check = validate_otel_prerequisites()
     monitor_spec = build_online_monitor_spec(
         project_id=project_id,
-        location=location,
+        location=eval_location,
+        runtime_location=runtime_location,
         reasoning_engine_name=runtime_name,
         sampling_rate=args.sampling_rate,
         max_samples_per_run=args.max_samples_per_run,
@@ -324,7 +342,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.verify_runtime:
         if not project_id or not runtime_name:
             raise ValueError("--verify-runtime requires GOOGLE_CLOUD_PROJECT and REASONING_ENGINE_NAME.")
-        output["runtime_verification"] = verify_deployed_runtime(project_id, location, runtime_name)
+        output["runtime_verification"] = verify_deployed_runtime(
+            project_id, runtime_location, runtime_name
+        )
 
     print(json.dumps(output, indent=2))
     if args.strict_env and not otel_check.passed:

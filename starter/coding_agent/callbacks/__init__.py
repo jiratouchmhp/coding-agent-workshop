@@ -9,6 +9,7 @@ __all__ = [
     "FeedbackClient",
     "after_tool_callback",
     "before_tool_callback",
+    "build_parent_sandbox_log_callbacks",
     "build_reasoning_engine_logger",
     "make_telemetry_callbacks",
     "telemetry_and_feedback",
@@ -19,6 +20,7 @@ _CALLBACK_EXPORTS = frozenset(
         "FeedbackClient",
         "after_tool_callback",
         "before_tool_callback",
+        "build_parent_sandbox_log_callbacks",
         "build_reasoning_engine_logger",
         "make_telemetry_callbacks",
     }

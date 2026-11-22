@@ -33,7 +33,9 @@ pip install --upgrade "google-cloud-aiplatform[adk,evaluation]" "google-adk>=2.0
 pip install "opentelemetry-instrumentation-google-genai>=0.4b0" "fsspec[gcs]==2025.10.0"
 
 export GOOGLE_CLOUD_PROJECT="PROJECT_ID"
-export GOOGLE_CLOUD_LOCATION="us-central1"  # Must be one of the 15 eval regions or `global`
+export GOOGLE_CLOUD_LOCATION="asia-southeast1"  # Singapore (Agent Runtime, Feedback & Canary rollouts)
+export EVAL_LOCATION="global"                   # APAC-ready Gen AI Eval region (14 US/EU + global) & required for generate_loss_clusters
+export SKILL_REGISTRY_LOCATION="us-central1"    # Vertex AI Skill Registry Preview (3 regions only)
 ```
 
 ---

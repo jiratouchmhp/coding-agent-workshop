@@ -9,7 +9,7 @@ mandatory ``global`` endpoint.
 Verified SDK & API notes (from ``05_optimize`` & ``vertexai._genai.evals.Evals``):
 - Python evaluation uses ``google-cloud-aiplatform[adk,evaluation]`` via
   ``from vertexai import Client, types``.
-- Supported regions: 15 US/EU regions + ``global``.
+- Supported regions: 14 US/EU regions + ``global``.
 - Only ``MULTI_TURN_*`` metrics accept multi-turn traces/sessions.
 - ``client.evals.generate_loss_clusters()`` is **``global``-region ONLY** and
   requires an explicit ``metric=`` when ``eval_result`` contains >1 metric.
@@ -33,7 +33,7 @@ from coding_agent.config import get_settings  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-# Verified 15 US/EU regions + global supported by Vertex AI Gen AI Evaluation Service.
+# Verified 14 US/EU regions + global supported by Vertex AI Gen AI Evaluation Service.
 SUPPORTED_EVAL_LOCATIONS: frozenset[str] = frozenset(
     {
         "global",
@@ -351,7 +351,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--project", help="GCP project ID (defaults to GOOGLE_CLOUD_PROJECT).")
     parser.add_argument(
         "--location",
-        help="Evaluation region (15 supported regions or global; defaults to EVAL_LOCATION or GOOGLE_CLOUD_LOCATION).",
+        help="Evaluation region (14 supported US/EU regions or global; defaults to EVAL_LOCATION / 'global').",
     )
     parser.add_argument(
         "--single-turn-dataset",
@@ -412,7 +412,9 @@ def main(argv: list[str] | None = None) -> int:
     settings = get_settings()
 
     location = validate_eval_location(
-        args.location or os.environ.get("EVAL_LOCATION") or settings.google_cloud_location
+        (args.location or "").strip()
+        or os.environ.get("EVAL_LOCATION", "").strip()
+        or settings.eval_location
     )
     project_id = args.project or settings.google_cloud_project
 

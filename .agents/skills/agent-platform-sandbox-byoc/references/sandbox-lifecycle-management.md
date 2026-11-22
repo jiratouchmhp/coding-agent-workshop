@@ -88,7 +88,7 @@ import agentplatform
 
 client = agentplatform.Client(
     project="PROJECT_ID",
-    location="us-central1",
+    location="asia-southeast1",  # GOOGLE_CLOUD_LOCATION (Singapore)
     http_options={"api_version": "v1beta1"},
 )
 

@@ -12,8 +12,8 @@
 
 By the end of Lab 2, you will:
 
-1. Build and push a **non-root Debian BYOC coding sandbox image** (`starter/sandbox_image/Dockerfile` + `runner.py`) to Artifact Registry and grant **`roles/artifactregistry.reader`** to the **Agent Sandbox Service Agent** (`service-PROJECT_NUMBER@gcp-sa-vertex-sandbox.iam.gserviceaccount.com`).
-2. Implement `TODO(lab-2)` in [`starter/coding_agent/tools/sandbox_lifecycle.py`](../starter/coding_agent/tools/sandbox_lifecycle.py) covering the **complete `SandboxEnvironmentTemplate`, `SandboxEnvironment`, and `SandboxEnvironmentSnapshot` lifecycles** (create, get, list, update/recreate, pause, resume, snapshot/restore, delete).
+1. Smoke-test the non-root BYOC runner locally in pure Python (`make test-sandbox-local` — **zero local Docker!**), build and push the **non-root Debian BYOC coding sandbox image** (`starter/sandbox_image/Dockerfile` + `runner.py`) remotely via Cloud Build in **Bangkok (`asia-southeast3`)** into Artifact Registry (`make push-sandbox`), and grant **`roles/artifactregistry.reader`** to the **Agent Sandbox Service Agent** (`service-PROJECT_NUMBER@gcp-sa-vertex-sandbox.iam.gserviceaccount.com`) — or take the zero-build **`SANDBOX_MODE=shell`** fast-track in **Singapore (`asia-southeast1`)**.
+2. Implement `TODO(lab-2)` in [`starter/coding_agent/tools/sandbox_lifecycle.py`](../starter/coding_agent/tools/sandbox_lifecycle.py) covering the **complete `SandboxEnvironmentTemplate`, `SandboxEnvironment`, and `SandboxEnvironmentSnapshot` lifecycles** (create, get, list, update/recreate, pause, resume, snapshot/restore, delete) in **Singapore (`asia-southeast1`)**.
 3. Implement `TODO(lab-2)` in [`starter/coding_agent/tools/sandbox_execution.py`](../starter/coding_agent/tools/sandbox_execution.py) across **all three execution paths**—Shell Sandbox (`execute_bash`), BYOC Custom Container (`/exec`), and Code Execution (`execute_code` + ADK `AgentEngineSandboxCodeExecutor`)—plus a custom ADK **`BaseEnvironment`** subclass (`AgentPlatformSandboxEnvironment`) that lets `EnvironmentToolset` operate transparently against a remote managed sandbox.
 4. Verify **gVisor credential isolation** (zero ambient credentials, blocked metadata server `169.254.169.254:80`), design **PSC-I + Cloud NGFW / Secure Web Proxy egress allowlisting**, and account for **TTLs (7d/14d), cold-start latencies (2m vs. seconds), and Cloud Audit Log / `stdout` blind spots**.
 
@@ -23,22 +23,22 @@ By the end of Lab 2, you will:
 
 ```mermaid
 flowchart LR
-    subgraph TRUSTED["Trusted Orchestration Plane (Laptop / Agent Runtime)"]
+    subgraph TRUSTED["Trusted Orchestration Plane (Laptop / Singapore Agent Runtime)"]
         AGENT["ADK Coding Agent\nEnvironmentToolset + BaseEnvironment"]
-        CLIENT["agentplatform.Client\nv1beta1 for BYOC/PSC/CMEK"]
+        CLIENT["agentplatform.Client (asia-southeast1)\nv1beta1 for BYOC/PSC/CMEK"]
         AGENT --> CLIENT
     end
 
-    subgraph CP["Google-Managed Control Plane"]
-        AR["Artifact Registry\ncoding-sandbox:v1"]
+    subgraph CP["Google-Managed Control Plane (Bangkok AR/Build + Singapore Sandboxes)"]
+        AR["Artifact Registry (asia-southeast3)\ncoding-sandbox:v1 via Cloud Build"]
         SA_SBX["Agent Sandbox Service Agent\ngcp-sa-vertex-sandbox (artifactregistry.reader)"]
-        TPL["SandboxEnvironmentTemplate\nPre-Warmed Pool + Egress Policy"]
+        TPL["SandboxEnvironmentTemplate (asia-southeast1)\nPre-Warmed Pool + Egress Policy"]
         SNAP["SandboxEnvironmentSnapshot\nManaged GCS + Optional CMEK"]
         AR -- "Pulls Image" --> SA_SBX
         SA_SBX --> TPL
     end
 
-    subgraph UNTRUSTED["Untrusted Execution Plane (gVisor Tenant Project)"]
+    subgraph UNTRUSTED["Untrusted Execution Plane (gVisor Tenant Project — Singapore)"]
         SBX["SandboxEnvironment Container\nappuser / sandbox-untrusted - No ADC or Metadata"]
         EXEC["Runner /exec (Port 8080)\nPython + Node + pytest + ruff + bandit"]
         SBX --- EXEC
@@ -78,9 +78,15 @@ Do not confuse these three distinct products when reading docs or designing arch
 
 ---
 
-## Part A: Build & Push the Non-Root BYOC Coding Sandbox Image
+## Part A: Test, Build & Push the Non-Root BYOC Coding Sandbox (Zero Local Docker!)
 
-### A.1 Inspect `starter/sandbox_image/`
+> [!TIP]
+> **Zero-Docker First-Class Workflow (3 Options — Local `docker` Is Strictly Optional!):**
+> 1. **Local Pure-Python Runner Smoke Test (`make test-sandbox-local`):** Verifies `starter/sandbox_image/runner.py` (`GET /health` + `POST /exec`) directly on localhost using Python's standard library — **zero Docker daemon required!**
+> 2. **Remote Cloud Build in Bangkok (`make push-sandbox`):** Submits `starter/sandbox_image/` to **Cloud Build in Bangkok (`--region=asia-southeast3`)** and pushes into **Bangkok Artifact Registry (`asia-southeast3-docker.pkg.dev/...`)** — zero local Docker! *(Prefer strict same-region image pulls into Singapore Managed Sandboxes? Set `AR_LOCATION=asia-southeast1` to push to `asia-southeast1-docker.pkg.dev/...` instead.)*
+> 3. **Zero-Build Fast-Track (`SANDBOX_MODE=shell`):** Want to skip BYOC container builds entirely (e.g., on the Half-Day Fast-Track)? Keep **`SANDBOX_MODE=shell`** in `.env` — Google Cloud's managed gVisor **Shell Sandbox** in **Singapore (`asia-southeast1`)** runs immediately with zero container build or Artifact Registry setup!
+
+### A.1 Inspect `starter/sandbox_image/` & Run the Zero-Docker Local Smoke Test
 
 Per [Custom Containers (BYOC)](https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/sandbox/custom-containers), every BYOC sandbox image must satisfy three non-negotiable requirements:
 1. **Linux-based OS** (e.g., Debian Bookworm slim or Ubuntu).
@@ -90,34 +96,47 @@ Per [Custom Containers (BYOC)](https://docs.cloud.google.com/gemini-enterprise-a
 > [!NOTE]
 > **Runner Contract Transparency:** Official `scale/sandbox/custom-containers` docs require *"a compatible runner or entry point"* and reference open-source architectures [AX](https://agentexecutor.io/) and [Substrate](https://github.com/agent-substrate/substrate), while `scale/sandbox/shell-sandbox-quickstart` documents the `/exec` endpoint returning `{"stdout", "stderr", "returncode", "duration_ms"}`. Official docs do not publish a verbatim custom Dockerfile wire spec; [`starter/sandbox_image/Dockerfile`](../starter/sandbox_image/Dockerfile) and [`starter/sandbox_image/runner.py`](../starter/sandbox_image/runner.py) implement an educational, non-root Debian Bookworm coding sandbox exposing `GET /health` and `POST /exec` on port `8080` aligned with that exact response schema—complete with `Python 3.11+`, `Node.js LTS`, `git`, `pytest`, `ruff`, `bandit`, and `jq`, owned by `USER appuser` under `/workspace`.
 
-Verify the non-root directive and workspace permissions in `starter/sandbox_image/Dockerfile`:
+Verify the non-root directive and smoke-test `runner.py` locally with **zero Docker**:
 
 ```bash
+# 1. Confirm non-root USER appuser, WORKDIR /workspace, and EXPOSE 8080
 grep -E "^(FROM|USER|WORKDIR|EXPOSE|ENTRYPOINT|CMD)" starter/sandbox_image/Dockerfile
+
+# 2. Run pure-Python localhost smoke test against starter/sandbox_image/runner.py (ZERO Docker!)
+make test-sandbox-local
 ```
 
-Confirm you see a non-root `USER appuser` (never `USER root`), `WORKDIR /workspace`, and `EXPOSE 8080`.
+Confirm you see a non-root `USER appuser` (never `USER root`), `WORKDIR /workspace`, `EXPOSE 8080`, and passing `/health` + `/exec` assertions from `make test-sandbox-local`.
 
-### A.2 Create Artifact Registry Repo, Build & Push the Image
+### A.2 Create Bangkok Artifact Registry Repo & Push via Remote Cloud Build (`--region=asia-southeast3`)
 
 ```bash
 source .env
 
+# Bangkok (asia-southeast3) is our primary build & Artifact Registry region.
+# Optional: set AR_LOCATION="asia-southeast1" if you prefer strict same-region pulls
+# into Singapore (asia-southeast1) Managed Sandboxes.
+export AR_LOCATION="${AR_LOCATION:-asia-southeast3}"
+export BUILD_LOCATION="${BUILD_LOCATION:-asia-southeast3}"
+
 # 1. Create a unified Docker repository in Artifact Registry (hosts both Lab 2 coding-sandbox and Lab 5 coding-agent images)
 gcloud artifacts repositories create coding-agent-repo \
   --repository-format=docker \
-  --location="$GOOGLE_CLOUD_LOCATION" \
+  --location="$AR_LOCATION" \
   --description="BYOC Coding Sandbox and Agent Runtime images for Gemini Enterprise Agent Platform" \
   --project="$GOOGLE_CLOUD_PROJECT" || true
 
-# 2. Define the canonical BYOC sandbox image URI
-export SANDBOX_IMAGE_URI="${GOOGLE_CLOUD_LOCATION}-docker.pkg.dev/${GOOGLE_CLOUD_PROJECT}/coding-agent-repo/coding-sandbox:v1"
+# 2. Define the canonical BYOC sandbox image URI (Bangkok primary: asia-southeast3-docker.pkg.dev/...)
+export SANDBOX_IMAGE_URI="${AR_LOCATION}-docker.pkg.dev/${GOOGLE_CLOUD_PROJECT}/coding-agent-repo/coding-sandbox:v1"
 echo "SANDBOX_IMAGE_URI=$SANDBOX_IMAGE_URI"
 
-# 3. Build and push via Cloud Build (no local Docker daemon required) — or run `make push-sandbox`
-gcloud builds submit starter/sandbox_image \
-  --tag="$SANDBOX_IMAGE_URI" \
-  --project="$GOOGLE_CLOUD_PROJECT"
+# 3. Build and push remotely via Cloud Build in Bangkok (ZERO local Docker required!)
+make push-sandbox
+# Equivalent direct Cloud Build command:
+# gcloud builds submit starter/sandbox_image \
+#   --region="$BUILD_LOCATION" \
+#   --tag="$SANDBOX_IMAGE_URI" \
+#   --project="$GOOGLE_CLOUD_PROJECT"
 ```
 
 > **Security Best Practice:** Enable [Artifact Registry Vulnerability Scanning](https://docs.cloud.google.com/artifact-registry/docs/analysis) on `coding-agent-repo` to scan OS and Python/Node dependencies before referencing the image URI in a `SandboxEnvironmentTemplate`. Managed Sandboxes do not run an in-guest IDS or automatic pre-deployment CVE scanner.
@@ -131,13 +150,13 @@ gcloud builds submit starter/sandbox_image \
 
 ```bash
 gcloud artifacts repositories add-iam-policy-binding coding-agent-repo \
-  --location="$GOOGLE_CLOUD_LOCATION" \
+  --location="${AR_LOCATION:-asia-southeast3}" \
   --project="$GOOGLE_CLOUD_PROJECT" \
   --member="serviceAccount:service-${GOOGLE_CLOUD_PROJECT_NUMBER}@gcp-sa-vertex-sandbox.iam.gserviceaccount.com" \
   --role="roles/artifactregistry.reader"
 ```
 
-Update `.env` with your `SANDBOX_IMAGE_URI` value before proceeding to Part B.
+Update `.env` with your `SANDBOX_IMAGE_URI` value before proceeding to Part B (or skip straight to Part B with `SANDBOX_MODE=shell` for the zero-build fast-track).
 
 ---
 
@@ -171,7 +190,7 @@ import agentplatform
 
 client = agentplatform.Client(
     project=project_id,
-    location=location,
+    location=location,  # e.g., "asia-southeast1" (Singapore — nearest supported Agent Platform region)
     http_options={"api_version": "v1beta1"},  # Required for BYOC templates, PSC, CMEK
 )
 
@@ -194,7 +213,7 @@ byoc_tpl_op = client.sandboxes.templates.create(
     config={
         "custom_container_environment": {
             "custom_container_spec": {
-                "image_uri": image_uri,  # e.g., us-central1-docker.pkg.dev/PROJECT/coding-agent-repo/coding-sandbox:v1
+                "image_uri": image_uri,  # e.g., asia-southeast3-docker.pkg.dev/PROJECT/coding-agent-repo/coding-sandbox:v1 (or asia-southeast1-docker.pkg.dev/...)
             },
             "resources": {
                 "requests": {"cpu": "1", "memory": "1Gi"},
@@ -550,14 +569,14 @@ Run the Lab 2 automated checkpoint verifier from the repository root:
 ```
 
 **Checkpoint Pass Criteria:**
-- [ ] `starter/sandbox_image/Dockerfile` sets a non-root `USER appuser` and builds cleanly; image pushed to `coding-agent-repo` in Artifact Registry.
+- [ ] `starter/sandbox_image/Dockerfile` sets a non-root `USER appuser`, passes `make test-sandbox-local` (zero local Docker!), and image is pushed to `coding-agent-repo` in Bangkok Artifact Registry (`asia-southeast3-docker.pkg.dev`, or optional `asia-southeast1-docker.pkg.dev`) via `make push-sandbox` — OR you opted into the zero-build `SANDBOX_MODE=shell` fast-track in Singapore (`asia-southeast1`).
 - [ ] `service-PROJECT_NUMBER@gcp-sa-vertex-sandbox.iam.gserviceaccount.com` holds `roles/artifactregistry.reader` on `coding-agent-repo`.
-- [ ] `starter/coding_agent/tools/sandbox_lifecycle.py` has zero remaining `# TODO(lab-2)` markers and completes template/sandbox/snapshot lifecycle operations.
+- [ ] `starter/coding_agent/tools/sandbox_lifecycle.py` has zero remaining `# TODO(lab-2)` markers and completes template/sandbox/snapshot lifecycle operations in Singapore (`asia-southeast1`).
 - [ ] `starter/coding_agent/tools/sandbox_execution.py` implements Shell `execute_bash`, BYOC `/exec`, `AgentEngineSandboxCodeExecutor`, and `AgentPlatformSandboxEnvironment(BaseEnvironment)` with `EnvironmentScope.SESSION` and `*, ctx: Context | None = None`.
 - [ ] Metadata server probe inside the sandbox confirmed unreachable (`169.254.169.254:80` blocked).
 - [ ] Temporary demo sandboxes deleted so no idle sandbox billing accumulates.
 
-> **Time-Box Fallback:** If you fall behind or hit a Docker/API snag, compare or copy the verified reference files from [`solution/sandbox_image/`](../solution/sandbox_image/), [`solution/coding_agent/tools/sandbox_lifecycle.py`](../solution/coding_agent/tools/sandbox_lifecycle.py), and [`solution/coding_agent/tools/sandbox_execution.py`](../solution/coding_agent/tools/sandbox_execution.py).
+> **Time-Box Fallback:** If you fall behind or hit a Cloud Build/API snag, switch to `SANDBOX_MODE=shell` or compare/copy the verified reference files from [`solution/sandbox_image/`](../solution/sandbox_image/), [`solution/coding_agent/tools/sandbox_lifecycle.py`](../solution/coding_agent/tools/sandbox_lifecycle.py), and [`solution/coding_agent/tools/sandbox_execution.py`](../solution/coding_agent/tools/sandbox_execution.py).
 
 ---
 

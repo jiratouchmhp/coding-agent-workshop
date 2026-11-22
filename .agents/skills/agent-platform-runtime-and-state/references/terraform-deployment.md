@@ -18,6 +18,13 @@ Declarative Infrastructure-as-Code (IaC) reference for provisioning **Gemini Ent
 - **Authentication:** `gcloud auth application-default login` (or Workload Identity Federation in CI/CD).
 - **Do NOT mix imperative `agents-cli deploy` and Terraform on the same instance:** Terraform owns the full `ReasoningEngine` spec (SA, `deployment_spec`, env vars). Either manage the engine entirely in Terraform or keep imperative `agents-cli deploy --update-env-vars`.
 
+> **Zero-Docker Deployment Paths:** Local Docker is **strictly optional** for all Agent Runtime deployments. Smoke-test your ASGI app locally in pure Python (`uvicorn main:app --host 127.0.0.1 --port 8080`), then choose any zero-Docker deployment path:
+> 1. **Path 1 (`container_spec` + Cloud Build):** Build and push remotely with `gcloud builds submit --region="${BUILD_LOCATION}"` (zero local Docker), then deploy via Terraform `container_spec`.
+> 2. **Path 2 (`source_code_spec` + empty `image_spec {}` tarball):** Inline-pack a level-0 `.tar.gz` (`<= 8 MB`) containing `./Dockerfile` — Agent Runtime invokes Cloud Build automatically (**zero local Docker AND zero manual Artifact Registry push**).
+> 3. **Imperative CLI (`agents-cli deploy`):** Remote Cloud Build/deploy alternative when not managing the instance in Terraform.
+
+> **APAC Regional Split (Bangkok Primary + Singapore Agent Runtime):** Agent Runtime (`google_vertex_ai_reasoning_engine`), Managed Sandboxes, Managed Sessions, Memory Bank, Agent Gateway, and Gemini 2.5 Flash are officially live in **Singapore (`GOOGLE_CLOUD_LOCATION=asia-southeast1`)** and are not yet available in **Bangkok (`asia-southeast3`)**. APAC teams standardizing on Bangkok as their primary region keep **Cloud Build (`BUILD_LOCATION=asia-southeast3`)**, **Artifact Registry (`AR_LOCATION=asia-southeast3`, or `asia-southeast1` if strict same-region pull is preferred)**, **Secret Manager** (regional `asia-southeast3` or automatic replication), and **Agent Registry (`AGENT_REGISTRY_LOCATION=asia-southeast3`)** in Bangkok while targeting **`region = "asia-southeast1"`** on `google_vertex_ai_reasoning_engine`. Keep `var.location` (Runtime region) decoupled from `var.ar_location` and `var.agent_registry_location` in Terraform.
+
 ---
 
 ## 2. Service Agent IAM Matrix & `depends_on` Race-Condition Rule
@@ -37,12 +44,27 @@ Declarative Infrastructure-as-Code (IaC) reference for provisioning **Gemini Ent
 
 Use `container_spec` when you need custom system libraries, deterministic supply-chain builds, multi-language runtimes, or faster deploy/cold-start latency.
 
-### Build & Push Image
+### Build & Push Image (Zero-Docker Cloud Build Primary Path)
+
+Smoke-test the FastAPI runtime locally without Docker (`uvicorn main:app --host 127.0.0.1 --port 8080 && curl -sf http://127.0.0.1:8080/`), then build and push remotely via **Cloud Build** (local Docker is strictly optional):
 
 ```bash
-gcloud auth configure-docker ${LOCATION}-docker.pkg.dev
-docker build -t ${LOCATION}-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/agent-image:${IMAGE_TAG} .
-docker push ${LOCATION}-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/agent-image:${IMAGE_TAG}
+export PRIMARY_REGION="${PRIMARY_REGION:-asia-southeast3}"       # Bangkok primary region
+export LOCATION="${GOOGLE_CLOUD_LOCATION:-asia-southeast1}"      # Singapore (nearest supported Agent Runtime region)
+export AR_LOCATION="${AR_LOCATION:-${PRIMARY_REGION}}"           # Bangkok primary AR (or asia-southeast1 for same-region pull)
+export BUILD_LOCATION="${BUILD_LOCATION:-${PRIMARY_REGION}}"     # Bangkok remote Cloud Build (zero local Docker)
+export IMAGE_URI="${AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/agent-image:${IMAGE_TAG}"
+
+# Primary (Zero-Docker): Remote Cloud Build (builds linux/amd64 in BUILD_LOCATION)
+gcloud builds submit . \
+  --region="${BUILD_LOCATION}" \
+  --tag="${IMAGE_URI}" \
+  --project="${PROJECT_ID}"
+
+# Optional (Local Docker workstation only):
+# gcloud auth configure-docker "${AR_LOCATION}-docker.pkg.dev" --quiet
+# docker build --platform linux/amd64 -t "${IMAGE_URI}" .
+# docker push "${IMAGE_URI}"
 ```
 
 ### `terraform/versions.tf`
@@ -79,8 +101,14 @@ variable "project_number" {
 
 variable "location" {
   type        = string
-  default     = "us-central1"
-  description = "Region for Agent Runtime deployment"
+  default     = "asia-southeast1"
+  description = "Region for Agent Runtime deployment (Singapore asia-southeast1 default — nearest supported Agent Platform region)"
+}
+
+variable "ar_location" {
+  type        = string
+  default     = "asia-southeast3"
+  description = "Region for Artifact Registry repo (Bangkok asia-southeast3 primary default; or asia-southeast1 for strict same-region pulls)"
 }
 
 variable "repository_name" {
@@ -132,7 +160,7 @@ locals {
   ]
 }
 
-# 1. Secret Manager Secret & Version
+# 1. Secret Manager Secret & Version (use `auto {}` or `user_managed { replicas { location = "asia-southeast3" } }` for Bangkok secret residency)
 resource "google_secret_manager_secret" "api_key_secret" {
   secret_id = "agent-api-key"
   project   = var.project_id
@@ -187,7 +215,7 @@ resource "google_vertex_ai_reasoning_engine" "byoc_agent" {
     # service_account = google_service_account.agent_runtime_sa.email
 
     container_spec {
-      image_uri = "${var.location}-docker.pkg.dev/${var.project_id}/${var.repository_name}/agent-image:${var.image_tag}"
+      image_uri = "${var.ar_location}-docker.pkg.dev/${var.project_id}/${var.repository_name}/agent-image:${var.image_tag}"
     }
 
     deployment_spec {
@@ -254,9 +282,9 @@ output "reasoning_engine_resource_name" {
 
 ---
 
-## 4. Path 2 — Dockerfile Build (`source_code_spec` + Empty `image_spec {}`)
+## 4. Path 2 — Zero-Docker & Zero-AR Dockerfile Build (`source_code_spec` + Empty `image_spec {}`)
 
-Let Agent Runtime build your container automatically via Cloud Build without pushing images manually or managing a GCS bucket.
+Let Agent Runtime build your container automatically via Cloud Build from an inline `.tar.gz` archive — **zero local Docker daemon, zero manual Artifact Registry push, and zero GCS staging bucket required**.
 
 ### Root-of-Tar Archive Rule (CRITICAL)
 
@@ -360,10 +388,10 @@ resource "google_project_iam_member" "ar_agw_cross_project_binding" {
   member   = "serviceAccount:service-${each.value}@gcp-sa-aiplatform.iam.gserviceaccount.com"
 }
 
-# Register runtime endpoint in Agent Registry
+# Register runtime endpoint in Agent Registry (Bangkok primary default: asia-southeast3)
 resource "google_agent_registry_service" "runtime_agent_entry" {
   project      = "AGENT_GATEWAY_PROJECT_ID"
-  location     = var.location
+  location     = "asia-southeast3" # Or var.agent_registry_location (Bangkok primary; decoupled from Runtime var.location)
   service_id   = "runtime-agent-svc"
   display_name = "Runtime Agent Service"
   endpoint_spec { no_spec {} }
@@ -412,8 +440,8 @@ Fetch the Agent Gateway Root CA certificates:
 
 ```bash
 gcloud network-services agent-gateways describe GW_NAME \
-  --location=REGION \
-  --project=PROJECT_ID \
+  --location="${LOCATION}" \
+  --project="${PROJECT_ID}" \
   --format="json(agentGatewayCard.rootCertificates)" | jq -r '.agentGatewayCard.rootCertificates[]'
 ```
 

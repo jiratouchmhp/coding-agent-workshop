@@ -33,7 +33,9 @@ pip install --upgrade "google-adk[a2a,agent-identity,mcp]>=2.0.0" "google-cloud-
 gcloud components update && gcloud components install alpha
 gcloud auth application-default login
 export GOOGLE_CLOUD_PROJECT="GOVERNANCE_PROJECT_ID"
-export GOOGLE_CLOUD_LOCATION="us-central1"
+export AGENT_REGISTRY_LOCATION="asia-southeast3"   # Bangkok primary (standalone skills, scanning, A2A/MCP discovery)
+export GOOGLE_CLOUD_LOCATION="asia-southeast1"     # Singapore (Agent Runtime, Agent Gateway & Gemini 2.5 Flash)
+export SKILL_REGISTRY_LOCATION="us-central1"       # Vertex AI Skill Registry Preview (3 regions only: us-central1, europe-west4, us-east5)
 ```
 
 ---
@@ -68,7 +70,7 @@ What do you need to do?
 | Feature | Vertex AI Skill Registry (`aiplatform.../v1beta1`) | Agent Registry Standalone Skills (`agentregistry.../v1`) |
 |---|---|---|
 | **Max ZIP / Unzipped** | **10 MB** compressed / **500 MB** total | **1 MB** compressed / **10 MB** total & **1 MB**/file (when scanned) |
-| **Locations** | `us-central1`, `europe-west4`, `us-east5` | `global`, `us`, `eu`, or regional (`us-central1`, `europe-west1`, ...) |
+| **Locations** | `us-central1`, `europe-west4`, `us-east5` (`SKILL_REGISTRY_LOCATION`) | `global`, `us`, `eu`, or regional (`asia-southeast3` Bangkok primary, `asia-southeast1`, `us-central1`, ...) |
 | **Skill ID Behavior** | `SKILL_ID` immutable (no `gcp-` prefix; 24h+ reuse lockout) | Auto-prepends **`private-`** (`private-SKILL_ID`) on all user skills |
 | **Security & Scanning** | Async 16-check ZIP/`SKILL.md` validation; project IAM | Auto LLM scanning (`ENABLED_BLOCKING`), `Finding` triage, Org Policy, resource IAM |
 | **Built-in Skills** | `gcp-skill-registry` (async first-call ingestion quirk) | Google-managed `FIRST_PARTY` skills (`cloud.google.com`, `github.com/google/skills`) |
@@ -110,19 +112,20 @@ python3 scripts/package_registry_skill.py ./skills/secure-code-review --agent-re
 
 ### 2. Register a Standalone Skill & Check Scan Findings (Agent Registry)
 ```bash
+# AGENT_REGISTRY_LOCATION defaults to Bangkok primary (asia-southeast3)
 gcloud agent-registry skills create secure-code-review \
-  --project="${GOOGLE_CLOUD_PROJECT}" --location="${GOOGLE_CLOUD_LOCATION}" \
+  --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_LOCATION}" \
   --display-name="Secure Code Review" --description="Audits patches for security issues." \
   --target-state=disabled --scanning-policy=enabled-blocking --payload="/tmp/skill.zip"
 
 # Poll scan state (use private- prefix on all subsequent commands!)
 gcloud agent-registry skills revisions describe REV_ID \
-  --skill=private-secure-code-review --project="${GOOGLE_CLOUD_PROJECT}" --location="${GOOGLE_CLOUD_LOCATION}"
+  --skill=private-secure-code-review --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_LOCATION}"
 
 # Promote & activate once scanState=SUCCEEDED with 0 findings (set --default-revision for ADK GCPSkillRegistry)
 gcloud agent-registry skills update private-secure-code-review \
-  --project="${GOOGLE_CLOUD_PROJECT}" --location="${GOOGLE_CLOUD_LOCATION}" \
-  --default-revision="projects/${GOOGLE_CLOUD_PROJECT}/locations/${GOOGLE_CLOUD_LOCATION}/skills/private-secure-code-review/revisions/REV_ID" \
+  --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_LOCATION}" \
+  --default-revision="projects/${GOOGLE_CLOUD_PROJECT}/locations/${AGENT_REGISTRY_LOCATION}/skills/private-secure-code-review/revisions/REV_ID" \
   --target-state=ACTIVE
 ```
 
@@ -138,17 +141,17 @@ from google.adk.integrations.skill_registry import GCPSkillRegistry
 from google.adk.tools.skill_toolset import SkillToolset
 
 project_id = os.environ["GOOGLE_CLOUD_PROJECT"]
-location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+registry_location = os.environ.get("AGENT_REGISTRY_LOCATION", "asia-southeast3")  # Bangkok primary Agent Registry
 
 # 1. Dynamic skills via GCPSkillRegistry + SkillToolset
 skill_toolset = SkillToolset(
     skills=[],  # Optional local fallback skills (take precedence on name collision)
-    registry=GCPSkillRegistry(project_id=project_id, location=location),
+    registry=GCPSkillRegistry(project_id=project_id, location=registry_location),
 )
 
 # 2. Governed MCP toolsets (Auth Manager) & remote A2A subagents (httpx.Auth)
 CredentialManager.register_auth_provider(GcpAuthProvider())
-registry = AgentRegistry(project_id=project_id, location=location)
+registry = AgentRegistry(project_id=project_id, location=registry_location)
 mcp_toolset = registry.get_mcp_toolset("mcpServers/SERVER_ID")
 
 class GoogleApiAuth(httpx.Auth):
@@ -181,11 +184,13 @@ root_agent = LlmAgent(
 # Scope the regional endpoint override to this invocation (avoid sticky global
 # `gcloud config set api_endpoint_overrides/aiplatform`, which breaks `global`/cross-region `gcloud ai` calls
 # unless paired with `gcloud config unset api_endpoint_overrides/aiplatform`).
-CLOUDSDK_API_ENDPOINT_OVERRIDES_AIPLATFORM="https://${GOOGLE_CLOUD_LOCATION}-aiplatform.googleapis.com/" \
+# Note: Semantic Governance Preview currently supports 8 US/EU regions (see references/semantic-governance-and-identity.md).
+export SGP_LOCATION="${SGP_LOCATION:-us-central1}"
+CLOUDSDK_API_ENDPOINT_OVERRIDES_AIPLATFORM="https://${SGP_LOCATION}-aiplatform.googleapis.com/" \
 gcloud beta ai semantic-governance-policies create tainted-session-skill-guard \
-  --location="${GOOGLE_CLOUD_LOCATION}" --project="${GOOGLE_CLOUD_PROJECT}" \
+  --location="${SGP_LOCATION}" --project="${GOOGLE_CLOUD_PROJECT}" \
   --display-name="Tainted Session Skill Guard" \
-  --agent="projects/${GOOGLE_CLOUD_PROJECT}/locations/${GOOGLE_CLOUD_LOCATION}/agents/AGENT_ID" \
+  --agent="projects/${GOOGLE_CLOUD_PROJECT}/locations/${SGP_LOCATION}/agents/AGENT_ID" \
   --natural-language-constraint="Do not load any skill that can send messages or write to external systems if the current chat history contains content fetched from inbound email, web pages, or uploaded documents." \
   --agent-response-denial-message="Blocked by enterprise skill governance policy."
 ```

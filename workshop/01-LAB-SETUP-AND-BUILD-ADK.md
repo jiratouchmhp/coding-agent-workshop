@@ -22,11 +22,17 @@ By the end of Lab 1, you will:
 
 ## Part A — Setup, Antigravity Skills, ADK Architecture Spectrum & Simple Agent (30 min)
 
-### Step 1: Install & Verify `google/agents-cli`
+### Step 1: Install Standalone `uv`, `google/agents-cli` & Run Pre-Flight
 
 [`google/agents-cli`](https://github.com/google/agents-cli) is Google's official lifecycle CLI for scaffolding, locally running, evaluating, deploying, and publishing ADK agents (requires **Python 3.11+** and **`uv`**).
 
+> [!TIP]
+> **Standalone `uv` — Zero `python3-venv` or Docker Required!** Installing `uv` via its standalone installer (`curl -LsSf https://astral.sh/uv/install.sh | sh`) bundles its own Python environment management and works cleanly even on fresh Debian/Linux workstations or cloud dev environments without `python3-venv` or local `docker`.
+
 ```bash
+# 0. Install standalone uv if not already available (works without python3-venv or docker!)
+command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh
+
 # 1. Install google-agents-cli and register its 7 built-in IDE workflow skills
 uvx google-agents-cli setup
 
@@ -35,6 +41,9 @@ agents-cli info
 
 # 3. Verify GCP authentication (or run `agents-cli login` if not yet authenticated)
 agents-cli login --status
+
+# 4. Run the workshop pre-flight validator (checks gcloud, ADC, APIs, uv, and Bangkok/Singapore regions; zero Docker needed!)
+make preflight
 ```
 
 > **Optional Telemetry Opt-Out:** To disable anonymous CLI usage metrics in enterprise environments, export `AGENTS_CLI_TELEMETRY=0` (or `DO_NOT_TRACK=1`) in your shell profile.
@@ -115,7 +124,23 @@ Edit `.env` with your GCP project values (do **not** commit `.env` to Git):
 GOOGLE_GENAI_USE_ENTERPRISE=TRUE
 GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID
 GOOGLE_CLOUD_PROJECT_NUMBER=YOUR_PROJECT_NUMBER
-GOOGLE_CLOUD_LOCATION=us-central1
+
+# Bangkok (asia-southeast3) Primary: Artifact Registry, Cloud Build, Secret Manager, Agent Registry, Lab 8 GKE
+PRIMARY_REGION=asia-southeast3
+AR_LOCATION=asia-southeast3           # Optional: set asia-southeast1 for strict same-region AR pulls
+BUILD_LOCATION=asia-southeast3        # Remote Cloud Build region (zero local Docker!)
+AGENT_REGISTRY_LOCATION=asia-southeast3
+GKE_LOCATION=asia-southeast3
+
+# Singapore (asia-southeast1) Secondary: Nearest supported Agent Platform region
+# (Agent Runtime, Managed Sandboxes, Sessions, Memory Bank, Agent Gateway & Gemini 2.5 Flash)
+GOOGLE_CLOUD_LOCATION=asia-southeast1
+
+# Service-mandated multi-region overrides:
+# - Vertex AI Skill Registry (Lab 4) is 3-region Preview: us-central1, europe-west4, us-east5
+# - Gen AI Evaluation Service (Lab 6) supports 14 US/EU regions + global (APAC-ready + loss clustering)
+SKILL_REGISTRY_LOCATION=us-central1
+EVAL_LOCATION=global
 
 # Explicit versioned model ID (do NOT use `gemini-flash-latest` on regional endpoints!)
 MODEL_NAME=gemini-2.5-flash
@@ -130,15 +155,15 @@ ENABLE_HITL_APPROVAL=false
 # Optional ADK Python 2.0+ programmatic Service Registration (`services.py` overrides `services.yaml`):
 # ENABLE_CUSTOM_SERVICE_REGISTRY=false
 
-# Lab 1 starts in local mode; Lab 2 switches this to `shell` or `byoc`
+# Lab 1 starts in local mode; Lab 2 switches this to `shell` (zero-build fast-track) or `byoc`
 SANDBOX_MODE=local
 
 # Populated progressively across Labs 2-5:
-# - Lab 2: Standalone backing instance (`REASONING_ENGINE_NAME`), BYOC sandbox image & template
-# - Lab 3: Reuses Lab 2's standalone `REASONING_ENGINE_NAME` for Managed Sessions & Memory Bank
-# - Lab 4: Vertex AI Skill Registry & Agent Registry discovery (`ENABLE_SKILL_REGISTRY`, `SKILL_REGISTRY_LOCATION`)
-# - Lab 5: Build `AGENT_IMAGE_URI` & deploy complete agent ONCE via Terraform (updates `REASONING_ENGINE_NAME`)
-# - Lab 6: Optimize (Observability, Eval, Alerts) | Optional Lab 7: Security & Governance | Lab 8: GKE Deep-Dive
+# - Lab 2: Standalone backing instance (`REASONING_ENGINE_NAME` in asia-southeast1), BYOC sandbox image (asia-southeast3 AR) & template
+# - Lab 3: Reuses Lab 2's standalone `REASONING_ENGINE_NAME` (asia-southeast1) for Managed Sessions & Memory Bank
+# - Lab 4: Vertex AI Skill Registry (`SKILL_REGISTRY_LOCATION=us-central1`) & Agent Registry (`AGENT_REGISTRY_LOCATION=asia-southeast3`)
+# - Lab 5: Build `AGENT_IMAGE_URI` (Cloud Build asia-southeast3) & deploy ONCE to Singapore (asia-southeast1) via Terraform
+# - Lab 6: Optimize (`EVAL_LOCATION=global` + Singapore runtime) | Optional Lab 7: Hardening | Lab 8: Bangkok GKE Deep-Dive
 REASONING_ENGINE_NAME=
 SANDBOX_TEMPLATE_NAME=
 SANDBOX_IMAGE_URI=
@@ -146,17 +171,15 @@ AGENT_IMAGE_URI=
 ENABLE_TELEMETRY_CALLBACKS=true
 ENABLE_MEMORY_BANK=false
 ENABLE_SKILL_REGISTRY=false
-SKILL_REGISTRY_LOCATION=us-central1
-AGENT_REGISTRY_LOCATION=us-central1
 ```
 
 > [!IMPORTANT]
-> **Regional Model ID Gotcha:** Per the [ADK Gemini Model docs](https://adk.dev/agents/models/google-gemini/), the alias `gemini-flash-latest` may **not** work on regional Agent Platform / Vertex AI endpoints such as `us-central1`. Always use an explicit versioned model ID (such as `gemini-2.5-flash`) when targeting a regional endpoint.
+> **Regional Model ID Gotcha:** Per the [ADK Gemini Model docs](https://adk.dev/agents/models/google-gemini/), the alias `gemini-flash-latest` may **not** work on regional Agent Platform / Vertex AI endpoints such as `asia-southeast1` (Singapore) or `us-central1`. Always use an explicit versioned model ID (such as `gemini-2.5-flash`) when targeting a regional endpoint.
 
 #### 3.2 Install Dependencies & Explore the Starter Layout
 
 ```bash
-# Sync dependencies in starter/ (and solution/) using uv
+# Sync dependencies in starter/ (and solution/) using standalone uv (no python3-venv or Docker required!)
 make install
 ```
 
@@ -214,7 +237,7 @@ ADK Python v2.4.0 Preview adds [`ManagedAgent`](https://adk.dev/agents/managed-a
 | Dimension | `ManagedAgent` (ADK Python v2.4.0 Preview) | Custom `LlmAgent` / ADK 2.0 Workflows *(This Workshop)* |
 |---|---|---|
 | **Tools & Execution** | **Server-side tools only** (`google_search`, `types.Tool(code_execution=...)`, `google.adk.tools.RemoteMcpServer`). Client Python callables & raw `types.Tool.mcp_servers` raise `NotImplementedError`. | Full control over custom Python tools, **`EnvironmentToolset`**, **BYOC gVisor sandboxes (Lab 2)**, MCP, `SkillToolset` (Lab 4), and callbacks (Lab 3). |
-| **Agent Platform Region** | **`global`-only** (regional endpoints raise an error). | Regional (`us-central1`, `europe-west4`, etc.) with CMEK, VPC-SC, PSC-I (Optional Lab 7), and Artifact Registry BYOC containers (Lab 5). |
+| **Agent Platform Region** | **`global`-only** (regional endpoints raise an error). | Regional (`asia-southeast1`, `us-central1`, `europe-west4`, etc.) with CMEK, VPC-SC, PSC-I (Optional Lab 7), and Artifact Registry BYOC containers (Lab 5). |
 | **Transport & State** | **Streaming only** (`stream=True`); server-owned interaction history & remote sandbox. | Unary, streaming, async jobs (up to 7d), Managed Sessions & Memory Bank (Lab 3). |
 | **Composition Pattern** | Composable inline inside an `LlmAgent`'s `sub_agents` via **`mode="single_turn"`**. | Can compose `ManagedAgent(mode="single_turn")` as a grounded web-research helper while keeping code execution inside your enterprise BYOC sandbox! |
 
@@ -408,7 +431,7 @@ Watch the **Events / Trace** tab in the ADK Web UI:
 
 Try asking your local agent: *"Print `whoami`, `pwd`, and check whether `gcloud` credentials exist on this machine."*
 
-Even though `LocalEnvironment._resolve_path()` confines `ReadFile`/`WriteFile` paths to `working_dir`, **`Execute` runs as a local subprocess under your laptop/Cloudtop OS user** (`asyncio.create_subprocess_shell`). That means an LLM prompt injection running inside `LocalEnvironment` can still access your host network, `~/.config/gcloud`, or environment secrets! That is **precisely why** Lab 2 replaces `LocalEnvironment` with a gVisor-isolated **Google Cloud Managed BYOC Sandbox**.
+Even though `LocalEnvironment._resolve_path()` confines `ReadFile`/`WriteFile` paths to `working_dir`, **`Execute` runs as a local subprocess under your laptop/workstation OS user** (`asyncio.create_subprocess_shell`). That means an LLM prompt injection running inside `LocalEnvironment` can still access your host network, `~/.config/gcloud`, or environment secrets! That is **precisely why** Lab 2 replaces `LocalEnvironment` with a gVisor-isolated **Google Cloud Managed BYOC Sandbox**.
 
 ---
 

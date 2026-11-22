@@ -9,7 +9,14 @@
 ---
 
 > [!TIP]
-> **Build Complete Locally, Ship ONCE:** Across Labs 1–4 you built a 100% feature-complete Coding Agent locally — **ADK 2.0 core + BYOC Managed Sandbox + Managed Sessions, Memory Bank & OTel/Feedback + Skill Registry & Agent Registry**. In Lab 5, you package that complete, sandboxed, stateful, skill-enabled agent in **ONE Docker build (`make push-agent`)** and deploy it to **Agent Runtime** in **ONE Terraform apply (`make tf-apply`)**!
+> **Build Complete Locally, Ship ONCE — Zero Local Docker Required!**
+> Across Labs 1–4 you built a 100% feature-complete Coding Agent locally — **ADK 2.0 core + BYOC Managed Sandbox + Managed Sessions, Memory Bank & OTel/Feedback + Skill Registry & Agent Registry**. In Lab 5, choose from **THREE Zero-Docker Deployment Paths** to ship to **Singapore (`asia-southeast1`)** without ever installing or running a local Docker daemon:
+>
+> | Zero-Docker Path | Workflow Commands | Local Docker? | Artifact Registry Push? | Best For |
+> |---|---|:---:|:---:|---|
+> | **Path 1 (Primary — Declarative Production IaC)** | `make test-agent-local` (pure-Python FastAPI localhost smoke test) → `make push-agent` (Cloud Build `--region=asia-southeast3` → Bangkok AR) → `make tf-apply` (Terraform `container_spec` → Singapore `asia-southeast1`) | **No** | Yes *(Bangkok `asia-southeast3`, or optional `asia-southeast1`)* | Production CI/CD, Terraform IAM `depends_on`, Secret Manager & repeatable promotions |
+> | **Path 2 (Zero-Docker AND Zero-AR Push)** | `make test-agent-local` → `make pack-agent-source` (level-0 `coding_agent_source.tar.gz`, <= 8 MB) → Terraform `source_code_spec` + empty `image_spec {}` | **No** | **No!** *(Agent Runtime builds remotely from `./Dockerfile`)* | Teams wanting declarative Terraform IaC without managing a separate Artifact Registry image push step |
+> | **Path 3 (Rapid Imperative Dev)** | `agents-cli deploy --region asia-southeast1` | **No** | Handled remotely | Fastest single-command dev prototyping (see Part A ordering rule before mixing with Terraform!) |
 
 ## Learning Objectives
 
@@ -27,8 +34,8 @@ By the end of this lab, you will be able to:
 ## Half-Day Fast-Track Path
 
 If you are running on the **3.5-hour Half-Day Fast-Track** (30 minutes):
-- Complete **Part A** (dry-run & review `agents-cli deploy` flags), **Step B0** (complete `# TODO(lab-5)` in `starter/main.py` and build/push `AGENT_IMAGE_URI` via `make push-agent` — or copy `solution/main.py` and point `agent_image_uri` at your facilitator's pre-pushed image), and **Steps B1–B4** (implement `# TODO(lab-5)` in `starter/terraform/main.tf` and run `make tf-plan`).
-- Kick off **one** live deployment (`make tf-apply` or `agents-cli deploy --no-wait`) and while it provisions (5–10 minutes), read **Part C (Runtime Contract)** and **Part D (Revisions, Traffic Splitting & Emergency Stop)**.
+- Complete **Part A** (dry-run & review `agents-cli deploy` flags — Path 3), **Step B0** (complete `# TODO(lab-5)` in `starter/main.py`, verify locally with `make test-agent-local`, and build/push `AGENT_IMAGE_URI` via remote Cloud Build `make push-agent` — zero local Docker! — or point `agent_image_uri` at your facilitator's pre-pushed image), and **Steps B1–B4** (implement `# TODO(lab-5)` in `starter/terraform/main.tf` and run `make tf-plan`).
+- Kick off **one** live deployment into **Singapore (`asia-southeast1`)** (`make tf-apply` or `agents-cli deploy --no-wait`) and while it provisions (5–10 minutes), read **Part C (Runtime Contract)** and **Part D (Revisions, Traffic Splitting & Emergency Stop)**.
 - Verify with `./scripts/verify_lab.sh 5` (`make verify-lab LAB=5`).
 
 ---
@@ -37,17 +44,17 @@ If you are running on the **3.5-hour Half-Day Fast-Track** (30 minutes):
 
 ```mermaid
 flowchart LR
-    Dev["Developer / CI Pipeline"] -->|"Imperative Prototype"| CLI["agents-cli deploy"]
-    Dev -->|"Declarative Production IaC"| TF["Terraform (starter/terraform/)"]
+    Dev["Developer / CI Pipeline (Zero Local Docker!)"] -->|"Path 3: Rapid Dev"| CLI["agents-cli deploy"]
+    Dev -->|"Path 1 & 2: Declarative IaC"| TF["Terraform (starter/terraform/)"]
 
     TF -->|"depends_on IAM"| IAM["Service Agent & Runtime SA IAM"]
-    TF -->|"secret_env"| SM["Secret Manager"]
-    IAM -->|"gcp-sa-aiplatform-re (AR Reader)"| AR["Artifact Registry (BYOC Image)"]
+    TF -->|"secret_env"| SM["Secret Manager (asia-southeast3)"]
+    IAM -->|"gcp-sa-aiplatform-re (AR Reader)"| AR["Artifact Registry (Bangkok asia-southeast3)<br/>Built via Cloud Build --region=asia-southeast3"]
     IAM -->|"gcp-sa-vertex-sandbox (AR Reader)"| SandboxAR["Artifact Registry (Sandbox Image)"]
     IAM -->|"gcp-sa-aiplatform (Secret Accessor / Cross-Project AR)"| SM
 
-    CLI --> Runtime["Agent Runtime (ReasoningEngine)"]
-    TF --> Runtime
+    CLI --> Runtime["Agent Runtime (ReasoningEngine — Singapore asia-southeast1)"]
+    TF -->|"container_spec OR source_code_spec"| Runtime
     AR -->|"container_spec.image_uri"| Runtime
 
     subgraph ControlPlane["Runtime Contract & Operations"]
@@ -73,11 +80,12 @@ agents-cli info
 
 Verify the following values in `.env`:
 - `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_PROJECT_NUMBER`
-- `GOOGLE_CLOUD_LOCATION` (`us-central1` or `europe-west4`)
-- `SANDBOX_IMAGE_URI` (`.../coding-agent-repo/coding-sandbox:v1`) and `SANDBOX_TEMPLATE_NAME` (from Lab 2)
-- `ENABLE_TELEMETRY_CALLBACKS`, `ENABLE_MEMORY_BANK`, and your Lab 2/3 standalone `REASONING_ENGINE_NAME` (from Labs 2–3)
-- `ENABLE_SKILL_REGISTRY`, `SKILL_REGISTRY_LOCATION`, and `AGENT_REGISTRY_LOCATION` (from Lab 4)
-- `AGENT_IMAGE_URI` (built and pushed to `coding-agent-repo/coding-agent:v1` in Step B0 below)
+- `GOOGLE_CLOUD_LOCATION` (**`asia-southeast1`** — Singapore, nearest supported Agent Runtime region)
+- `PRIMARY_REGION`, `AR_LOCATION`, `BUILD_LOCATION`, and `AGENT_REGISTRY_LOCATION` (**`asia-southeast3`** — Bangkok primary build, Artifact Registry & Agent Registry region; optionally set `AR_LOCATION=asia-southeast1` for strict same-region AR pulls)
+- `SANDBOX_IMAGE_URI` (`asia-southeast3-docker.pkg.dev/.../coding-agent-repo/coding-sandbox:v1`) and `SANDBOX_TEMPLATE_NAME` (from Lab 2, or `SANDBOX_MODE=shell`)
+- `ENABLE_TELEMETRY_CALLBACKS`, `ENABLE_MEMORY_BANK`, and your Lab 2/3 standalone `REASONING_ENGINE_NAME` (in `asia-southeast1`)
+- `ENABLE_SKILL_REGISTRY`, `SKILL_REGISTRY_LOCATION` (**`us-central1`** — 3-region Preview), and `AGENT_REGISTRY_LOCATION` (**`asia-southeast3`** — Bangkok)
+- `AGENT_IMAGE_URI` (built and pushed remotely via Cloud Build `--region=asia-southeast3` in Step B0 below — zero local Docker!)
 
 > [!IMPORTANT]
 > **No `gcloud` Deploy Command for Agent Runtime:** Unlike Cloud Run, there is **no `gcloud` CLI command to deploy an Agent Runtime instance** (`gcloud ai reasoning-engines` only supports `describe` and `beta ... add-iam-policy-binding`). Deploy via **`agents-cli deploy`**, **Terraform (`google_vertex_ai_reasoning_engine`)**, or the **Python/REST SDK (`agentplatform.Client`)**.
@@ -87,9 +95,9 @@ Verify the following values in `.env`:
 
 ---
 
-## Part A: Rapid Imperative Deployment with `agents-cli deploy`
+## Part A: Path 3 — Rapid Imperative Deployment with `agents-cli deploy` (Zero Docker)
 
-`agents-cli deploy` packages your ADK project, builds the container image (or deploys a prebuilt `--image`), injects secrets and environment variables, and provisions an Agent Runtime instance.
+`agents-cli deploy` packages your ADK project, builds the container image remotely (zero local Docker required — or deploys a prebuilt `--image`), injects secrets and environment variables, and provisions an Agent Runtime instance in **Singapore (`asia-southeast1`)**.
 
 ### Step A1: Understand the Critical Infra Ordering Rule
 
@@ -150,9 +158,9 @@ Agent Runtime automatically injects `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATI
 
 Enterprise teams deploy Agent Runtime declaratively via Terraform so IAM bindings, Secret Manager versions, Artifact Registry permissions, and container specs move cleanly across dev, staging, and prod with zero drift.
 
-### Step B0: Build & Push the Trusted Agent Runtime BYOC Container (`AGENT_IMAGE_URI`)
+### Step B0: Smoke-Test Locally (`make test-agent-local`) & Push via Cloud Build (`make push-agent` — Zero Local Docker!)
 
-Before running `terraform plan` or `terraform apply` with `container_spec`, you must build and push the **Agent Runtime** container image (`coding-agent:v1`) into your unified `coding-agent-repo` Artifact Registry repository.
+Before running `terraform plan` or `terraform apply` with Path 1 (`container_spec`), verify `starter/main.py` locally with pure Python (**zero local Docker!**), then build and push the **Agent Runtime** container image (`coding-agent:v1`) remotely via **Cloud Build in Bangkok (`--region=asia-southeast3`)** into your unified `coding-agent-repo` Artifact Registry repository. *(Or jump to Option 2 below to deploy via `make pack-agent-source` + Terraform `source_code_spec` with **zero Docker AND zero Artifact Registry push**!)*
 
 > [!IMPORTANT]
 > **Two Completely Separate Images in `coding-agent-repo`:**
@@ -220,24 +228,32 @@ Before running `terraform plan` or `terraform apply` with `container_spec`, you 
        )
    ```
 
-3. Build and push `AGENT_IMAGE_URI` to `coding-agent-repo` via Cloud Build (or `make push-agent`):
+3. Run the pure-Python local FastAPI smoke test (**zero Docker!**), then build and push `AGENT_IMAGE_URI` to `coding-agent-repo` remotely via **Cloud Build in Bangkok (`--region=asia-southeast3`)**:
 
    ```bash
    source .env
 
+   # 1. Pure-Python local FastAPI/Uvicorn smoke test (verifies the GET / -> 200 {"status":"ok"} liveness/readiness contract — ZERO Docker!)
+   make test-agent-local
+
+   # 2. Configure Bangkok (asia-southeast3) primary Artifact Registry & Cloud Build regions
+   #    (Optional: set AR_LOCATION="asia-southeast1" if you prefer strict same-region AR pulls into Singapore Agent Runtime)
+   export AR_LOCATION="${AR_LOCATION:-asia-southeast3}"
+   export BUILD_LOCATION="${BUILD_LOCATION:-asia-southeast3}"
+
    # Ensure coding-agent-repo exists (already created in Lab 2)
    gcloud artifacts repositories create coding-agent-repo \
      --repository-format=docker \
-     --location="${GOOGLE_CLOUD_LOCATION}" \
+     --location="${AR_LOCATION}" \
      --project="${GOOGLE_CLOUD_PROJECT}" || true
 
-   export AGENT_IMAGE_URI="${GOOGLE_CLOUD_LOCATION}-docker.pkg.dev/${GOOGLE_CLOUD_PROJECT}/coding-agent-repo/coding-agent:v1"
+   export AGENT_IMAGE_URI="${AR_LOCATION}-docker.pkg.dev/${GOOGLE_CLOUD_PROJECT}/coding-agent-repo/coding-agent:v1"
    echo "AGENT_IMAGE_URI=${AGENT_IMAGE_URI}"
 
-   # Build and push the Agent Runtime BYOC image via Makefile:
+   # 3. Build and push the Agent Runtime BYOC image remotely via Cloud Build (ZERO local Docker required!)
    make push-agent
    # Equivalent direct Cloud Build command from the repository root:
-   # gcloud builds submit starter --tag="${AGENT_IMAGE_URI}" --project="${GOOGLE_CLOUD_PROJECT}"
+   # gcloud builds submit starter --region="${BUILD_LOCATION}" --tag="${AGENT_IMAGE_URI}" --project="${GOOGLE_CLOUD_PROJECT}"
    ```
 
 4. Save `AGENT_IMAGE_URI` into `.env` so `starter/terraform/terraform.tfvars` and downstream verification scripts pick it up automatically.
@@ -246,7 +262,7 @@ Before running `terraform plan` or `terraform apply` with `container_spec`, you 
 
 Review the files in `starter/terraform/`:
 - [`starter/terraform/versions.tf`](../starter/terraform/versions.tf) — Terraform and Google provider constraints (`hashicorp/google >= 6.0.0` and `hashicorp/google-beta >= 6.0.0`, required for `spec.container_spec`; note upstream `use-terraform` docs still print `>= 5.28.0`)
-- [`starter/terraform/variables.tf`](../starter/terraform/variables.tf) — Input variables (`project_id`, `project_number`, `location`, `repository_name`, `agent_image_uri`, `sandbox_image_uri`, `sandbox_template_name`, `api_key_value`, plus optional Lab 3/4 feature variables `enable_memory_bank`, `enable_skill_registry`, and `skill_registry_location`)
+- [`starter/terraform/variables.tf`](../starter/terraform/variables.tf) — Input variables (`project_id`, `project_number`, `location` defaulting to `asia-southeast1` Singapore, `repository_name`, `agent_image_uri` & `sandbox_image_uri` in Bangkok `asia-southeast3-docker.pkg.dev` or optional `asia-southeast1-docker.pkg.dev`, `sandbox_template_name`, `api_key_value`, plus optional Lab 3/4 feature variables `enable_memory_bank`, `enable_skill_registry`, `skill_registry_location` defaulting to `us-central1`, and `agent_registry_location` defaulting to `asia-southeast3`)
 - [`starter/terraform/main.tf`](../starter/terraform/main.tf) — Service accounts, Secret Manager, dual service agent IAM bindings, and `google_vertex_ai_reasoning_engine` (contains `# TODO(lab-5)` markers)
 - [`starter/terraform/outputs.tf`](../starter/terraform/outputs.tf) — Exports `reasoning_engine_id`, `reasoning_engine_resource_name`, and `agent_runtime_service_account`
 - [`starter/terraform/terraform.tfvars.example`](../starter/terraform/terraform.tfvars.example) — Sample variables template
@@ -440,11 +456,11 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
       }
       env {
         name  = "SKILL_REGISTRY_LOCATION"
-        value = var.skill_registry_location
+        value = var.skill_registry_location # Default "us-central1" (3-region Preview)
       }
       env {
         name  = "AGENT_REGISTRY_LOCATION"
-        value = var.skill_registry_location
+        value = var.agent_registry_location # Default "asia-southeast3" (Bangkok primary)
       }
       secret_env {
         name = "CODING_AGENT_API_KEY"
@@ -475,18 +491,22 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
 > [!TIP]
 > **Friction-Free Custom SA Now — SPIFFE `AGENT_IDENTITY` + Agent Gateway in Optional Lab 7:** Keep the default dedicated Custom SA (`coding-agent-runtime-sa`) here so Labs 5–6 deploy and verify with zero gateway/org-policy friction. When you are ready to harden your deployment with immutable **SPIFFE `AGENT_IDENTITY`** (`provider = google-beta`, `identity_type = "AGENT_IDENTITY"`) and **Agent Gateway** (Model Armor, IAM UAPs, and Semantic Governance NLC policies), follow the guided Terraform upgrade path in [Lab 7 (Optional): Enterprise Security & Governance Hardening](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md). Remember: `identity_type` is **immutable** at creation time, so Lab 7 provisions a fresh SPIFFE-enabled runtime without disturbing your standalone state instance!
 
-#### 3. Option 2 (Alternative): Dockerfile Deployment (`source_code_spec` + Empty `image_spec {}`)
+#### 3. Path 2 (Zero-Docker AND Zero-Artifact-Registry Alternative): `make pack-agent-source` + `source_code_spec` + Empty `image_spec {}`
 
-When you do not want a separate Artifact Registry push step in CI, Agent Runtime can build directly from a `.tar.gz` archive containing a `Dockerfile` (max **8 MB** archive, no GCS bucket required):
+When you want declarative Terraform IaC with **zero local Docker AND zero Artifact Registry push step**, Agent Runtime can build directly from a `.tar.gz` archive containing a `Dockerfile` (max **8 MB** archive, no GCS bucket or AR push required):
 
 > [!CAUTION]
 > **Root-of-Tar Archive Trap (Very Common Failure!):** `Dockerfile`, `main.py`, and `requirements.txt` **MUST** reside directly at the **root level** of the `.tar.gz` archive (`./Dockerfile`), **NOT** nested inside a top-level folder (`my-agent/Dockerfile`)! Cloud Build unpacks the tarball into the build workspace root and immediately fails if `./Dockerfile` is not found at level 0.
 >
-> Always `cd` into the directory before archiving:
+> Use **`make pack-agent-source`** from the repository root (which packages level-0 entries automatically and validates the 8 MB limit), or archive manually after `cd`-ing into `starter/`:
 > ```bash
-> cd starter && tar -czvf terraform/coding_agent_source.tar.gz Dockerfile main.py requirements.txt coding_agent/ skills_to_register/
+> # Recommended one-command packager (guarantees level-0 ./Dockerfile and <= 8 MB archive):
+> make pack-agent-source
+>
+> # Equivalent manual packaging command:
+> # cd starter && tar -czvf terraform/coding_agent_source.tar.gz Dockerfile main.py requirements.txt coding_agent/ skills_to_register/
 > # Verify root-level entries (must NOT show a leading folder prefix for Dockerfile):
-> tar -tzvf terraform/coding_agent_source.tar.gz | head -n 5
+> tar -tzvf starter/terraform/coding_agent_source.tar.gz | head -n 5
 > ```
 
 ```hcl
@@ -532,14 +552,29 @@ output "agent_runtime_service_account" {
 
 ### Step B4: Plan, Apply, and Smoke-Test Your Deployed Agent
 
-1. Create your `terraform.tfvars` from the template:
+1. Create your `terraform.tfvars` from the template (using Singapore `asia-southeast1` for Agent Runtime and Bangkok `asia-southeast3` for primary AR/Agent Registry):
 
    ```bash
    cp starter/terraform/terraform.tfvars.example starter/terraform/terraform.tfvars
-   # Edit starter/terraform/terraform.tfvars with your project_id, project_number,
-   # location, agent_image_uri, sandbox_template_name, optional Lab 3/4 flags
-   # (enable_memory_bank, enable_skill_registry, skill_registry_location), and a
-   # placeholder api_key_value
+   ```
+
+   Example `starter/terraform/terraform.tfvars` values:
+   ```hcl
+   project_id              = "YOUR_PROJECT_ID"
+   project_number          = "YOUR_PROJECT_NUMBER"
+   location                = "asia-southeast1"  # Singapore — nearest supported Agent Runtime region
+   repository_name         = "coding-agent-repo"
+   display_name            = "coding_agent_byoc_tf"
+   agent_image_uri         = "asia-southeast3-docker.pkg.dev/YOUR_PROJECT_ID/coding-agent-repo/coding-agent:v1"
+   sandbox_image_uri       = "asia-southeast3-docker.pkg.dev/YOUR_PROJECT_ID/coding-agent-repo/coding-sandbox:v1"
+   sandbox_template_name   = ""                 # Paste Lab 2 template name, or leave empty for SANDBOX_MODE=shell
+   sandbox_mode            = ""                 # Empty auto-selects "byoc" when sandbox_template_name is set, else "shell"
+   model_name              = "gemini-2.5-flash"
+   api_key_value           = "replace-with-workshop-placeholder-value"
+   enable_memory_bank      = false
+   enable_skill_registry   = false
+   skill_registry_location = "us-central1"      # 3-region Vertex AI Skill Registry Preview
+   agent_registry_location = "asia-southeast3"  # Bangkok primary Agent Registry region
    ```
 
 2. Format, validate, and plan:
@@ -741,9 +776,9 @@ Run the automated Lab 5 verification script to check HCL formatting, Terraform v
 ```
 
 Expected pass criteria:
-1. `terraform -chdir=starter/terraform fmt -check` and `terraform validate` pass cleanly.
-2. Both `starter/main.py` and `starter/terraform/main.tf` contain zero remaining `# TODO(lab-5)` markers; `starter/terraform/main.tf` uses `region = var.location`, grants `roles/aiplatform.memoryUser`, conditional `roles/agentregistry.viewer` (when `enable_skill_registry = true`), `roles/telemetry.tracesWriter`, and self `roles/iam.serviceAccountTokenCreator` on `coding-agent-runtime-sa`, declares `roles/artifactregistry.reader` for `gcp-sa-aiplatform-re` and `gcp-sa-vertex-sandbox`, wires optional Lab 3/4 variables (`enable_memory_bank`, `enable_skill_registry`, `skill_registry_location`, injecting both `SKILL_REGISTRY_LOCATION` and `AGENT_REGISTRY_LOCATION`), and lists IAM bindings inside `depends_on`.
-3. *(If applied)* `REASONING_ENGINE_NAME` responds to `:streamQuery?alt=sse` with streamed output events.
+1. `make test-agent-local` passes locally (zero Docker!) and `terraform -chdir=starter/terraform fmt -check` + `terraform validate` pass cleanly.
+2. Both `starter/main.py` and `starter/terraform/main.tf` contain zero remaining `# TODO(lab-5)` markers; `starter/terraform/main.tf` uses `region = var.location` (`asia-southeast1` Singapore), grants `roles/aiplatform.memoryUser`, conditional `roles/agentregistry.viewer` (when `enable_skill_registry = true`), `roles/telemetry.tracesWriter`, and self `roles/iam.serviceAccountTokenCreator` on `coding-agent-runtime-sa`, declares `roles/artifactregistry.reader` for `gcp-sa-aiplatform-re` and `gcp-sa-vertex-sandbox`, wires optional Lab 3/4 variables (`enable_memory_bank`, `enable_skill_registry`, `skill_registry_location`, and `agent_registry_location`, injecting both `SKILL_REGISTRY_LOCATION` and `AGENT_REGISTRY_LOCATION`), and lists IAM bindings inside `depends_on`.
+3. *(If applied)* `REASONING_ENGINE_NAME` in Singapore (`asia-southeast1`) responds to `:streamQuery?alt=sse` with streamed output events.
 
 Need a clean reference? Compare your files against [`solution/main.py`](../solution/main.py) and [`solution/terraform/`](../solution/terraform/).
 

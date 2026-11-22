@@ -753,7 +753,7 @@ def main(argv: list[str] | None = None) -> int:
     project_id = args.project or settings.google_cloud_project
     location = args.location or settings.google_cloud_location
     skill_location = settings.skill_registry_location or "us-central1"
-    agent_registry_location = settings.agent_registry_location or "us-central1"
+    agent_registry_location = settings.agent_registry_location or "asia-southeast3"
     runtime_name = settings.reasoning_engine_name
 
     sampler_path = (

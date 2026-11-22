@@ -29,9 +29,9 @@ Authoritative guide for executing commands, scripts, browser actions, and file I
 ```python
 import agentplatform
 
-client = agentplatform.Client(project="PROJECT_ID", location="us-central1")
+client = agentplatform.Client(project="PROJECT_ID", location="asia-southeast1")
 sandbox_name = (
-    "projects/PROJECT_ID/locations/us-central1"
+    "projects/PROJECT_ID/locations/asia-southeast1"
     "/reasoningEngines/INSTANCE_ID/sandboxEnvironments/SANDBOX_ID"
 )
 
@@ -74,7 +74,7 @@ import agentplatform
 
 client = agentplatform.Client(
     project="PROJECT_ID",
-    location="us-central1",
+    location="asia-southeast1",
     http_options={"api_version": "v1beta1"},
 )
 sandbox = client.sandboxes.get(name=sandbox_name)
@@ -153,7 +153,7 @@ from google.adk.code_executors.agent_engine_sandbox_code_executor import (
 )
 
 root_agent = Agent(
-    model="gemini-2.5-flash",  # Explicit versioned regional model ID (avoid gemini-flash-latest on us-central1)
+    model="gemini-2.5-flash",  # Explicit versioned regional model ID (avoid gemini-flash-latest on regional endpoints like asia-southeast1)
     name="agent_engine_code_execution_agent",
     instruction=(
         "Execute Python code step-by-step in the stateful sandbox. "
@@ -163,11 +163,11 @@ root_agent = Agent(
     code_executor=AgentEngineSandboxCodeExecutor(
         # Provide EITHER a pre-created sandbox resource name:
         sandbox_resource_name=(
-            "projects/PROJECT_ID/locations/us-central1"
+            "projects/PROJECT_ID/locations/asia-southeast1"
             "/reasoningEngines/INSTANCE_ID/sandboxEnvironments/SANDBOX_ID"
         ),
         # OR a parent ReasoningEngine resource name (auto-creates a default sandbox per session):
-        # agent_engine_resource_name="projects/PROJECT_ID/locations/us-central1/reasoningEngines/INSTANCE_ID",
+        # agent_engine_resource_name="projects/PROJECT_ID/locations/asia-southeast1/reasoningEngines/INSTANCE_ID",
     ),
 )
 ```
@@ -212,7 +212,7 @@ from playwright.async_api import async_playwright
 
 v_client = vertexai.Client(
     project="PROJECT_ID",
-    location="us-central1",
+    location="asia-southeast1",
     http_options={"api_version": "v1beta1"},
 )
 v_sandbox = v_client.agent_engines.sandboxes.get(name=sandbox_name)

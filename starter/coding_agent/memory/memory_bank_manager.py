@@ -34,7 +34,7 @@ import re
 import sys
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, overload
 
 from coding_agent.config import Settings, get_settings
 
@@ -194,9 +194,26 @@ def inspect_for_memory_poisoning(text: str) -> MemorySanitizationReport:
     raise NotImplementedError("Complete TODO(lab-3): inspect_for_memory_poisoning()")
 
 
-def sanitize_for_memory_ingestion(text: str) -> str:
-    """Return sanitized text safe for Memory Bank ingestion, or ``""`` if poisoned."""
-    return inspect_for_memory_poisoning(text).sanitized_text
+@overload
+def sanitize_for_memory_ingestion(payload: str) -> str: ...
+
+
+@overload
+def sanitize_for_memory_ingestion(payload: list[Any] | tuple[Any, ...]) -> list[Any]: ...
+
+
+def sanitize_for_memory_ingestion(
+    payload: str | list[Any] | tuple[Any, ...],
+) -> str | list[Any]:
+    """Return sanitized text or filtered/sanitized event list safe for Memory Bank ingestion.
+
+    Preserves ``str -> str`` behavior via ``inspect_for_memory_poisoning()`` (returning
+    ``""`` if poisoned) and delegates ``list``/``tuple`` inputs to
+    ``filter_and_sanitize_events_for_memory()``.
+    """
+    if isinstance(payload, list | tuple):
+        return filter_and_sanitize_events_for_memory(list(payload))
+    return inspect_for_memory_poisoning(payload).sanitized_text
 
 
 def _build_agentplatform_client(project_id: str, location: str) -> Any:
@@ -214,7 +231,7 @@ def _build_agentplatform_client(project_id: str, location: str) -> Any:
 
 def build_adk_memory_service(
     project_id: str | None = None,
-    location: str = "us-central1",
+    location: str = "asia-southeast1",
     agent_engine_id: str | None = None,
 ) -> Any:
     """Return ``VertexAiMemoryBankService`` when configured, else ``InMemoryMemoryService``."""
@@ -257,17 +274,19 @@ def build_memory_service_builder(
 
 
 def filter_and_sanitize_events_for_memory(events: list[Any]) -> list[Any]:
-    """Screen ADK session events before Memory Bank ingestion.
+    """Screen ADK/API events, bare content dicts/objects, or text items before Memory Bank ingestion.
 
-    Drops any event whose text triggers prompt-injection/exfiltration rules in
-    ``inspect_for_memory_poisoning()``, and redacts secrets or untrusted tool
-    blocks on cloned copies of remaining events without mutating ``session.events``.
+    Drops any item whose text triggers prompt-injection/exfiltration rules in
+    ``inspect_for_memory_poisoning()``, and deep-copy redacts secrets or untrusted
+    tool blocks without mutating caller inputs.
     """
-    # TODO(lab-3): Iterate ``events``, screen text parts with
-    # ``inspect_for_memory_poisoning()``, drop blocked events, deep-copy events
-    # needing redaction (via ``event.model_copy(deep=True)`` or
-    # ``copy.deepcopy(event)``) so live ``session.events`` is never mutated, and
-    # return the filtered list of safe events.
+    # TODO(lab-3): Iterate ``events``, extracting text from wrapped ADK/API events
+    # (``event['content']['parts']`` / ``event.content.parts``), bare content dicts/objects
+    # (``event['parts']`` / ``event.parts``), direct string ``text``/``content`` dicts, and
+    # plain ``str`` elements. Screen with ``inspect_for_memory_poisoning()``, drop blocked
+    # items, deep-copy items needing redaction (via ``event.model_copy(deep=True)`` or
+    # ``copy.deepcopy(event)``) so caller inputs and live ``session.events`` are never
+    # mutated, and return the filtered list of safe items.
     _ = events
     raise NotImplementedError("Complete TODO(lab-3): filter_and_sanitize_events_for_memory()")
 
@@ -337,7 +356,7 @@ class MemoryBankManager:
     def __init__(
         self,
         project_id: str,
-        location: str = "us-central1",
+        location: str = "asia-southeast1",
         memory_bank_name: str = "",
         *,
         client: Any | None = None,
@@ -378,9 +397,19 @@ class MemoryBankManager:
         return resolved
 
     @staticmethod
-    def sanitize_for_memory_ingestion(text: str) -> str:
-        """Screen conversation text against prompt injection and secret leakage."""
-        return sanitize_for_memory_ingestion(text)
+    @overload
+    def sanitize_for_memory_ingestion(payload: str) -> str: ...
+
+    @staticmethod
+    @overload
+    def sanitize_for_memory_ingestion(payload: list[Any] | tuple[Any, ...]) -> list[Any]: ...
+
+    @staticmethod
+    def sanitize_for_memory_ingestion(
+        payload: str | list[Any] | tuple[Any, ...],
+    ) -> str | list[Any]:
+        """Screen text or conversation events against prompt injection and secret leakage."""
+        return sanitize_for_memory_ingestion(payload)
 
     @staticmethod
     def build_managed_semantic_memory_config(
@@ -389,7 +418,7 @@ class MemoryBankManager:
         generation_model: str = DEFAULT_GENERATION_MODEL,
         generation_location: str = "global",
         embedding_model: str = DEFAULT_EMBEDDING_MODEL,
-        embedding_location: str = "us",
+        embedding_location: str = "asia-southeast1",
         ttl_days: int = 90,
         revision_ttl_days: int = 365,
         scope_keys: list[str] | None = None,
@@ -504,10 +533,23 @@ class MemoryBankManager:
 
     # -- Provisioning & Configuration ----------------------------------------
 
+    def _resolve_embedding_location(
+        self,
+        embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+    ) -> str:
+        """Resolve embedding location from ``self.location`` with ``gemini-embedding-2`` guard."""
+        if (
+            embedding_model == "gemini-embedding-2"
+            and self.location not in GEMINI_EMBEDDING_2_ALLOWED_LOCATIONS
+        ):
+            return "global"
+        return self.location
+
     def create_memory_bank(
         self,
         *,
         display_name: str = "Workshop Memory Bank",
+        embedding_model: str = DEFAULT_EMBEDDING_MODEL,
         ttl_days: int = 90,
         revision_ttl_days: int = 365,
         scope_keys: list[str] | None = None,
@@ -516,6 +558,8 @@ class MemoryBankManager:
         """Create a standalone Memory Bank instance with custom topics and TTLs."""
         semantic_config = managed_semantic_memory_config or self.build_managed_semantic_memory_config(
             self.project_id,
+            embedding_model=embedding_model,
+            embedding_location=self._resolve_embedding_location(embedding_model),
             ttl_days=ttl_days,
             revision_ttl_days=revision_ttl_days,
             scope_keys=scope_keys or ["user_id"],
@@ -530,6 +574,7 @@ class MemoryBankManager:
         self,
         *,
         memory_bank_name: str | None = None,
+        embedding_model: str = DEFAULT_EMBEDDING_MODEL,
         ttl_days: int = 90,
         revision_ttl_days: int = 365,
         scope_keys: list[str] | None = None,
@@ -539,6 +584,8 @@ class MemoryBankManager:
         target_name = self._require_memory_bank_name(memory_bank_name)
         semantic_config = managed_semantic_memory_config or self.build_managed_semantic_memory_config(
             self.project_id,
+            embedding_model=embedding_model,
+            embedding_location=self._resolve_embedding_location(embedding_model),
             ttl_days=ttl_days,
             revision_ttl_days=revision_ttl_days,
             scope_keys=scope_keys or ["user_id"],
@@ -842,7 +889,9 @@ class MemoryBankManager:
 
 def _run_offline_check(user_id: str) -> dict[str, Any]:
     """Verify local ADK fallback, config builder, and prompt-injection sanitizer."""
-    service = build_adk_memory_service(project_id=None, location="us-central1", agent_engine_id=None)
+    service = build_adk_memory_service(
+        project_id=None, location="asia-southeast1", agent_engine_id=None
+    )
     config = MemoryBankManager.build_managed_semantic_memory_config(
         project_id="demo-project",
         scope_keys=["user_id"],

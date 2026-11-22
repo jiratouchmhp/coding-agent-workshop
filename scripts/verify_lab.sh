@@ -141,6 +141,19 @@ check_py_compile() {
   fi
 }
 
+check_bash_syntax() {
+  local path="$1"
+  if [[ ! -f "${path}" ]]; then
+    fail "Cannot syntax-check missing bash script: ${path}"
+    return 0
+  fi
+  if bash -n "${path}" 2>/dev/null; then
+    pass "Bash syntax valid (bash -n): ${path}"
+  else
+    fail "Bash syntax error in: ${path}"
+  fi
+}
+
 has_todo_markers() {
   local path="$1"
   local lab_tag="$2"
@@ -200,6 +213,12 @@ verify_lab_1() {
   section "Lab 1 Verification (${TRACK}/ — Setup & ADK Build)"
   check_file_exists ".env.example"
   check_file_exists "Makefile"
+  check_file_exists "scripts/preflight_check.sh"
+  check_file_exists "scripts/cleanup_workshop.sh"
+  check_file_exists "scripts/live_gcp_e2e_validate.sh"
+  check_bash_syntax "scripts/preflight_check.sh"
+  check_bash_syntax "scripts/cleanup_workshop.sh"
+  check_bash_syntax "scripts/live_gcp_e2e_validate.sh"
   check_file_exists "${TRACK}/pyproject.toml"
   check_file_exists "${TRACK}/agents-cli-manifest.yaml"
   check_file_exists "${TRACK}/coding_agent/config.py"
@@ -208,9 +227,20 @@ verify_lab_1() {
   check_file_exists "${TRACK}/services.yaml"
   check_file_exists "${TRACK}/services.py"
 
+  check_pattern ".env.example" "^PRIMARY_REGION=asia-southeast3$" ".env.example sets PRIMARY_REGION=asia-southeast3 (Bangkok primary)"
+  check_pattern ".env.example" "^GOOGLE_CLOUD_LOCATION=asia-southeast1$" ".env.example sets GOOGLE_CLOUD_LOCATION=asia-southeast1 (Singapore Agent Platform)"
+  check_pattern ".env.example" "^AGENT_REGISTRY_LOCATION=asia-southeast3$" ".env.example sets AGENT_REGISTRY_LOCATION=asia-southeast3"
+  check_pattern ".env.example" "^SKILL_REGISTRY_LOCATION=us-central1$" ".env.example sets SKILL_REGISTRY_LOCATION=us-central1"
+  check_pattern ".env.example" "^EVAL_LOCATION=global$" ".env.example sets EVAL_LOCATION=global"
   check_pattern ".env.example" "^AGENT_ARCHITECTURE=simple$" "Default AGENT_ARCHITECTURE=simple preserves Labs 2-8 compatibility"
   check_pattern ".env.example" "^MAX_FIX_ROUNDS=3$" ".env.example sets MAX_FIX_ROUNDS=3"
   check_pattern ".env.example" "^ENABLE_HITL_APPROVAL=false$" ".env.example sets ENABLE_HITL_APPROVAL=false"
+
+  check_pattern "Makefile" "^preflight:" "Makefile defines preflight target"
+  check_pattern "Makefile" "^test-sandbox-local:" "Makefile defines zero-Docker test-sandbox-local target"
+  check_pattern "Makefile" "^test-agent-local:" "Makefile defines zero-Docker test-agent-local target"
+  check_pattern "Makefile" "^pack-agent-source:" "Makefile defines zero-Docker/zero-AR pack-agent-source target"
+  check_pattern "Makefile" "^cleanup:" "Makefile defines cleanup target"
 
   check_pattern "${TRACK}/agents-cli-manifest.yaml" "agent_directory:[[:space:]]*coding_agent" "agents-cli manifest sets agent_directory: coding_agent"
   check_pattern "${TRACK}/agents-cli-manifest.yaml" "framework:[[:space:]]*google-adk" "agents-cli manifest sets framework: google-adk"
@@ -285,9 +315,15 @@ s = mod.Settings()
 assert s.agent_architecture == "simple", f"Expected default simple, got {s.agent_architecture!r}"
 assert s.max_fix_rounds == 3, f"Expected default max_fix_rounds=3, got {s.max_fix_rounds!r}"
 assert s.enable_hitl_approval is False, f"Expected default enable_hitl_approval=False, got {s.enable_hitl_approval!r}"
+assert s.primary_region == "asia-southeast3", f"Expected default primary_region='asia-southeast3', got {s.primary_region!r}"
+assert s.google_cloud_location == "asia-southeast1", f"Expected default google_cloud_location='asia-southeast1', got {s.google_cloud_location!r}"
+assert s.ar_location == "asia-southeast3", f"Expected default ar_location='asia-southeast3', got {s.ar_location!r}"
+assert s.build_location == "asia-southeast3", f"Expected default build_location='asia-southeast3', got {s.build_location!r}"
 assert s.skill_registry_location == "us-central1", f"Expected default skill_registry_location='us-central1', got {s.skill_registry_location!r}"
-assert s.agent_registry_location == "us-central1", f"Expected default agent_registry_location='us-central1', got {s.agent_registry_location!r}"
-assert mod.Settings(skill_registry_location="europe-west4").agent_registry_location == "europe-west4"
+assert s.agent_registry_location == "asia-southeast3", f"Expected default agent_registry_location='asia-southeast3', got {s.agent_registry_location!r}"
+assert s.eval_location == "global", f"Expected default eval_location='global', got {s.eval_location!r}"
+assert s.gke_location == "asia-southeast3", f"Expected default gke_location='asia-southeast3', got {s.gke_location!r}"
+assert mod.Settings(primary_region="europe-west4", agent_registry_location="").agent_registry_location == "europe-west4"
 assert mod.Settings(skill_registry_location="europe-west4", agent_registry_location="global").agent_registry_location == "global"
 
 for arch in ("simple", "collaborative", "graph", "dynamic"):
@@ -665,16 +701,167 @@ verify_lab_5() {
   local runtime_main="${TRACK}/main.py"
   local runtime_reqs="${TRACK}/requirements.txt"
   local manifest="${TRACK}/agents-cli-manifest.yaml"
+  local gcloudignore="${TRACK}/.gcloudignore"
+  local dockerignore="${TRACK}/.dockerignore"
 
   check_file_exists "${runtime_df}"
   check_file_exists "${runtime_main}"
   check_file_exists "${runtime_reqs}"
   check_file_exists "${manifest}"
+  check_file_exists "${gcloudignore}"
+  check_file_exists "${dockerignore}"
   check_file_exists "${versions_tf}"
   check_file_exists "${vars_tf}"
   check_file_exists "${main_tf}"
   check_file_exists "${outputs_tf}"
   check_file_exists "${tfvars_example}"
+
+  # Regression check: .gcloudignore and .dockerignore must exclude .venv/, caches,
+  # secrets (.env, *.tfvars*, *.tfstate*), terraform/, artifacts/, and *.tar.gz
+  # while preserving all Agent Runtime build & manifest assets.
+  if [[ -f "${gcloudignore}" && -f "${dockerignore}" ]]; then
+    if python3 - "${gcloudignore}" "${dockerignore}" <<'PYEOF'
+import fnmatch
+import os
+import re
+import sys
+from pathlib import Path
+
+gcloud_path = Path(sys.argv[1])
+docker_path = Path(sys.argv[2])
+
+
+def load_patterns(path: Path) -> list[str]:
+    return [
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
+def gcloud_matches_pattern(pat: str, relpath: str, is_dir: bool) -> bool:
+    must_be_dir = pat.endswith("/")
+    if must_be_dir:
+        if not is_dir:
+            return False
+        pat = pat[:-1]
+    if pat.startswith("/"):
+        pat = pat[1:]
+        return fnmatch.fnmatchcase(relpath, pat)
+    if "/" not in pat:
+        return fnmatch.fnmatchcase(os.path.basename(relpath), pat)
+    # Handle **/ prefix or nested slash patterns
+    if pat.startswith("**/"):
+        sub = pat[3:]
+        parts = relpath.split("/")
+        return any(fnmatch.fnmatchcase("/".join(parts[i:]), sub) for i in range(len(parts)))
+    return fnmatch.fnmatchcase(relpath, pat)
+
+
+def gcloud_excluded(patterns: list[str], relpath: str, is_dir: bool = False) -> bool:
+    parts = relpath.split("/")
+    prefixes = ["/".join(parts[:i]) for i in range(1, len(parts) + 1)]
+    for idx, prefix in enumerate(prefixes):
+        prefix_is_dir = (idx < len(prefixes) - 1) or is_dir
+        ignored = False
+        for raw in patterns:
+            neg = raw.startswith("!")
+            pat = raw[1:] if neg else raw
+            if gcloud_matches_pattern(pat, prefix, prefix_is_dir):
+                ignored = not neg
+        if ignored:
+            return True
+    return False
+
+
+def compile_docker(raw: str):
+    neg = raw.startswith("!")
+    p = os.path.normpath(raw[1:] if neg else raw)
+    reg = "^"
+    i = 0
+    while i < len(p):
+        ch = p[i]
+        if ch == "*":
+            if i + 1 < len(p) and p[i + 1] == "*":
+                i += 2
+                if i < len(p) and p[i] == "/":
+                    i += 1
+                reg += ".*" if i == len(p) else "(.*/)?"
+                continue
+            reg += "[^/]*"
+        elif ch == "?":
+            reg += "[^/]"
+        elif ch in ".+()|{}$":
+            reg += "\\" + ch
+        else:
+            reg += ch
+        i += 1
+    reg += "$"
+    return re.compile(reg), neg
+
+
+def docker_excluded(compiled, relpath: str) -> bool:
+    relpath = os.path.normpath(relpath)
+    parts = relpath.split("/")
+    prefixes = ["/".join(parts[:i]) for i in range(1, len(parts) + 1)]
+    matched = False
+    for rx, neg in compiled:
+        if neg != matched:
+            continue
+        if any(rx.match(pref) for pref in prefixes):
+            matched = not neg
+    return matched
+
+
+g_pats = load_patterns(gcloud_path)
+d_pats = [compile_docker(p) for p in load_patterns(docker_path)]
+
+must_exclude = [
+    (".venv/lib/python3.11/site-packages/pkg.py", False),
+    ("venv/bin/python", False),
+    ("coding_agent/__pycache__/agent.cpython-311.pyc", False),
+    ("coding_agent/agent.pyc", False),
+    ("coding_agent/agent.pyo", False),
+    ("coding_agent/agent.pyd", False),
+    (".pytest_cache/README.md", False),
+    (".ruff_cache/CACHEDIR.TAG", False),
+    (".env", False),
+    (".env.local", False),
+    ("terraform/.terraform/providers/registry", False),
+    ("terraform/terraform.tfvars", False),
+    ("terraform/terraform.tfstate", False),
+    ("terraform/coding_agent_source.tar.gz", False),
+    ("artifacts/eval_report.json", False),
+    ("bundle.tar.gz", False),
+    ("local.tfstate.backup", False),
+    ("local.tfvars.json", False),
+]
+must_preserve = [
+    "Dockerfile",
+    "main.py",
+    "requirements.txt",
+    "pyproject.toml",
+    "agents-cli-manifest.yaml",
+    "services.py",
+    "services.yaml",
+    "coding_agent/agent.py",
+    "skills_to_register/secure-code-review/SKILL.md",
+]
+
+for path_str, is_dir in must_exclude:
+    assert gcloud_excluded(g_pats, path_str, is_dir=is_dir), f".gcloudignore failed to exclude {path_str}"
+    assert docker_excluded(d_pats, path_str), f".dockerignore failed to exclude {path_str}"
+
+for path_str in must_preserve:
+    assert not gcloud_excluded(g_pats, path_str, is_dir=False), f".gcloudignore excluded {path_str}"
+    assert not docker_excluded(d_pats, path_str), f".dockerignore excluded {path_str}"
+PYEOF
+    then
+      pass ".gcloudignore and .dockerignore exclude .venv/, caches, secrets, terraform/, artifacts/, and archives while preserving runtime assets (${TRACK}/)"
+    else
+      fail "${TRACK}/.gcloudignore or ${TRACK}/.dockerignore failed exclusion/preservation checks"
+    fi
+  fi
 
   if [[ -f "${runtime_df}" ]]; then
     check_dockerfile_non_root "${runtime_df}" "Agent Runtime BYOC Dockerfile"
@@ -833,6 +1020,79 @@ PYEOF
   check_pattern "${eval_dir}/run_simulated_eval.py" "user_simulator_config" "Implements Step 2 multi-turn user simulation"
   check_pattern "${eval_dir}/setup_online_monitor.py" "EVENT_ONLY" "Validates ADK Python OTel capture enum (EVENT_ONLY)"
   check_pattern "${eval_dir}/setup_online_monitor.py" "verify_deployed_runtime" "Includes --verify-runtime helper verify_deployed_runtime()"
+  check_pattern "${eval_dir}/setup_online_monitor.py" "google_cloud_location" "setup_online_monitor.py reads google_cloud_location for runtime region"
+  check_pattern "${eval_dir}/setup_online_monitor.py" "eval_location" "setup_online_monitor.py tracks eval_location separately from runtime region"
+
+  # Regression check: setup_online_monitor.py must decouple runtime region
+  # (`settings.google_cloud_location`, e.g. asia-southeast1) from `eval_location`
+  # (e.g. global) so --verify-runtime and target_agent_engine never query `global`.
+  if [[ -f "${eval_dir}/setup_online_monitor.py" ]]; then
+    if python3 - "${eval_dir}/setup_online_monitor.py" <<'PYEOF'
+import ast
+import sys
+from pathlib import Path
+
+tree = ast.parse(Path(sys.argv[1]).read_text(encoding="utf-8"))
+
+main_fn = None
+for node in tree.body:
+    if isinstance(node, ast.FunctionDef) and node.name == "main":
+        main_fn = node
+        break
+
+if main_fn is None:
+    sys.exit(1)
+
+runtime_loc_vars: set[str] = set()
+eval_loc_vars: set[str] = set()
+for stmt in ast.walk(main_fn):
+    if isinstance(stmt, ast.Assign):
+        val_src = ast.unparse(stmt.value)
+        for tgt in stmt.targets:
+            if not isinstance(tgt, ast.Name):
+                continue
+            if "google_cloud_location" in val_src:
+                runtime_loc_vars.add(tgt.id)
+            if "eval_location" in val_src or "EVAL_LOCATION" in val_src:
+                eval_loc_vars.add(tgt.id)
+
+if not runtime_loc_vars or not eval_loc_vars or (runtime_loc_vars & eval_loc_vars):
+    sys.exit(1)
+
+verified_runtime_call = False
+verified_spec_call = False
+for call in ast.walk(main_fn):
+    if not isinstance(call, ast.Call):
+        continue
+    fn_name = call.func.id if isinstance(call.func, ast.Name) else getattr(call.func, "attr", "")
+    if fn_name == "verify_deployed_runtime":
+        # Location is positional arg #1 or keyword 'location'
+        loc_arg = call.args[1] if len(call.args) >= 2 else next(
+            (kw.value for kw in call.keywords if kw.arg == "location"), None
+        )
+        if isinstance(loc_arg, ast.Name) and loc_arg.id in runtime_loc_vars:
+            verified_runtime_call = True
+    elif fn_name == "build_online_monitor_spec":
+        kw_map = {kw.arg: kw.value for kw in call.keywords if kw.arg}
+        rt_arg = kw_map.get("runtime_location")
+        ev_arg = kw_map.get("location")
+        if (
+            isinstance(rt_arg, ast.Name)
+            and rt_arg.id in runtime_loc_vars
+            and isinstance(ev_arg, ast.Name)
+            and ev_arg.id in eval_loc_vars
+        ):
+            verified_spec_call = True
+
+if not (verified_runtime_call and verified_spec_call):
+    sys.exit(1)
+PYEOF
+    then
+      pass "setup_online_monitor.py cleanly decouples google_cloud_location (runtime region) from eval_location (${eval_dir}/setup_online_monitor.py)"
+    else
+      fail "${eval_dir}/setup_online_monitor.py must decouple settings.google_cloud_location (runtime region) from eval_location when calling build_online_monitor_spec() and verify_deployed_runtime()"
+    fi
+  fi
   check_pattern "${eval_dir}/setup_quality_alerts.py" "monitoring_v3" "Uses google.cloud.monitoring_v3"
   check_pattern "${eval_dir}/setup_quality_alerts.py" "aiplatform\.googleapis\.com/online_evaluator/scores" "Targets verified online_evaluator/scores metric"
   check_pattern "${eval_dir}/optimize_prompt.py" "SimplePromptOptimizer" "Integrates ADK SimplePromptOptimizer"
@@ -986,13 +1246,32 @@ PYEOF
     else
       fail "run_simulated_eval.py --dry-run failed"
     fi
-    if GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=true \
+    local monitor_out=""
+    if monitor_out="$(
+       GOOGLE_CLOUD_LOCATION=asia-southeast1 \
+       EVAL_LOCATION=global \
+       GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=true \
        OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental \
        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=EVENT_ONLY \
-       python3 "${eval_dir}/setup_online_monitor.py" --strict-env >/dev/null 2>&1; then
-      pass "setup_online_monitor.py --strict-env succeeded with valid OTel env"
+       python3 "${eval_dir}/setup_online_monitor.py" --strict-env 2>/dev/null
+    )" && MONITOR_OUT="${monitor_out}" python3 - <<'PYEOF'
+import json
+import os
+
+payload = json.loads(os.environ["MONITOR_OUT"])
+check = payload.get("otel_prerequisite_check") or {}
+spec = payload.get("online_monitor_spec") or {}
+assert check.get("passed") is True, f"Expected OTel check passed=True, got {check}"
+assert spec.get("eval_location") == "global", f"Expected eval_location='global', got {spec.get('eval_location')!r}"
+assert spec.get("runtime_location") == "asia-southeast1", f"Expected runtime_location='asia-southeast1', got {spec.get('runtime_location')!r}"
+assert "locations/asia-southeast1/reasoningEngines/" in str(spec.get("target_agent_engine", "")), (
+    f"Expected Singapore runtime region in target_agent_engine, got {spec.get('target_agent_engine')!r}"
+)
+PYEOF
+    then
+      pass "setup_online_monitor.py --strict-env succeeded and decoupled runtime_location=asia-southeast1 from eval_location=global"
     else
-      fail "setup_online_monitor.py --strict-env failed"
+      fail "setup_online_monitor.py --strict-env failed or mixed runtime_location with eval_location"
     fi
     if python3 "${eval_dir}/setup_quality_alerts.py" --dry-run >/dev/null 2>&1; then
       pass "setup_quality_alerts.py --dry-run succeeded"

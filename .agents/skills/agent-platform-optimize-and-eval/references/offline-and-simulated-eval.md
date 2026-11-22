@@ -25,7 +25,9 @@ Production reference for evaluating agents before production rollout or on histo
 - **Europe (7):** `europe-central2`, `europe-north1`, `europe-southwest1`, `europe-west1`, `europe-west4`, `europe-west8`, `europe-west9`
 - **Global (1):** `global` *(default endpoint for `agents-cli eval run/grade/submit`; required for `generate_loss_clusters` and `eval analyze`)*
 
-> **Unsupported Region Error & Data-Residency Fallback:** Passing any other region fails with `400 FAILED_PRECONDITION: Unsupported region for Vertex Evaluation Service: <region>`. When no supported region meets data residency requirements, grade in-process via `agents-cli eval` local custom metrics (`custom_function`, default `execution: local`) — your Python function can call a compliant regional Gemini endpoint directly as a judge.
+> **APAC Multi-Region Rule (`EVAL_LOCATION=global` vs. `GOOGLE_CLOUD_LOCATION=asia-southeast1`):** Gen AI Evaluation Service has **no regional APAC endpoints** (only the 14 US/EU regions + `global`). APAC teams running Agent Runtime, Managed Sandboxes, and Gemini models in **Singapore (`GOOGLE_CLOUD_LOCATION=asia-southeast1`)** (with primary infrastructure in Bangkok `asia-southeast3`) **must decouple `EVAL_LOCATION=global` from `GOOGLE_CLOUD_LOCATION=asia-southeast1`**. Initializing `vertexai.Client(project=..., location=EVAL_LOCATION)` with `location="global"` prevents `400 FAILED_PRECONDITION: Unsupported region` errors **and** allows both `client.evals.evaluate(...)` (plus scenario synthesis/simulation) **and** `client.evals.generate_loss_clusters(...)` (`global`-only) to succeed cleanly on the same client.
+
+> **Unsupported Region Error & Data-Residency Fallback:** Passing any other region (including `asia-southeast1` or `asia-southeast3`) fails with `400 FAILED_PRECONDITION: Unsupported region for Vertex Evaluation Service: <region>`. When strict in-country data residency prohibits using `global` or a US/EU evaluation endpoint, grade in-process via `agents-cli eval` local custom metrics (`custom_function`, default `execution: local`) — your Python function can call a compliant regional Gemini endpoint directly as a judge.
 
 ---
 
@@ -98,9 +100,16 @@ Four metric categories are supported across Console, SDK, and `agents-cli`:
 
 ```python
 # pip install "google-cloud-aiplatform[adk,evaluation]"
+import os
 from vertexai import Client, types
 
-client = Client(project="YOUR_PROJECT_ID", location="us-central1")
+PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "YOUR_PROJECT_ID")
+# Agent Runtime region: Singapore (asia-southeast1) — nearest supported Agent Platform region
+RUNTIME_LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION", "asia-southeast1")
+# Decouple Eval client location from APAC runtime region: `global` supports both evaluate() AND generate_loss_clusters()
+EVAL_LOCATION = os.environ.get("EVAL_LOCATION", "global")
+
+client = Client(project=PROJECT_ID, location=EVAL_LOCATION)
 
 # 1. Synchronous offline evaluation (verified signature: dataset=, NOT traces=)
 result = client.evals.evaluate(
@@ -127,7 +136,7 @@ eval_run = client.evals.create_evaluation_run(
     dest="gs://YOUR_BUCKET/eval-runs/run-001",
     display_name="nightly-regression-run",
     metrics=[types.RubricMetric.MULTI_TURN_TASK_SUCCESS],
-    agent="projects/YOUR_PROJECT_ID/locations/us-central1/reasoningEngines/ENGINE_ID",
+    agent=f"projects/{PROJECT_ID}/locations/{RUNTIME_LOCATION}/reasoningEngines/ENGINE_ID",
     loss_analysis_metrics=[types.RubricMetric.MULTI_TURN_TASK_SUCCESS],
 )
 fetched_run = client.evals.get_evaluation_run(name=eval_run.name, include_evaluation_items=True)
@@ -193,10 +202,16 @@ Simulated evaluation bootstraps multi-turn test suites with zero production traf
 ### Python SDK Simulation Workflow
 
 ```python
+import os
 from google.adk.agents import Agent
 from vertexai import Client, types
 
-client = Client(project="YOUR_PROJECT_ID", location="us-central1")
+# Use EVAL_LOCATION="global" (decoupled from GOOGLE_CLOUD_LOCATION=asia-southeast1 in APAC)
+# so evaluate() and generate_loss_clusters() both succeed on the same client.
+client = Client(
+    project=os.environ.get("GOOGLE_CLOUD_PROJECT", "YOUR_PROJECT_ID"),
+    location=os.environ.get("EVAL_LOCATION", "global"),
+)
 
 travel_agent = Agent(
     model="gemini-3-flash-preview",
@@ -238,18 +253,19 @@ sim_results.show()
 ### `agents-cli` Simulated Evaluation (`eval dataset synthesize`)
 
 ```bash
-# Experimental — ADK Python ONLY (LangChain and Claude templates refuse it)
-agents-cli eval dataset synthesize --count 10 \
+# Experimental — ADK Python ONLY (override GOOGLE_CLOUD_LOCATION to EVAL_LOCATION=global for APAC cohorts!)
+GOOGLE_CLOUD_LOCATION="${EVAL_LOCATION:-global}" agents-cli eval dataset synthesize --count 10 \
     --instruction "Generate scenarios where a developer asks the agent to refactor code and fix failing pytest tests." \
     --environment-context "Python 3.12 repo with pytest suite inside /workspace." \
     -o artifacts/traces/synth_traces.json
 
 # Output ALREADY contains simulated traces -> skip `eval generate`, grade directly with multi_turn_* metrics!
 agents-cli eval grade --traces artifacts/traces/synth_traces.json \
+    --region "${EVAL_LOCATION:-global}" \
     --metrics multi_turn_task_success,multi_turn_tool_use_quality,multi_turn_trajectory_quality
 ```
 
-> **Region Trap:** `eval dataset synthesize` runs your agent locally (reading `.env` `GOOGLE_CLOUD_LOCATION`), **but scenario generation runs server-side at `GOOGLE_CLOUD_LOCATION`**. Keep `GOOGLE_CLOUD_LOCATION` set to one of the 15 eval-supported regions (or `global`), and pin a different model region in code via `Gemini(model=..., client_kwargs={"location": ...})` if needed.
+> **Region Trap (APAC & Non-Eval Regions):** `eval dataset synthesize` runs your agent locally (reading `.env` `GOOGLE_CLOUD_LOCATION`), **but scenario generation runs server-side at `GOOGLE_CLOUD_LOCATION`**. If your runtime uses an APAC region like `GOOGLE_CLOUD_LOCATION=asia-southeast1`, scenario synthesis fails with `Unsupported region` unless you override `GOOGLE_CLOUD_LOCATION="${EVAL_LOCATION:-global}"` for the command (and pin your agent's regional model in code via `Gemini(model=..., client_kwargs={"location": "asia-southeast1"})` if required). Always pass `--region "${EVAL_LOCATION:-global}"` on `eval grade` and `eval submit` when decoupled from `asia-southeast1`.
 
 ---
 
@@ -273,10 +289,10 @@ agents-cli eval run --dataset tests/eval/datasets/custom.json \
 # Evaluate an already-deployed HTTP agent (ADK templates only)
 agents-cli eval run --url https://my-agent.run.app --app-name app
 
-# Decoupled generate -> grade (reuse traces, adjust default 15 QPS limit, override region)
+# Decoupled generate -> grade (reuse traces, adjust default 15 QPS limit, override region e.g. global for APAC)
 agents-cli eval generate --dataset tests/eval/datasets/custom.json -o custom_traces/
 agents-cli eval grade --traces custom_traces/ --config tests/eval/eval_config.yaml \
-    --qps 5 --region us-central1
+    --qps 5 --region "${EVAL_LOCATION:-global}"
 
 # Live / voice WebSocket agent (/run_live; requires Live model + pinned model region + user-only turns)
 agents-cli eval generate --mode adk_live
@@ -285,11 +301,11 @@ agents-cli eval generate --mode adk_live
 agents-cli eval compare artifacts/grade_results/results_before.json \
     artifacts/grade_results/results_after.json
 
-# Experimental cloud-side batch run (CI / large datasets)
+# Experimental cloud-side batch run (CI / large datasets; keep --region decoupled from APAC runtime region)
 agents-cli eval submit --dataset tests/eval/datasets/custom.json \
     --dest gs://YOUR_BUCKET \
-    --resource-name projects/PROJECT_ID/locations/LOCATION/reasoningEngines/ENGINE_ID \
-    --region us-central1
+    --resource-name projects/PROJECT_ID/locations/RUNTIME_LOCATION/reasoningEngines/ENGINE_ID \
+    --region "${EVAL_LOCATION:-global}"
 agents-cli eval results --run-id RUN_ID
 ```
 
@@ -350,4 +366,4 @@ thresholds:
 | Thinking model skips expected tool calls | Thinking mode answers directly without calling tools | Set `tool_config` with `mode="ANY"` or switch to a non-thinking model. |
 | Scores fluctuate across identical runs | Non-deterministic decoding or single-sample LLM judge | Set `temperature=0` on agent and `judge_model_sampling_count: 3` on custom judge; never delete flaky cases or lower thresholds. |
 | Built-in judge ignores image/audio inputs | Default text extractor (`get_text_from_content()`) skips non-text parts | Implement a custom metric with a vision/audio-capable judge model. |
-| `400 FAILED_PRECONDITION: Unsupported region` | `--region` or client `location` outside the 15 supported eval regions | Pass `--region global` or a supported US/EU region, or use local `custom_function` metrics. |
+| `400 FAILED_PRECONDITION: Unsupported region` | `--region` or client `location` outside the 15 supported eval regions (e.g., APAC `asia-southeast1` or `asia-southeast3`) | Decouple `EVAL_LOCATION=global` from `GOOGLE_CLOUD_LOCATION=asia-southeast1` (so both `evaluate()` and `generate_loss_clusters()` succeed cleanly), pass `--region global` (or a supported US/EU region), or use local `custom_function` metrics for strict in-country residency. |

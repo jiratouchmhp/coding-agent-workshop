@@ -14,20 +14,20 @@ Production deployment, CRD specifications, security policies, Python SDKs, `GkeC
 export CLUSTER_NAME="agent-sandbox-cluster"
 export AGENT_SANDBOX_VERSION="v1.0.6"
 
-# Option A — GKE Autopilot (gVisor enabled automatically; regional LOCATION e.g. us-central1)
-export LOCATION="us-central1"
-gcloud container clusters create-auto "${CLUSTER_NAME}" --location="${LOCATION}"
+# Option A — GKE Autopilot (gVisor enabled automatically; regional GKE_LOCATION e.g. Bangkok asia-southeast3 for Thailand PDPA/BoT residency)
+export GKE_LOCATION="${GKE_LOCATION:-asia-southeast3}"
+gcloud container clusters create-auto "${CLUSTER_NAME}" --location="${GKE_LOCATION}"
 
 # Option B — GKE Standard (zonal or regional; requires dedicated gVisor cos_containerd pool)
-export LOCATION="us-central1-a"
+export ZONE="${ZONE:-asia-southeast3-a}"
 export MACHINE_TYPE="n2-standard-2"  # Avoid e2-* if you plan to enable Pod Snapshots or microVMs
-gcloud container clusters create "${CLUSTER_NAME}" --location="${LOCATION}" --machine-type="${MACHINE_TYPE}" --num-nodes=1
+gcloud container clusters create "${CLUSTER_NAME}" --location="${ZONE}" --machine-type="${MACHINE_TYPE}" --num-nodes=1
 gcloud container node-pools create agent-sandbox-pool \
-  --cluster="${CLUSTER_NAME}" --location="${LOCATION}" \
+  --cluster="${CLUSTER_NAME}" --location="${ZONE}" \
   --machine-type="${MACHINE_TYPE}" --num-nodes=1 \
   --image-type=cos_containerd --sandbox=type=gvisor
 
-gcloud container clusters get-credentials "${CLUSTER_NAME}" --location="${LOCATION}"
+gcloud container clusters get-credentials "${CLUSTER_NAME}" --location="${GKE_LOCATION}" # Use "${ZONE}" for zonal Standard
 
 # Install controller + all 4 v1beta1 CRDs into namespace agent-sandbox-system
 kubectl apply -f "https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${AGENT_SANDBOX_VERSION}/sandbox-with-extensions.yaml"
@@ -240,8 +240,8 @@ agent = LlmAgent(
 export PROJECT_ID=$(gcloud config get project)
 export PROJECT_NUMBER=$(gcloud projects describe "${PROJECT_ID}" --format="value(projectNumber)")
 export CLUSTER_NAME="agent-sandbox-cluster"
-export GKE_LOCATION="us-central1"
-export ZONE="us-central1-a"
+export GKE_LOCATION="${GKE_LOCATION:-asia-southeast3}"  # Bangkok primary (Thailand PDPA / BoT compute residency)
+export ZONE="${ZONE:-asia-southeast3-a}"
 export SNAPSHOTS_BUCKET_NAME="agent-sandbox-snapshots-${PROJECT_ID}"
 export SNAPSHOT_NAMESPACE="pod-snapshots-ns"
 export SNAPSHOT_KSA_NAME="pod-snapshot-sa"
@@ -439,7 +439,7 @@ workerSelector:
     workload: stateful-agent
 containers:
 - name: agent
-  image: CONTAINER_IMAGE  # e.g., REGION-docker.pkg.dev/PROJECT_ID/REPO/agent-app@sha256:...
+  image: CONTAINER_IMAGE  # e.g., asia-southeast3-docker.pkg.dev/PROJECT_ID/REPO/agent-app@sha256:...
   volumeMounts:
   - name: shared-storage
     mountPath: /mnt/shared

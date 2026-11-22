@@ -130,7 +130,7 @@ def _extract_session_name(operation_or_session: Any) -> str:
 
 def build_adk_session_service(
     project_id: str | None = None,
-    location: str = "us-central1",
+    location: str = "asia-southeast1",
     agent_engine_id: str | None = None,
 ) -> Any:
     """Return ``VertexAiSessionService`` when configured, else ``InMemorySessionService``.
@@ -185,7 +185,7 @@ class SessionLifecycleManager:
     def __init__(
         self,
         project_id: str,
-        location: str = "us-central1",
+        location: str = "asia-southeast1",
         runtime_name: str = "",
         *,
         client: Any | None = None,
@@ -299,7 +299,7 @@ class SessionLifecycleManager:
         if text is not None and raw_event is not None:
             raise ValueError("Provide either text or raw_event, not both.")
 
-        event_ts = timestamp or datetime.datetime.now(tz=datetime.timezone.utc)
+        event_ts = timestamp or datetime.datetime.now(tz=datetime.UTC)
         # TODO(lab-3): Build ``config={"raw_event": raw_event}`` or
         # ``config={"content": {"role": role, "parts": [{"text": text}]}}`` and return
         # ``self.client.sessions.events.append(name=session_name, author=author,
@@ -416,7 +416,9 @@ class SessionLifecycleManager:
 def _run_offline_check(user_id: str, session_id: str | None) -> dict[str, Any]:
     """Verify local ADK session fallback, ID validation, and state-delta event creation."""
     validate_session_identifiers(user_id, session_id)
-    service = build_adk_session_service(project_id=None, location="us-central1", agent_engine_id=None)
+    service = build_adk_session_service(
+        project_id=None, location="asia-southeast1", agent_engine_id=None
+    )
     state_event = build_state_update_event(
         invocation_id="inv-offline-check",
         state_delta={"active_repo": "payments-service", "test_cmd": "pytest -q"},

@@ -2,7 +2,7 @@
 
 Source-verified reference covering ADK 2.0+ Simple Agents, `ManagedAgent`, Service Registration, Collaborative Agent Teams, Deterministic & Dynamic Routing, and Multi-Agent Workflow Patterns (`adk.dev/agents/*`, `adk.dev/workflows/*`, `adk.dev/graphs/*`, and `adk.dev/2.0/`).
 
-> **Model ID Note:** Upstream `adk.dev` snippets often use `"gemini-flash-latest"`, which can return `404` on regional Agent Platform endpoints (such as `us-central1`). The Python examples below use explicit versioned IDs (e.g., `"gemini-2.5-flash"`) for regional compatibility.
+> **Model ID Note:** Upstream `adk.dev` snippets often use `"gemini-flash-latest"`, which can return `404` on regional Agent Platform endpoints (such as `asia-southeast1`). The Python examples below use explicit versioned IDs (e.g., `"gemini-2.5-flash"`) for regional compatibility.
 
 ---
 
@@ -93,7 +93,7 @@ coordinator = LlmAgent(
 
 ### Verified `ManagedAgent` Hard Limitations
 
-1. **Agent Platform `global`-Only:** Regional endpoints (e.g. `us-central1`) raise an error.
+1. **Agent Platform `global`-Only:** Regional endpoints (e.g., `asia-southeast1` or `us-central1`) raise an error.
 2. **Server-Side Tools Only (`NotImplementedError`):** Client-executed Python callables **and** raw `types.Tool(mcp_servers=...)` configs are unsupported and raise `NotImplementedError`. Declare server-side remote MCP servers exclusively with `google.adk.tools.RemoteMcpServer`.
 3. **Streaming Only (`stream=True`):** Background-polling execution and strictly non-streaming connections are not yet fully supported.
 4. **Backend Behavioral Variance:** Gemini API and Agent Platform backends exhibit slight behavioral differences — always test against the exact target backend.

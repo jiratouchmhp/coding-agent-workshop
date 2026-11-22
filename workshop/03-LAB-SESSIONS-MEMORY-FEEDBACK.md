@@ -66,7 +66,7 @@ Ensure your environment variables (including Lab 2's lightweight standalone `REA
 source .env
 export GOOGLE_GENAI_USE_ENTERPRISE="TRUE"   # MANDATORY for Feedback Service & ADK enterprise features
 export GOOGLE_CLOUD_PROJECT="${GOOGLE_CLOUD_PROJECT}"
-export GOOGLE_CLOUD_LOCATION="${GOOGLE_CLOUD_LOCATION}"
+export GOOGLE_CLOUD_LOCATION="${GOOGLE_CLOUD_LOCATION:-asia-southeast1}"  # Singapore — nearest supported Agent Platform region
 ```
 
 Verify required APIs are enabled:
@@ -85,7 +85,7 @@ gcloud services enable \
 > **Reusing Lab 2's Standalone `REASONING_ENGINE_NAME` (Zero Code Deploy Required):**
 > - Per the official [Managed Sessions](https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/sessions) and [Memory Bank](https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/memory-bank) documentation, both services run **standalone** on an empty parent `reasoningEngines` instance (`client.runtimes.create()` — ~3 seconds, **zero agent code deployment** required!). Reuse the `REASONING_ENGINE_NAME` you created in [Lab 2](./02-LAB-CUSTOM-SANDBOX-BYOC.md) right here (or create one if you haven't yet via `client.runtimes.create(config={"display_name": "Workshop State Store"})`).
 > - **Telemetry & Feedback Lifecycle:** In Lab 3 you wire and smoke-test your OTel callbacks (`before_tool_callback` / `after_tool_callback`) and `FeedbackClient` against your local agent and standalone instance; they automatically correlate with live Cloud Trace spans, Cloud Logging, and Online Evaluation Monitors once you deploy the complete agent in [Lab 5](./05-LAB-DEPLOY-RUNTIME-TERRAFORM.md) and evaluate it in [Lab 6](./06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md).
-> - **Locations & Enterprise Encryption:** Sessions and Memory Bank support single-region, multi-region (`us`, `eu`), and `global` *(exception: Memory Bank is NOT available in `asia-southeast2`, `australia-southeast2`, or `northamerica-northeast2`)*. For CMEK and VPC-SC hardening, see [Lab 7 (Optional): Enterprise Security & Governance Hardening](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md).
+> - **Locations & Enterprise Encryption:** In our Bangkok/Singapore regional topology, Managed Sessions, Memory Bank, Feedback Service, and Agent Runtime all run cleanly in **Singapore (`GOOGLE_CLOUD_LOCATION=asia-southeast1`)** — all officially live with zero restrictions (not yet launched in Bangkok `asia-southeast3`). Sessions and Memory Bank also support multi-region (`us`, `eu`) and `global` *(exception: Memory Bank is NOT available in `asia-southeast2`, `australia-southeast2`, or `northamerica-northeast2`)*. For CMEK and VPC-SC hardening, see [Lab 7 (Optional): Enterprise Security & Governance Hardening](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md).
 
 ---
 
@@ -199,7 +199,7 @@ class SessionLifecycleManager:
             name=session_name,
             author=author,
             invocation_id=invocation_id,
-            timestamp=datetime.datetime.now(tz=datetime.timezone.utc),
+            timestamp=datetime.datetime.now(tz=datetime.UTC),
             config={"content": {"role": role, "parts": [{"text": text}]}},
         )
 
@@ -215,7 +215,7 @@ class SessionLifecycleManager:
             name=session_name,
             author=author,
             invocation_id=invocation_id,
-            timestamp=datetime.datetime.now(tz=datetime.timezone.utc),
+            timestamp=datetime.datetime.now(tz=datetime.UTC),
             config={"raw_event": raw_payload},
         )
 
@@ -253,7 +253,7 @@ Open [`starter/coding_agent/memory/memory_bank_manager.py`](../starter/coding_ag
 
 Key platform defaults and rules to bake into `MemoryBankManager.configure_memory_bank(...)`:
 - **Generation LLM Default:** **`gemini-3.5-flash`** (effective June 29, 2026; older instances default to `gemini-2.5-flash`).
-- **Embedding Model Default:** **`text-embedding-005`** (multilingual option: `gemini-embedding-2`, which ONLY accepts `global`, `us`, or `eu` in its model resource name — **NOT** regional paths like `us-central1`). **Critical:** The embedding model can **only be changed before storing the first memory**!
+- **Embedding Model Default:** **`text-embedding-005`** (multilingual option: `gemini-embedding-2`, which ONLY accepts `global`, `us`, or `eu` in its model resource name — **NOT** regional paths like `asia-southeast1` or `us-central1`). **Critical:** The embedding model can **only be changed before storing the first memory**!
 - **Verified SDK Config Key Divergence:**
   - `client.memory_banks.create(managed_semantic_memory_config={...})` uses **`"unstructured_memory_configs"`** and `"granular_ttl"` / `"memory_revision_default_ttl"`.
   - `client.runtimes.update(name=..., config={"context_spec": {"memory_bank_config": {...}}})` uses **`"customization_configs"`** (instead of `"unstructured_memory_configs"`).
@@ -264,7 +264,7 @@ managed_semantic_memory_config = {
         "model": f"projects/{project_id}/locations/global/publishers/google/models/gemini-3.5-flash"
     },
     "similarity_search_config": {
-        "embedding_model": f"projects/{project_id}/locations/us/publishers/google/models/text-embedding-005"
+        "embedding_model": f"projects/{project_id}/locations/{location}/publishers/google/models/text-embedding-005"  # e.g., asia-southeast1 (Singapore)
     },
     "ttl_config": {
         "granular_ttl": {
@@ -384,7 +384,7 @@ managed_semantic_memory_config = {
    ```
 
    > [!TIP]
-   > **Pairing Multi-Regional (`us`) Memory Bank with Regional (`us-central1`) Agent Runtime:** Pass a `memory_service_builder` callable to `AdkApp(agent=root_agent, memory_service_builder=...)` returning `VertexAiMemoryBankService(project=..., location="us", agent_engine_id=MEMORY_BANK_ID)`.
+   > **Pairing Multi-Regional (`us`/`eu`) or `global` Memory Bank with Regional (`asia-southeast1`) Agent Runtime:** Keep Memory Bank collocated in Singapore (`asia-southeast1`) for lowest latency, or pass a `memory_service_builder` callable to `AdkApp(agent=root_agent, memory_service_builder=...)` returning `VertexAiMemoryBankService(project=..., location="global", agent_engine_id=MEMORY_BANK_ID)` when sharing long-term memories across regions.
 
 ### Step B3: Implement `generate_memories`, Scope & Similarity Retrieval, Revisions & Purge
 

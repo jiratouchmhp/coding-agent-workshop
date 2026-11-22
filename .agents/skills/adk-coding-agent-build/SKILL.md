@@ -69,7 +69,7 @@ What are you building or configuring?
 | Set `scope = EnvironmentScope.SESSION` + fixed `working_dir = Path("/workspace")` | Default `SHARED` or reading `ctx` inside `working_dir` | `working_dir` takes no `ctx`; `SESSION` scope lets concurrent sessions initialize isolated sandboxes in parallel. |
 | Pass `environment=shared_env` **OR** `code_executor=...` to `SkillToolset` | Passing both `environment=` and `code_executor=` | Passing both raises `ValueError`; `save_output_artifacts=True` works only with `code_executor`. |
 | Set explicit `BashToolPolicy(allowed_command_prefixes=(...), blocked_operators=(...))` | Using default `BashToolPolicy()` | Default `allowed_command_prefixes=("*",)` permits **every** command; POSIX-only with mandatory HITL approval. |
-| Set `App(name="<folder_basename>", root_agent=root_agent)` + explicit versioned model ID (`gemini-2.5-flash`) | Arbitrary `App.name` or `gemini-flash-latest` on regional endpoints | Name mismatch causes `"Session not found"`; `gemini-flash-latest` can 404 on regional endpoints like `us-central1`. |
+| Set `App(name="<folder_basename>", root_agent=root_agent)` + explicit versioned model ID (`gemini-2.5-flash`) | Arbitrary `App.name` or `gemini-flash-latest` on regional endpoints | Name mismatch causes `"Session not found"`; `gemini-flash-latest` can 404 on regional endpoints like `asia-southeast1`. |
 | Isolate `output_schema` in a formatter subagent/node for non-Gemini models; never set `mode` on root agent | Assuming `output_schema` + `tools=[...]` works reliably on every model, setting `mode` on root, or using `mode="task"` in Python v2.0.0 graphs | Python ADK supports `output_schema` + `tools` directly on Gemini on GCP, but other models fall back to an unreliable `set_model_response` tool; `task` mode must be a leaf agent and is disabled in Python v2.0.0 graph `Workflow`s. |
 | Use ADK 2.0 Workflow / @node and GOOGLE_GENAI_USE_ENTERPRISE=TRUE | Never generate deprecated SequentialAgent, ParallelAgent, or LoopAgent classes, and never use GOOGLE_GENAI_USE_VERTEXAI | ADK 2.0 standardizes orchestration on Workflow / @node and enterprise auth on GOOGLE_GENAI_USE_ENTERPRISE=TRUE. |
 | Emit **at most ONE** `Event(output=...)` per Python node; merge parallel leaves with `JoinNode` | Multiple `Event(output=...)` yields, silent `JoinNode` feeders, or >=2 terminal outputs | Multiple `Event(output=...)` raises a Python runtime error; >=2 terminal outputs raise `ValueError`; every `JoinNode` feeder must output. |
@@ -177,8 +177,8 @@ root_workflow = Workflow(name="coding_workflow", edges=[("START", coding_loop)])
 # 1. One-time install (Python 3.11+ and uv required); optional telemetry opt-out: export AGENTS_CLI_TELEMETRY=0
 uvx google-agents-cli setup && agents-cli info
 
-# 2a. Greenfield project (<=26 chars, NEVER mkdir first)
-agents-cli scaffold create my-coding-agent -a adk_python -d agent_runtime --region us-central1 --prototype
+# 2a. Greenfield project (<=26 chars, NEVER mkdir first; Singapore asia-southeast1 Agent Runtime default)
+agents-cli scaffold create my-coding-agent -a adk_python -d agent_runtime --region asia-southeast1 --prototype
 
 # 2b. Or adopt an existing ADK repo with a custom package directory (writes agents-cli-manifest.yaml only)
 agents-cli scaffold enhance . --from-adk-project --agent-directory coding_agent

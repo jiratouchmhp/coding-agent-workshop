@@ -251,12 +251,13 @@ import agentplatform
 os.environ["GOOGLE_GENAI_USE_ENTERPRISE"] = "TRUE"
 
 # 1. Harvest production feedback entries and their exact transcript snapshots
+runtime_location = os.environ.get("GOOGLE_CLOUD_LOCATION", "asia-southeast1")  # Singapore Agent Runtime
 ap_client = agentplatform.Client(
     project="PROJECT_ID",
-    location="LOCATION",
+    location=runtime_location,
     http_options={"api_version": "v1beta1"},
 )
-engine_name = "projects/PROJECT_ID/locations/LOCATION/reasoningEngines/RESOURCE_ID"
+engine_name = f"projects/PROJECT_ID/locations/{runtime_location}/reasoningEngines/RESOURCE_ID"
 
 entries = ap_client.feedback_entries.list(
     name=engine_name,
@@ -291,9 +292,11 @@ ap_client.runtimes.update(
 )
 
 # 2B. Track B (Domain Skill — ZERO agent container rebuild): hot-update Vertex AI Skill Registry
-skill_client = agentplatform.Client(project="PROJECT_ID", location="us-central1")
+# Note: Vertex AI Skill Registry Preview is strictly 3 regions (SKILL_REGISTRY_LOCATION=us-central1)
+skill_location = os.environ.get("SKILL_REGISTRY_LOCATION", "us-central1")
+skill_client = agentplatform.Client(project="PROJECT_ID", location=skill_location)
 skill_client.skills.update(
-    name="projects/PROJECT_ID/locations/us-central1/skills/secure-code-review",
+    name=f"projects/PROJECT_ID/locations/{skill_location}/skills/secure-code-review",
     config={
         "display_name": "Secure Code Review",
         "description": "Updated from offline eval + feedback flywheel.",

@@ -179,18 +179,18 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
     # }
 
     # -------------------------------------------------------------------------
-    # Option 2 (Optional Alternative): Dockerfile Build (`source_code_spec`)
+    # Option 2 (Zero-Docker & Zero-AR Alternative): Dockerfile Build (`source_code_spec`)
     # -------------------------------------------------------------------------
     # Use `source_code_spec` + empty `image_spec {}` instead of `container_spec`
     # when you want Agent Runtime to build your container from a local tarball
-    # (max 8 MB archive; no Artifact Registry push or GCS bucket required).
+    # (max 8 MB archive; zero local Docker AND no Artifact Registry push or GCS bucket required).
     #
     # CRITICAL ROOT-OF-TAR ARCHIVE WARNING:
     # `Dockerfile`, `main.py`, and `requirements.txt` MUST reside directly at
     # level 0 (the root) of the `.tar.gz` archive (`./Dockerfile`), NEVER nested
     # inside a parent folder like `starter/Dockerfile`! Cloud Build unpacks the
     # tarball into the build workspace root and fails immediately if `./Dockerfile`
-    # is missing. Always `cd` into the app root first:
+    # is missing. Run `make pack-agent-source` (or `cd` into the app root first):
     #
     #   cd starter && tar -czvf terraform/coding_agent_source.tar.gz \
     #     Dockerfile main.py requirements.txt coding_agent/ skills_to_register/
@@ -296,7 +296,7 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
       #
       # env {
       #   name  = "AGENT_REGISTRY_LOCATION"
-      #   value = var.skill_registry_location
+      #   value = var.agent_registry_location
       # }
       #
       # secret_env {

@@ -12,8 +12,8 @@ variable "project_number" {
 
 variable "location" {
   type        = string
-  default     = "us-central1"
-  description = "The Google Cloud region for Agent Runtime (golden workshop regions: us-central1 or europe-west4)"
+  default     = "asia-southeast1"
+  description = "The Google Cloud region for Agent Runtime (Singapore asia-southeast1 — nearest supported Agent Runtime region for Bangkok asia-southeast3 primary teams)"
 }
 
 variable "repository_name" {
@@ -30,13 +30,13 @@ variable "display_name" {
 
 variable "agent_image_uri" {
   type        = string
-  description = "Full Artifact Registry URI for the trusted Agent Runtime BYOC container image (e.g., us-central1-docker.pkg.dev/PROJECT_ID/coding-agent-repo/coding-agent:v1)"
+  description = "Full Artifact Registry URI for the trusted Agent Runtime BYOC container image (e.g., asia-southeast3-docker.pkg.dev/PROJECT_ID/coding-agent-repo/coding-agent:v1; or asia-southeast1-docker.pkg.dev/... for strict same-region runtime pulls)"
 }
 
 variable "sandbox_image_uri" {
   type        = string
   default     = ""
-  description = "Optional Artifact Registry URI for the Lab 2 untrusted BYOC sandbox image (pulled by gcp-sa-vertex-sandbox)"
+  description = "Optional Artifact Registry URI for the Lab 2 untrusted BYOC sandbox image (e.g., asia-southeast3-docker.pkg.dev/PROJECT_ID/coding-agent-repo/coding-sandbox:v1; or asia-southeast1-docker.pkg.dev/... for strict same-region pulls; pulled by gcp-sa-vertex-sandbox)"
 }
 
 variable "sandbox_template_name" {
@@ -83,5 +83,11 @@ variable "enable_skill_registry" {
 variable "skill_registry_location" {
   type        = string
   default     = "us-central1"
-  description = "Lab 4 Skill Registry / Agent Registry region injected as SKILL_REGISTRY_LOCATION and AGENT_REGISTRY_LOCATION (supported: us-central1, europe-west4, us-east5)"
+  description = "Lab 4 Vertex AI Skill Registry Preview region injected as SKILL_REGISTRY_LOCATION (strictly 3 supported regions: us-central1, europe-west4, us-east5)"
+}
+
+variable "agent_registry_location" {
+  type        = string
+  default     = "asia-southeast3"
+  description = "Lab 4 Agent Registry region injected as AGENT_REGISTRY_LOCATION (Bangkok primary default: asia-southeast3)"
 }

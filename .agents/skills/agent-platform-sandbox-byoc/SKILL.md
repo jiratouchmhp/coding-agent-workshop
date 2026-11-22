@@ -55,6 +55,7 @@ Author, provision, execute, and secure **Managed Sandboxes** (`SandboxEnvironmen
 - **API Version:** Always pass `http_options={"api_version": "v1beta1"}` when creating BYOC `SandboxEnvironmentTemplate` resources, configuring PSC-I/PSC-E networking, or enabling CMEK on parent instances.
 - **Payloads:** Pass plain Python `dict`s for `spec` and `config` — never import private `agentplatform._genai` modules.
 - **Caller IAM:** `roles/aiplatform.user` (grants `aiplatform.sandboxEnvironments.execute` and full lifecycle). Add `roles/iam.serviceAccountTokenCreator` on the signing SA when calling `generate_access_token()` or `generate_browser_ws_headers()`.
+- **Regional Topology & Zero-Docker Builds:** Managed Sandboxes and parent `ReasoningEngine` instances run in **Singapore (`asia-southeast1`)** (`GOOGLE_CLOUD_LOCATION=asia-southeast1`, nearest supported Agent Platform region; not yet in Bangkok). Artifact Registry (`AR_LOCATION=asia-southeast3`, or `asia-southeast1` for strict same-region pulls) and remote Cloud Build (`BUILD_LOCATION=asia-southeast3`, zero local Docker via `gcloud builds submit`) default to **Bangkok (`asia-southeast3`)**.
 
 ### Three Distinct Service Agents — Never Confuse Them
 
@@ -94,8 +95,9 @@ Author, provision, execute, and secure **Managed Sandboxes** (`SandboxEnvironmen
 ### 1. Grant BYOC Artifact Registry Pull IAM (Run Once per Repo)
 
 ```bash
+# AR_LOCATION defaults to Bangkok primary (asia-southeast3); set asia-southeast1 for strict same-region pulls
 gcloud artifacts repositories add-iam-policy-binding REPO_NAME \
-    --location=REGION \
+    --location="${AR_LOCATION:-asia-southeast3}" \
     --member="serviceAccount:service-PROJECT_NUMBER@gcp-sa-vertex-sandbox.iam.gserviceaccount.com" \
     --role="roles/artifactregistry.reader"
 ```
@@ -107,7 +109,7 @@ import agentplatform
 
 client = agentplatform.Client(
     project="PROJECT_ID",
-    location="us-central1",
+    location="asia-southeast1",  # GOOGLE_CLOUD_LOCATION (Singapore — nearest supported Agent Platform region)
     http_options={"api_version": "v1beta1"},
 )
 instance_name = client.runtimes.create().api_resource.name
@@ -118,7 +120,8 @@ tpl_op = client.sandboxes.templates.create(
     config={
         "custom_container_environment": {
             "custom_container_spec": {
-                "image_uri": "us-central1-docker.pkg.dev/PROJECT_ID/REPO/coding-sandbox:v1"
+                # Bangkok primary AR (asia-southeast3); or asia-southeast1-docker.pkg.dev for same-region pull
+                "image_uri": "asia-southeast3-docker.pkg.dev/PROJECT_ID/REPO/coding-sandbox:v1"
             },
             "resources": {
                 "requests": {"cpu": "1", "memory": "1Gi"},
@@ -171,10 +174,10 @@ client.sandboxes.delete(name=sandbox_name)
 from google.adk.agents.llm_agent import Agent
 from google.adk.code_executors.agent_engine_sandbox_code_executor import AgentEngineSandboxCodeExecutor
 
-# Use explicit versioned regional model ID (never `gemini-flash-latest` on us-central1)
+# Use explicit versioned regional model ID (never `gemini-flash-latest` on regional endpoints like asia-southeast1)
 root_agent = Agent(
     model="gemini-2.5-flash", name="code_exec_agent",
-    code_executor=AgentEngineSandboxCodeExecutor(agent_engine_resource_name="projects/PROJECT_ID/locations/us-central1/reasoningEngines/INSTANCE_ID"),
+    code_executor=AgentEngineSandboxCodeExecutor(agent_engine_resource_name="projects/PROJECT_ID/locations/asia-southeast1/reasoningEngines/INSTANCE_ID"),
 )  # Pre-created sandbox_resource_name, custom BaseEnvironment & CDP -> references/sandbox-execution-and-adk.md
 ```
 

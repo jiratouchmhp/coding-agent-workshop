@@ -28,15 +28,15 @@ By the end of this optional hardening module, you will be able to:
 
 ```mermaid
 flowchart LR
-    User["Human Developer<br/>(User Identity)"] -->|"CLIENT_TO_AGENT Ingress<br/>(Model Armor: gcp-sa-aiplatform-re)"| InGW["Ingress Agent Gateway"]
-    InGW --> RT["Hardened Agent Runtime<br/>(SPIFFE AGENT_IDENTITY + 24h X.509 mTLS)"]
+    User["Human Developer<br/>(User Identity)"] -->|"CLIENT_TO_AGENT Ingress<br/>(Model Armor: gcp-sa-aiplatform-re)"| InGW["Ingress Agent Gateway (asia-southeast1)"]
+    InGW --> RT["Hardened Agent Runtime (Singapore asia-southeast1)<br/>(SPIFFE AGENT_IDENTITY + 24h X.509 mTLS)"]
 
-    subgraph SUPPLY["Part A: Supply-Chain Skill Governance"]
-        AReg["Agent Registry (v1)<br/>private-* Skills + ENABLED_BLOCKING LLM Scan<br/>+ Custom Org Policy"]
+    subgraph SUPPLY["Part A: Supply-Chain Skill Governance (Bangkok asia-southeast3)"]
+        AReg["Agent Registry (v1 — asia-southeast3)<br/>private-* Skills + ENABLED_BLOCKING LLM Scan<br/>+ Custom Org Policy"]
     end
 
     subgraph EGRESS["Part B & C: Egress Policy & 3-Identity Delegation"]
-        EgGW["Egress Agent Gateway (AGENT_TO_ANYWHERE)<br/>IAP / IAM UAPs + Semantic Governance (NLC)<br/>+ Model Armor (gcp-sa-dep)"]
+        EgGW["Egress Agent Gateway (AGENT_TO_ANYWHERE — asia-southeast1)<br/>IAP / IAM UAPs + Model Armor (gcp-sa-dep)<br/>+ Semantic Governance NLC (8 US/EU regions)"]
         AuthMgr["Auth Manager<br/>(3LO Delegated Identity)"]
         Tools["External Tools / MCP / LLM Endpoints"]
         RT --> EgGW
@@ -45,7 +45,7 @@ flowchart LR
     end
 
     subgraph DATA["Part D: Data, State & SecOps Defense"]
-        State["Decoupled Standalone State Store<br/>Sessions & Memory Bank<br/>(CEL IAM Conditions + Poisoning Sanitizer + CMEK)"]
+        State["Decoupled Standalone State Store (asia-southeast1)<br/>Sessions & Memory Bank<br/>(CEL IAM Conditions + Poisoning Sanitizer + CMEK)"]
         WORM["WORM Audit Bucket (agent-audit-worm)<br/>365d Retention + Dual Attribution"]
         SIEM["Pub/Sub SIEM Sink (agent-siem-events)<br/>+ 3-Layer Agent Anomaly Detection -> SCC"]
         RT <--> State
@@ -71,7 +71,7 @@ Google Cloud exposes **two distinct skill registry API surfaces** (see [Agent Re
 |---|---|---|
 | **API Endpoint** | `https://LOCATION-aiplatform.googleapis.com/v1beta1/projects/PROJECT_ID/locations/LOCATION/skills` | `https://agentregistry.googleapis.com/v1/projects/PROJECT_ID/locations/LOCATION/skills` |
 | **CLI / SDK Surface** | Python `agentplatform.Client.skills.*` (`google-cloud-aiplatform`), Node.js `@google-cloud/agentplatform`, REST `v1beta1` | `gcloud agent-registry skills ...`, `skills revisions ...`, `findings ...`, REST `v1` |
-| **Supported Regions** | `us-central1` (Iowa), `europe-west4` (Netherlands), `us-east5` (Columbus, Ohio) | `global`, multi-regions (`us`, `eu`), or regional (`us-central1`, `europe-west1`, etc.) |
+| **Supported Regions** | `us-central1` (Iowa), `europe-west4` (Netherlands), `us-east5` (Columbus, Ohio) | `global`, multi-regions (`us`, `eu`), or regional (**`asia-southeast3` Bangkok**, `asia-southeast1`, `us-central1`, `europe-west1`, etc.) |
 | **Max Compressed ZIP** | **10 MB** | **1 MB** |
 | **Max Uncompressed Size** | **500 MB** total | **10 MB** total & **1 MB** per individual file *(when security scanning is enabled)* |
 | **Skill ID Naming** | `1–63` chars `[a-z0-9-]`, starts with letter, ends with letter/digit; cannot start with `gcp-` | Auto-assigned to `private` publisher -> registry prepends **`private-`** (`private-SKILL_ID`) |
@@ -97,7 +97,8 @@ Before authoring IAM, Agent Gateway, or Semantic Governance rules, verify which 
    ```bash
    gcloud services enable agentregistry.googleapis.com --project="${GOOGLE_CLOUD_PROJECT}"
 
-   export AGENT_REGISTRY_LOCATION="${AGENT_REGISTRY_LOCATION:-us-central1}"
+   # Bangkok (asia-southeast3) is our primary Agent Registry location!
+   export AGENT_REGISTRY_LOCATION="${AGENT_REGISTRY_LOCATION:-asia-southeast3}"
 
    gcloud agent-registry skills create secure-code-review \
      --project="${GOOGLE_CLOUD_PROJECT}" \
@@ -187,14 +188,17 @@ Every intercepted LLM response containing a proposed tool call passes through **
 >    ```yaml
 >    when: "!request.headers['content-type'].startsWith('application/grpc') && (request.path.contains(':generateContent') || request.path.contains(':rawPredict') || request.path.contains('/v1/messages') || request.path.contains('/chat/completions'))"
 >    ```
-> 5. **Supported Regions (8) & Truncation Limits:** Available in `us-central1`, `us-east1`, `us-east4`, `us-west1`, `europe-southwest1`, `europe-west1`, `europe-west4`, `europe-west8`. Keep descriptions concise so the policy engine never truncates critical context: tool/MCP server description **<= 1,000 chars**, action/function description **<= 750 chars**, parameter description **<= 300 chars**. Always set `--agent-response-denial-message` (**<= 1,000 chars**) so proprietary NLC text is never leaked to end users!
+> 5. **Supported Regions (8 US/EU Regions) & Truncation Limits:** While **Agent Runtime & Agent Gateway** run natively in **Singapore (`asia-southeast1`)** and **Agent Registry** runs in **Bangkok (`asia-southeast3`)**, the **Semantic Governance Policy Engine (Preview)** is currently limited to 8 US/EU regions: `us-central1`, `us-east1`, `us-east4`, `us-west1`, `europe-southwest1`, `europe-west1`, `europe-west4`, `europe-west8`. *(Bangkok/Singapore cohorts should target one of those 8 regions — e.g. `SGP_LOCATION=us-central1` — when testing live NLC policy creation, while keeping Agent Gateway, Model Armor, and SPIFFE `AGENT_IDENTITY` in `asia-southeast1`!)* Keep descriptions concise so the policy engine never truncates critical context: tool/MCP server description **<= 1,000 chars**, action/function description **<= 750 chars**, parameter description **<= 300 chars**. Always set `--agent-response-denial-message` (**<= 1,000 chars**) so proprietary NLC text is never leaked to end users!
 
 ### Step B2: Author Natural Language Constraints for Coding Agent Skills
 
-*(If you have already provisioned an Egress Agent Gateway + `semanticGovernancePolicyEngine` + `AuthzExtension` / `AuthzPolicy` in a supported region, execute the commands below; otherwise review and stage them as part of your governance config.)*
+*(If you have already provisioned an Egress Agent Gateway + `semanticGovernancePolicyEngine` + `AuthzExtension` / `AuthzPolicy` in one of the 8 supported NLC regions, execute the commands below; otherwise review and stage them as part of your governance config.)*
 
 ```bash
-export SGP_LOCATION="${GOOGLE_CLOUD_LOCATION}"
+# Semantic Governance Policy Engine Preview requires one of the 8 US/EU regions (e.g., us-central1).
+# Note: Agent Runtime & Agent Gateway run in Singapore (GOOGLE_CLOUD_LOCATION=asia-southeast1),
+# while Agent Registry standalone skills run in Bangkok (AGENT_REGISTRY_LOCATION=asia-southeast3).
+export SGP_LOCATION="${SGP_LOCATION:-us-central1}"
 # Scope the regional aiplatform endpoint override to this shell session only so you do NOT
 # break subsequent `gcloud ai` commands targeting `global` or another region!
 # (If you ever use `gcloud config set api_endpoint_overrides/aiplatform`, always run
@@ -313,7 +317,7 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
   display_name = var.display_name
   description  = "Hardened Enterprise ADK Coding Agent with SPIFFE AGENT_IDENTITY & Agent Gateway"
   project      = var.project_id
-  region       = var.location
+  region       = var.location  # e.g., "asia-southeast1" (Singapore — Agent Runtime & Agent Gateway)
 
   spec {
     agent_framework = "google-adk"
@@ -341,7 +345,8 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
         value = "<standalone_engine_resource_name>"
       }
 
-      # 3. Attach Agent Gateway bindings (egress required for Semantic Governance / UAPs):
+      # 3. Attach Agent Gateway bindings in Singapore (`var.location = "asia-southeast1"`):
+      #    (Agent Gateway is live in asia-southeast1 for Model Armor & IAM UAPs; NLC policies require one of the 8 US/EU SGP regions)
       agent_gateway_config {
         agent_to_anywhere_config {
           agent_gateway = "projects/${var.project_id}/locations/${var.location}/agentGateways/EGRESS_GW_NAME"

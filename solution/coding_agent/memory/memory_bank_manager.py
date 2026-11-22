@@ -47,7 +47,7 @@ import re
 import sys
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, overload
 
 from coding_agent.config import Settings, get_settings
 
@@ -255,9 +255,26 @@ def inspect_for_memory_poisoning(text: str) -> MemorySanitizationReport:
     )
 
 
-def sanitize_for_memory_ingestion(text: str) -> str:
-    """Return sanitized text safe for Memory Bank ingestion, or ``""`` if poisoned."""
-    return inspect_for_memory_poisoning(text).sanitized_text
+@overload
+def sanitize_for_memory_ingestion(payload: str) -> str: ...
+
+
+@overload
+def sanitize_for_memory_ingestion(payload: list[Any] | tuple[Any, ...]) -> list[Any]: ...
+
+
+def sanitize_for_memory_ingestion(
+    payload: str | list[Any] | tuple[Any, ...],
+) -> str | list[Any]:
+    """Return sanitized text or filtered/sanitized event list safe for Memory Bank ingestion.
+
+    Preserves ``str -> str`` behavior via ``inspect_for_memory_poisoning()`` (returning
+    ``""`` if poisoned) and delegates ``list``/``tuple`` inputs to
+    ``filter_and_sanitize_events_for_memory()``.
+    """
+    if isinstance(payload, list | tuple):
+        return filter_and_sanitize_events_for_memory(list(payload))
+    return inspect_for_memory_poisoning(payload).sanitized_text
 
 
 def _build_agentplatform_client(project_id: str, location: str) -> Any:
@@ -275,7 +292,7 @@ def _build_agentplatform_client(project_id: str, location: str) -> Any:
 
 def build_adk_memory_service(
     project_id: str | None = None,
-    location: str = "us-central1",
+    location: str = "asia-southeast1",
     agent_engine_id: str | None = None,
 ) -> Any:
     """Return ``VertexAiMemoryBankService`` when configured, else ``InMemoryMemoryService``.
@@ -314,7 +331,7 @@ def build_memory_service_builder(
     """Return a zero-argument ``memory_service_builder`` for ``AdkApp``.
 
     Useful when pairing a multi-regional Memory Bank (e.g., ``location="us"``) with
-    a regional deployed Agent Runtime (e.g., ``us-central1``).
+    a regional deployed Agent Runtime (e.g., ``asia-southeast1``).
     """
     validate_memory_bank_location(location)
 
@@ -336,29 +353,94 @@ def _clone_event_for_sanitization(event: Any) -> Any:
     return copy.deepcopy(event)
 
 
-def filter_and_sanitize_events_for_memory(events: list[Any]) -> list[Any]:
-    """Screen ADK session events before Memory Bank ingestion.
-
-    Drops any event whose text triggers prompt-injection/exfiltration rules in
-    ``inspect_for_memory_poisoning()``, and redacts secrets or untrusted tool
-    blocks on cloned copies of remaining events without mutating ``session.events``.
-    """
-    safe_events: list[Any] = []
-    for event in events:
-        content = event.get("content") if isinstance(event, dict) else getattr(event, "content", None)
+def _extract_event_parts(event: Any) -> Any:
+    """Return ``parts`` from wrapped ADK/API events or bare content dicts/objects."""
+    content = event.get("content") if isinstance(event, dict) else getattr(event, "content", None)
+    if content is not None:
         parts = (
             content.get("parts")
             if isinstance(content, dict)
             else getattr(content, "parts", None)
         )
+        if parts is not None:
+            return parts
+    return event.get("parts") if isinstance(event, dict) else getattr(event, "parts", None)
+
+
+def filter_and_sanitize_events_for_memory(events: list[Any]) -> list[Any]:
+    """Screen ADK/API events, bare content dicts/objects, or text items before Memory Bank ingestion.
+
+    Extracts text parts from wrapped ADK/API events (``event['content']['parts']`` /
+    ``event.content.parts``), bare content dicts/objects (``event['parts']`` /
+    ``event.parts``), direct string ``text``/``content`` payloads, and plain ``str``
+    elements. Drops any item whose text triggers prompt-injection/exfiltration rules in
+    ``inspect_for_memory_poisoning()``, and deep-copy redacts secrets or untrusted tool
+    blocks on cloned copies without mutating caller inputs.
+    """
+    safe_events: list[Any] = []
+    for event in events:
+        if isinstance(event, str):
+            report = inspect_for_memory_poisoning(event)
+            if report.blocked:
+                logger.warning(
+                    "Blocked poisoned text item before Memory Bank ingestion (rules=%s).",
+                    report.matched_rules,
+                )
+                continue
+            if report.sanitized_text:
+                safe_events.append(report.sanitized_text)
+            continue
+
+        parts = _extract_event_parts(event)
         if not parts:
+            if isinstance(event, dict):
+                direct_key = (
+                    "text"
+                    if isinstance(event.get("text"), str)
+                    else ("content" if isinstance(event.get("content"), str) else None)
+                )
+                if direct_key is not None:
+                    raw_direct = event[direct_key]
+                    if raw_direct.strip():
+                        report = inspect_for_memory_poisoning(raw_direct)
+                        if report.blocked:
+                            logger.warning(
+                                "Blocked poisoned event before Memory Bank ingestion (rules=%s).",
+                                report.matched_rules,
+                            )
+                            continue
+                        if report.sanitized_text != raw_direct:
+                            cloned = _clone_event_for_sanitization(event)
+                            cloned[direct_key] = report.sanitized_text
+                            safe_events.append(cloned)
+                            continue
+            else:
+                direct_text = getattr(event, "text", None)
+                if isinstance(direct_text, str) and direct_text.strip():
+                    report = inspect_for_memory_poisoning(direct_text)
+                    if report.blocked:
+                        logger.warning(
+                            "Blocked poisoned event before Memory Bank ingestion (rules=%s).",
+                            report.matched_rules,
+                        )
+                        continue
+                    if report.sanitized_text != direct_text:
+                        cloned = _clone_event_for_sanitization(event)
+                        cloned.text = report.sanitized_text
+                        safe_events.append(cloned)
+                        continue
             safe_events.append(event)
             continue
 
         blocked = False
         modifications: dict[int, str] = {}
         for idx, part in enumerate(parts):
-            raw_text = part.get("text") if isinstance(part, dict) else getattr(part, "text", None)
+            if isinstance(part, str):
+                raw_text: Any = part
+            elif isinstance(part, dict):
+                raw_text = part.get("text")
+            else:
+                raw_text = getattr(part, "text", None)
             if not isinstance(raw_text, str) or not raw_text.strip():
                 continue
             report = inspect_for_memory_poisoning(raw_text)
@@ -380,21 +462,17 @@ def filter_and_sanitize_events_for_memory(events: list[Any]) -> list[Any]:
             continue
 
         cloned = _clone_event_for_sanitization(event)
-        cloned_content = (
-            cloned.get("content") if isinstance(cloned, dict) else getattr(cloned, "content", None)
-        )
-        cloned_parts = (
-            cloned_content.get("parts")
-            if isinstance(cloned_content, dict)
-            else getattr(cloned_content, "parts", None)
-        )
+        cloned_parts = _extract_event_parts(cloned)
         if cloned_parts:
             for idx, clean_text in modifications.items():
                 part_obj = cloned_parts[idx]
                 if isinstance(part_obj, dict):
                     part_obj["text"] = clean_text
+                elif isinstance(part_obj, str):
+                    if isinstance(cloned_parts, list):
+                        cloned_parts[idx] = clean_text
                 else:
-                    setattr(part_obj, "text", clean_text)
+                    part_obj.text = clean_text
         safe_events.append(cloned)
     return safe_events
 
@@ -483,7 +561,7 @@ class MemoryBankManager:
     def __init__(
         self,
         project_id: str,
-        location: str = "us-central1",
+        location: str = "asia-southeast1",
         memory_bank_name: str = "",
         *,
         client: Any | None = None,
@@ -524,9 +602,19 @@ class MemoryBankManager:
         return resolved
 
     @staticmethod
-    def sanitize_for_memory_ingestion(text: str) -> str:
-        """Screen conversation text against prompt injection and secret leakage."""
-        return sanitize_for_memory_ingestion(text)
+    @overload
+    def sanitize_for_memory_ingestion(payload: str) -> str: ...
+
+    @staticmethod
+    @overload
+    def sanitize_for_memory_ingestion(payload: list[Any] | tuple[Any, ...]) -> list[Any]: ...
+
+    @staticmethod
+    def sanitize_for_memory_ingestion(
+        payload: str | list[Any] | tuple[Any, ...],
+    ) -> str | list[Any]:
+        """Screen text or conversation events against prompt injection and secret leakage."""
+        return sanitize_for_memory_ingestion(payload)
 
     @staticmethod
     def build_managed_semantic_memory_config(
@@ -535,7 +623,7 @@ class MemoryBankManager:
         generation_model: str = DEFAULT_GENERATION_MODEL,
         generation_location: str = "global",
         embedding_model: str = DEFAULT_EMBEDDING_MODEL,
-        embedding_location: str = "us",
+        embedding_location: str = "asia-southeast1",
         ttl_days: int = 90,
         revision_ttl_days: int = 365,
         scope_keys: list[str] | None = None,
@@ -656,10 +744,23 @@ class MemoryBankManager:
 
     # -- Provisioning & Configuration ----------------------------------------
 
+    def _resolve_embedding_location(
+        self,
+        embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+    ) -> str:
+        """Resolve embedding location from ``self.location`` with ``gemini-embedding-2`` guard."""
+        if (
+            embedding_model == "gemini-embedding-2"
+            and self.location not in GEMINI_EMBEDDING_2_ALLOWED_LOCATIONS
+        ):
+            return "global"
+        return self.location
+
     def create_memory_bank(
         self,
         *,
         display_name: str = "Workshop Memory Bank",
+        embedding_model: str = DEFAULT_EMBEDDING_MODEL,
         ttl_days: int = 90,
         revision_ttl_days: int = 365,
         scope_keys: list[str] | None = None,
@@ -668,6 +769,8 @@ class MemoryBankManager:
         """Create a standalone Memory Bank instance with custom topics and TTLs."""
         semantic_config = managed_semantic_memory_config or self.build_managed_semantic_memory_config(
             self.project_id,
+            embedding_model=embedding_model,
+            embedding_location=self._resolve_embedding_location(embedding_model),
             ttl_days=ttl_days,
             revision_ttl_days=revision_ttl_days,
             scope_keys=scope_keys or ["user_id"],
@@ -684,6 +787,7 @@ class MemoryBankManager:
         self,
         *,
         memory_bank_name: str | None = None,
+        embedding_model: str = DEFAULT_EMBEDDING_MODEL,
         ttl_days: int = 90,
         revision_ttl_days: int = 365,
         scope_keys: list[str] | None = None,
@@ -698,6 +802,8 @@ class MemoryBankManager:
         target_name = self._require_memory_bank_name(memory_bank_name)
         semantic_config = managed_semantic_memory_config or self.build_managed_semantic_memory_config(
             self.project_id,
+            embedding_model=embedding_model,
+            embedding_location=self._resolve_embedding_location(embedding_model),
             ttl_days=ttl_days,
             revision_ttl_days=revision_ttl_days,
             scope_keys=scope_keys or ["user_id"],
@@ -1104,7 +1210,9 @@ class MemoryBankManager:
 
 def _run_offline_check(user_id: str) -> dict[str, Any]:
     """Verify local ADK fallback, config builder, and prompt-injection sanitizer."""
-    service = build_adk_memory_service(project_id=None, location="us-central1", agent_engine_id=None)
+    service = build_adk_memory_service(
+        project_id=None, location="asia-southeast1", agent_engine_id=None
+    )
     config = MemoryBankManager.build_managed_semantic_memory_config(
         project_id="demo-project",
         scope_keys=["user_id"],

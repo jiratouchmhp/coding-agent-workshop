@@ -70,10 +70,13 @@ def _load_dotenv_candidates() -> None:
 class Settings:
     """Typed runtime settings loaded from environment variables / ``.env``."""
 
-    # Core Google Cloud project & region configuration
+    # Core Google Cloud project & regional configuration (Bangkok Primary + Singapore Secondary)
     google_cloud_project: str = ""
     google_cloud_project_number: str = ""
-    google_cloud_location: str = "us-central1"
+    primary_region: str = "asia-southeast3"
+    google_cloud_location: str = "asia-southeast1"
+    ar_location: str = "asia-southeast3"
+    build_location: str = "asia-southeast3"
 
     # Agent Runtime & Managed Sandbox resources (populated in Lab 2 & Lab 5)
     reasoning_engine_name: str = ""
@@ -81,10 +84,16 @@ class Settings:
     sandbox_image_uri: str = ""
     sandbox_mode: SandboxMode = "local"
 
-    # Skill Registry (us-central1, europe-west4, or us-east5) & Agent Registry (Lab 4)
-    # When AGENT_REGISTRY_LOCATION is unset, it falls back to skill_registry_location.
+    # Skill Registry (strictly us-central1, europe-west4, or us-east5) &
+    # Agent Registry (Bangkok primary default, Lab 4).
+    # When AGENT_REGISTRY_LOCATION is unset/empty, it falls back to primary_region.
     skill_registry_location: str = "us-central1"
-    agent_registry_location: str = ""
+    agent_registry_location: str = "asia-southeast3"
+
+    # Gen AI Evaluation Service (14 US/EU regions + global; Lab 6) &
+    # Self-Hosted GKE Agent Sandbox region (Bangkok primary; Lab 8).
+    eval_location: str = "global"
+    gke_location: str = "asia-southeast3"
 
     # Explicit versioned Gemini model ID (avoid `gemini-flash-latest` on regional endpoints)
     model_name: str = "gemini-2.5-flash"
@@ -128,10 +137,22 @@ class Settings:
             raise ValueError(f"MAX_FIX_ROUNDS must be positive, got {self.max_fix_rounds}.")
         if self.max_output_chars <= 0:
             raise ValueError(f"MAX_OUTPUT_CHARS must be positive, got {self.max_output_chars}.")
+        normalized_primary = self.primary_region.strip() or "asia-southeast3"
+        object.__setattr__(self, "primary_region", normalized_primary)
+        normalized_location = self.google_cloud_location.strip() or "asia-southeast1"
+        object.__setattr__(self, "google_cloud_location", normalized_location)
+        normalized_ar_loc = self.ar_location.strip() or self.primary_region
+        object.__setattr__(self, "ar_location", normalized_ar_loc)
+        normalized_build_loc = self.build_location.strip() or self.primary_region
+        object.__setattr__(self, "build_location", normalized_build_loc)
         normalized_skill_loc = self.skill_registry_location.strip() or "us-central1"
         object.__setattr__(self, "skill_registry_location", normalized_skill_loc)
-        normalized_agent_loc = self.agent_registry_location.strip() or normalized_skill_loc
+        normalized_agent_loc = self.agent_registry_location.strip() or self.primary_region
         object.__setattr__(self, "agent_registry_location", normalized_agent_loc)
+        normalized_eval_loc = self.eval_location.strip() or "global"
+        object.__setattr__(self, "eval_location", normalized_eval_loc)
+        normalized_gke_loc = self.gke_location.strip() or self.primary_region
+        object.__setattr__(self, "gke_location", normalized_gke_loc)
 
     @property
     def local_workspace_path(self) -> Path:
@@ -182,7 +203,18 @@ def load_settings() -> Settings:
     raw_mode = os.environ.get("SANDBOX_MODE", "local").strip().lower() or "local"
     raw_arch = os.environ.get("AGENT_ARCHITECTURE", "simple").strip().lower() or "simple"
     project = os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
-    location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1").strip()
+    primary_region = os.environ.get("PRIMARY_REGION", "").strip() or "asia-southeast3"
+    location = os.environ.get("GOOGLE_CLOUD_LOCATION", "").strip() or "asia-southeast1"
+    ar_location = os.environ.get("AR_LOCATION", "").strip() or primary_region
+    build_location = os.environ.get("BUILD_LOCATION", "").strip() or primary_region
+    agent_registry_location = (
+        os.environ.get("AGENT_REGISTRY_LOCATION", "").strip() or primary_region
+    )
+    skill_registry_location = (
+        os.environ.get("SKILL_REGISTRY_LOCATION", "").strip() or "us-central1"
+    )
+    eval_location = os.environ.get("EVAL_LOCATION", "").strip() or "global"
+    gke_location = os.environ.get("GKE_LOCATION", "").strip() or primary_region
     reasoning_engine_name = os.environ.get("REASONING_ENGINE_NAME", "").strip()
     if not reasoning_engine_name:
         engine_id = (
@@ -198,15 +230,18 @@ def load_settings() -> Settings:
     return Settings(
         google_cloud_project=project,
         google_cloud_project_number=os.environ.get("GOOGLE_CLOUD_PROJECT_NUMBER", "").strip(),
+        primary_region=primary_region,
         google_cloud_location=location,
+        ar_location=ar_location,
+        build_location=build_location,
         reasoning_engine_name=reasoning_engine_name,
         sandbox_template_name=os.environ.get("SANDBOX_TEMPLATE_NAME", "").strip(),
         sandbox_image_uri=os.environ.get("SANDBOX_IMAGE_URI", "").strip(),
         sandbox_mode=raw_mode,  # type: ignore[arg-type]
-        skill_registry_location=(
-            os.environ.get("SKILL_REGISTRY_LOCATION", "").strip() or "us-central1"
-        ),
-        agent_registry_location=os.environ.get("AGENT_REGISTRY_LOCATION", "").strip(),
+        skill_registry_location=skill_registry_location,
+        agent_registry_location=agent_registry_location,
+        eval_location=eval_location,
+        gke_location=gke_location,
         model_name=os.environ.get("MODEL_NAME", "gemini-2.5-flash").strip(),
         agent_architecture=raw_arch,  # type: ignore[arg-type]
         max_fix_rounds=_parse_int(os.environ.get("MAX_FIX_ROUNDS"), 3),

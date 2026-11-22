@@ -213,8 +213,13 @@ def build_reasoning_engine_logger(
     raise NotImplementedError("Complete TODO(lab-3): build_reasoning_engine_logger()")
 
 
-@functools.lru_cache(maxsize=4)
-def _get_cached_cloud_logger(project_id: str, location: str, log_id: str) -> Any | None:
+@functools.lru_cache(maxsize=8)
+def _get_cached_cloud_logger(
+    project_id: str,
+    location: str,
+    log_id: str,
+    reasoning_engine_id: str | None = None,
+) -> Any | None:
     if not project_id:
         return None
     try:
@@ -222,6 +227,7 @@ def _get_cached_cloud_logger(project_id: str, location: str, log_id: str) -> Any
             project_id=project_id,
             location=location,
             log_id=log_id,
+            reasoning_engine_id=reasoning_engine_id,
         )
     except Exception as exc:
         logger.debug("Cloud Logging unavailable (%s); emitting structured JSON locally.", exc)
@@ -315,6 +321,42 @@ def make_telemetry_callbacks(
     return before_tool_callback, _after
 
 
+def build_parent_sandbox_log_callbacks(
+    project_id: str | None = None,
+    location: str | None = None,
+    *,
+    cloud_logger: Any | None = None,
+    log_id: str = DEFAULT_TOOL_LOG_ID,
+    reasoning_engine_id: str | None = None,
+    preview_max_chars: int = DEFAULT_PREVIEW_MAX_CHARS,
+) -> tuple[Callable[..., Any], Callable[..., Any]]:
+    """Build ``(before_tool_callback, after_tool_callback)`` for parent-runtime sandbox logs.
+
+    Lazily resolves a cached ``aiplatform.googleapis.com/ReasoningEngine`` Cloud Logger when
+    ``cloud_logger`` is ``None`` and ``project_id`` is provided (with safe offline fallback
+    to local structured JSON logging), then delegates to ``make_telemetry_callbacks(...)``.
+    """
+    resolved_logger = cloud_logger
+    normalized_project = (project_id or "").strip()
+    if resolved_logger is None and normalized_project:
+        resolved_location = (
+            (location or "").strip()
+            or get_settings().google_cloud_location
+            or "asia-southeast1"
+        )
+        normalized_engine_id = (reasoning_engine_id or "").strip() or None
+        resolved_logger = _get_cached_cloud_logger(
+            normalized_project,
+            resolved_location,
+            log_id,
+            normalized_engine_id,
+        )
+    return make_telemetry_callbacks(
+        cloud_logger=resolved_logger,
+        preview_max_chars=preview_max_chars,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Agent Platform Feedback Service Client
 # ---------------------------------------------------------------------------
@@ -337,7 +379,7 @@ class FeedbackClient:
     def __init__(
         self,
         project_id: str,
-        location: str = "us-central1",
+        location: str = "asia-southeast1",
         runtime_name: str = "",
         *,
         client: Any | None = None,

@@ -1,0 +1,49 @@
+# =============================================================================
+# Docker / BuildKit Build Context Ignore Rules
+# =============================================================================
+# Matches `.gcloudignore` (using `**/` recursive globs for Docker's pattern
+# matcher) so local `docker build` and Cloud Build Docker steps never send
+# virtual environments, caches, Terraform state/secrets, or generated archives
+# into the build context.
+#
+# Preserves all runtime and workshop assets required for builds & manifests:
+#   Dockerfile, main.py, requirements.txt, pyproject.toml,
+#   agents-cli-manifest.yaml, services.py, services.yaml,
+#   coding_agent/, skills_to_register/
+# =============================================================================
+
+# Ignore metadata and VCS files
+.dockerignore
+.gcloudignore
+.git
+.gitignore
+
+# Python virtual environments, bytecode, and build/test caches
+**/.venv/
+**/venv/
+**/__pycache__/
+**/*.py[cod]
+**/*$py.class
+**/.pytest_cache/
+**/.ruff_cache/
+dist/
+build/
+**/*.egg-info/
+
+# Local environment secrets (never include .env files in build context)
+**/.env
+**/.env.*
+
+# Terraform directory, caches, state, variables, and generated archives
+terraform/
+**/.terraform/
+**/*.tfstate*
+**/*.tfvars*
+**/*.tar.gz
+
+# Generated evaluation traces, reports, and optimization outputs
+**/artifacts/
+
+# OS / editor noise
+**/.DS_Store
+**/Thumbs.db
