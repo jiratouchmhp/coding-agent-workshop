@@ -24,6 +24,21 @@ By the end of this optional hardening module, you will be able to:
 
 ---
 
+## Quick-Run TL;DR (Classroom Fast Path)
+
+- **Focused Exercises (High-Signal TODOs):** Pure control-plane hardening walkthrough & CLI commands — **`0` starter TODOs** *(optional module: skip cleanly straight to [Lab 8](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) if short on time; Labs 1–6 remain 100% green!)*.
+- **Key Commands (Zero Local Docker — Bangkok Agent Registry + Singapore Runtime/Gateway):**
+  ```bash
+  gcloud agent-registry skills create secure-code-review --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_LOCATION:-asia-southeast3}" --display-name="Secure Code Review" --description="Enterprise OWASP audit." --target-state=disabled --scanning-policy=enabled-blocking --payload="dist/secure-code-review.zip"
+  gcloud agent-registry skills describe private-secure-code-review --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_LOCATION:-asia-southeast3}"
+  (cd starter && uv run python -m coding_agent.memory.memory_bank_manager --offline-check)
+  make verify-lab LAB=7                                     # Optional check (make verify-lab LAB=all passes without Lab 7)
+  ```
+- **Antigravity AI-Assisted Mode (`.agents/skills/agent-platform-governance-and-registries`):** *"Using `agent-platform-governance-and-registries`, walk me through the Terraform SPIFFE `AGENT_IDENTITY` + Agent Gateway upgrade diff and validate our Semantic Governance NLC `AuthzPolicy` CEL expression."*
+- **Short on Time? Optional / Skippable:** No `make fast-forward` needed — Lab 7 has `0` starter TODOs and zero downstream dependencies; jump straight to [Lab 8](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md).
+
+---
+
 ## Architecture: Defense-in-Depth Hardening Overlay
 
 ```mermaid

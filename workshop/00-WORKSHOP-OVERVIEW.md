@@ -133,7 +133,13 @@ This workshop follows a **Build → Isolate → Persist → Extend → Deploy ON
 | **[Lab 8](08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md)** | **Architecture Decision:** Agent Runtime + Managed Sandbox vs. Self-Hosted GKE + `kubernetes-sigs/agent-sandbox` + Agent Substrate (14-Dimension Matrix) | 30 min | 25 min *(executive + engineering Q&A)* |
 | **Total** | | **420 min (7h 00m)** *(370m labs + 50m breaks; 385m / 6h 25m skipping Optional Lab 7)* | **210 min (3h 30m)** *(200m labs/demos + 10m break; skips Optional Lab 7 cleanly)* |
 
-> **Fast-Forward Rule:** Every lab in `starter/` has a 1-to-1 mirror in `solution/`. If a build or Terraform apply runs behind schedule, copy the target module from `solution/` into `starter/` and continue without losing momentum. See [FACILITATOR-GUIDE.md](FACILITATOR-GUIDE.md) for exact checkpoint cutoffs.
+> [!TIP]
+> **Two Classroom Modes: Focused Manual Coding vs. Antigravity AI-Assisted Mode**
+> - **Focused Manual Coding Mode:** Repetitive boilerplate CRUD (`get`/`list`/`delete`), schemas, sanitizers, and auth helpers are **pre-filled** across `starter/`, leaving only **4–8 high-signal architectural `# TODO(lab-N)` functions** per lab (summarized in every lab's top **Quick-Run TL;DR** block).
+> - **Antigravity AI-Assisted Mode:** Open this repository in Antigravity to auto-discover all 6 modular `.agents/skills/`, and paste each lab's TL;DR prompt to implement, verify, or debug `# TODO(lab-N)` with source-verified ADK 2.0 and Agent Platform patterns.
+> - **Instant Zero-Spoil Catch-Up:** Falling behind the time-box? Run **`make fast-forward LAB=N`** (`scripts/fast_forward_lab.sh`) to sync *only* Lab `N` from `solution/` into `starter/` while keeping all subsequent labs' `# TODO` exercises untouched.
+
+> **Fast-Forward Rule:** Every lab in `starter/` has a 1-to-1 mirror in `solution/`. If a build, TODO, or Terraform apply runs behind schedule, run **`make fast-forward LAB=N`** (or `bash scripts/fast_forward_lab.sh <1..6|8>`) to catch up on Lab `N` cleanly without spoiling later labs' TODOs. See [FACILITATOR-GUIDE.md](FACILITATOR-GUIDE.md) for exact checkpoint cutoffs and emergency pacing playbooks.
 
 ---
 

@@ -197,7 +197,13 @@ Choose the track that matches your session schedule (detailed time-boxed schedul
 | **Full-Day Deep-Dive** | **7 hours** *(6h 10m labs + 50m breaks; or 6h 25m skipping Optional Lab 7)* | Complete hands-on implementation across **Labs 1–8** (`starter/` → Lab 1 Parts A & B across all 4 ADK architectures, Lab 2 BYOC sandbox + standalone instance, Lab 3 Sessions + Memory Bank + Telemetry/Feedback, Lab 4 Skill/Agent Registry discovery, Lab 5 **Deploy ONCE** via `agents-cli` & Terraform, Lab 6 Offline/Simulated/Online Eval + Quality Alerts, **Optional / Skippable Lab 7** Security & Governance Hardening, and Lab 8 GKE Architecture Review). |
 | **Half-Day Fast-Track** | **3.5 hours** *(210 min)* | High-velocity executive + engineering track (**Labs 1–6 + Lab 8**, cleanly skipping **Optional Lab 7** with zero broken checkpoints): **Lab 1 (Part A hands-on + 5m Part B walkthrough), Labs 2, 4, and 5** hands-on (using pre-pushed sandbox/runtime images or `solution/` checkpoints where needed), instructor-led live demos of **Labs 3 (15m) & 6 (15m)**, and a **25-minute** architecture Q&A on **Lab 8 (Agent Runtime vs. GKE)**. |
 
-> **Stuck on a Lab?** Every file in [`starter/`](starter/) contains clearly marked `# TODO(lab-N):` stubs, and [`solution/`](solution/) provides the complete, syntax-verified reference implementation for every lab so you can diff or fast-forward at any checkpoint.
+> [!TIP]
+> **Two Classroom Modes: Focused Manual Coding vs. Antigravity AI-Assisted Mode**
+> - **Focused Manual Coding Mode:** Repetitive CRUD, schemas, sanitizers, and auth plumbing are **pre-filled** across [`starter/`](starter/) so every lab focuses strictly on **4–8 high-signal architectural `# TODO(lab-N)` functions** (listed at the top of each lab's **Quick-Run TL;DR** block).
+> - **Antigravity AI-Assisted Mode:** Open the repository in Antigravity so all 6 [`.agents/skills/`](.agents/skills/) auto-load, then run each lab's TL;DR prompt to pair-program, debug, and verify `# TODO(lab-N)` interactively against verified Google Cloud and ADK 2.0 conventions.
+> - **Stay Perfectly on Schedule:** Mix modes freely — and if any lab runs tight on time, run **`make fast-forward LAB=N`** (`scripts/fast_forward_lab.sh`) to catch up instantly without spoiling downstream labs.
+
+> **Stuck on a Lab?** Run **`make fast-forward LAB=N`** (e.g., `make fast-forward LAB=2`) from the repository root to sync **only** Lab `N`'s verified code from [`solution/`](solution/) into [`starter/`](starter/) without spoiling later labs' `# TODO(lab-*)` exercises. *(Optional Lab 7 has `0` starter TODOs and can be skipped cleanly; [`solution/`](solution/) also remains a full 1-to-1 reference mirror for diffing at any time.)*
 
 ---
 
@@ -276,9 +282,10 @@ gemini-coding-agent-workshop/
 ├── solution/                                       # Complete reference mirror of starter/ (0 TODO markers, incl. architectures.py, services.yaml/py, Dockerfile, main.py)
 ├── .agents/skills/                                 # 6 modular production Antigravity skills (auto-discovered)
 │   └── adk-coding-agent-build/references/          # Modular ADK build refs (incl. agent-architectures-and-workflows.md & graph-and-dynamic-workflows.md)
-├── scripts/                                        # Pre-flight, verification, packaging, E2E validation & teardown tooling
+├── scripts/                                        # Pre-flight, verification, fast-forward, packaging, E2E validation & teardown tooling
 │   ├── preflight_check.sh                          # Attendee pre-flight validator (gcloud, ADC, APIs, uv, regions; zero Docker!)
 │   ├── verify_lab.sh                               # Attendee checkpoint verifier (./scripts/verify_lab.sh <1..8|all>)
+│   ├── fast_forward_lab.sh                         # Instant per-lab catch-up (make fast-forward LAB=N; never spoils later labs' TODOs)
 │   ├── validate_skills.py                          # Validates .agents/skills/ frontmatter, line limits & links
 │   ├── package_registry_skill.py                   # Packages & checks all 16 atomic Skill Registry ZIP/SKILL.md rules
 │   ├── live_gcp_e2e_validate.sh                    # Instructor live GCP E2E dry-run rehearsal validator
@@ -317,6 +324,7 @@ Run `make help` at any time from the repository root to list available targets. 
 | `make eval-simulated` | Run 2-step simulated user evaluation personas (`EVAL_LOCATION=global`) | Lab 6 |
 | `make validate-skills` | Run `scripts/validate_skills.py` on `.agents/skills/` | Lab 1 / All |
 | `make verify-lab LAB=1` | Run `./scripts/verify_lab.sh <1..8\|all>` checkpoint verification (`all` checks core Labs 1–6; `7` Optional Hardening; `8` GKE Overlay) | Labs 1–8 |
+| `make fast-forward LAB=1` | Run `./scripts/fast_forward_lab.sh <1..6\|8>` to sync **only** Lab `N` from `solution/` into `starter/` without spoiling later labs' TODOs | Labs 1–6, 8 |
 | `make cleanup` | Run `scripts/cleanup_workshop.sh` to safely delete workshop sandboxes, templates, alert policies, and runtimes *(supports `CLEANUP_ARGS=--dry-run`)* | Post-Workshop |
 
 ---

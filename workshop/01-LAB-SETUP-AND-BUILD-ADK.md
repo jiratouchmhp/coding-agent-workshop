@@ -20,6 +20,21 @@ By the end of Lab 1, you will:
 
 ---
 
+## Quick-Run TL;DR (Classroom Fast Path)
+
+- **Focused Exercises (High-Signal TODOs):** `starter/coding_agent/agent.py` (`build_local_environment_toolset`, `_assemble_runtime_components`) + Part B `starter/coding_agent/architectures.py` (`build_collaborative_coding_team`, `build_graph_coding_workflow`, `build_dynamic_coding_workflow`) — *(config, schemas & boilerplate plumbing pre-filled!)*
+- **Key Commands (Zero Local Docker):**
+  ```bash
+  make preflight && make install
+  make validate-skills
+  (cd starter && uv run adk web --port 8000)                # Part B: prefix AGENT_ARCHITECTURE=collaborative|graph|dynamic
+  make verify-lab LAB=1
+  ```
+- **Antigravity AI-Assisted Mode (`.agents/skills/adk-coding-agent-build`):** *"Using `adk-coding-agent-build`, help me complete the `# TODO(lab-1)` functions in `starter/coding_agent/agent.py` and `architectures.py` with `LocalEnvironment(working_dir=Path(...))` and `App.name == 'coding_agent'`."*
+- **Fell Behind? Instant Catch-Up:** `make fast-forward LAB=1` *(syncs only Lab 1 without spoiling Labs 2–8 TODOs).*
+
+---
+
 ## Part A — Setup, Antigravity Skills, ADK Architecture Spectrum & Simple Agent (30 min)
 
 ### Step 1: Install Standalone `uv`, `google/agents-cli` & Run Pre-Flight

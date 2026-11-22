@@ -2,7 +2,7 @@
 
 > **Audience:** Google Cloud Customer Engineers (CEs), Workshop Facilitators, Solutions Architects, and Lab Proctors  
 > **Workshop Scope:** Full-Day (7h 00m total: 6h 10m labs + 50m breaks across Labs 1–8 with Optional/Skippable Lab 7; or 6h 25m skipping Lab 7) | Half-Day Fast-Track (3h 30m: Labs 1 Part A, 2, 4 & 5 hands-on, Lab 1 Part B walkthrough, Labs 3 & 6 instructor live demos, Optional Lab 7 skipped cleanly, Lab 8 briefing)  
-> **Repository Companion:** [`README.md`](../README.md) · [`workshop/00-WORKSHOP-OVERVIEW.md`](./00-WORKSHOP-OVERVIEW.md) · [`scripts/verify_lab.sh`](../scripts/verify_lab.sh)
+> **Repository Companion:** [`README.md`](../README.md) · [`workshop/00-WORKSHOP-OVERVIEW.md`](./00-WORKSHOP-OVERVIEW.md) · [`scripts/verify_lab.sh`](../scripts/verify_lab.sh) · [`scripts/fast_forward_lab.sh`](../scripts/fast_forward_lab.sh)
 
 ---
 
@@ -146,7 +146,7 @@ Many enterprise attendees join on locked-down corporate laptops or fresh Debian/
   gcloud auth application-default set-quota-project "${GOOGLE_CLOUD_PROJECT}"
   make preflight
   ```
-- [ ] Post the shared slide/cheat-sheet showing: `PRIMARY_REGION=asia-southeast3` (Bangkok AR/Build/Agent Registry), `GOOGLE_CLOUD_LOCATION=asia-southeast1` (Singapore Agent Platform), `SKILL_REGISTRY_LOCATION=us-central1`, `EVAL_LOCATION=global`, pre-built fallback `SANDBOX_IMAGE_URI`, `SANDBOX_MODE=shell` escape hatch, and the exact **starter → solution** cutover command (§5).
+- [ ] Post the shared slide/cheat-sheet showing: `PRIMARY_REGION=asia-southeast3` (Bangkok AR/Build/Agent Registry), `GOOGLE_CLOUD_LOCATION=asia-southeast1` (Singapore Agent Platform), `SKILL_REGISTRY_LOCATION=us-central1`, `EVAL_LOCATION=global`, pre-built fallback `SANDBOX_IMAGE_URI`, `SANDBOX_MODE=shell` escape hatch, and the one-command zero-spoil catch-up **`make fast-forward LAB=N`** (§5.2).
 - [ ] Remind attendees that Cloud Shell works cleanly for all zero-Docker labs (`make push-sandbox`, `make push-agent`, `make pack-agent-source`), though they should **not** run local Docker builds or Lab 8 Agent Substrate installs inside Cloud Shell (5 GB persistent disk ceiling).
 
 ---
@@ -250,19 +250,26 @@ export EVAL_LOCATION="global"
 
 ### 5.2 Hard Cutover Checkpoints (When to Switch from `starter/` to `solution/`)
 
-Every lab is designed so attendees can cleanly jump forward from [`starter/`](../starter/) to [`solution/`](../solution/) without losing downstream progress. Announce the **Yellow Light** (5 min left to debug) and enforce the **Red Light** cutover command:
+> [!TIP]
+> **Facilitator Emergency Pacing Playbook — One-Command Catch-Up (`make fast-forward LAB=N`):**
+> Every lab in `starter/` already pre-fills repetitive CRUD/plumbing so attendees focus on **4–8 high-signal architectural TODOs** (and can pair-program with Antigravity `.agents/skills/`). If any attendee—or the whole room—hits the **Red Light** debug cap, have them run **`make fast-forward LAB=N`** (`./scripts/fast_forward_lab.sh <1..6|8>`) from the repository root!
+> - **Zero-Spoil Sync:** Unlike manually copying shared files (`agent.py`), `make fast-forward LAB=N` syncs **only** Lab `N`'s solution into `starter/` while keeping all later labs' `# TODO(lab-*)` stubs untouched.
+> - **Optional Lab 7:** Contains `0` starter TODOs—skip cleanly straight to Lab 8 with zero catch-up command required.
+> - **Total Reset Escape Hatch:** If a laptop's `starter/` tree is badly corrupted, run directly inside `solution/` (`TRACK=solution` on any `make` target, or `cd solution && uv sync`).
 
-| Lab | Yellow Light (Debug Cap) | Red Light Cutover Command (Copy Verified Reference File into `starter/`) | Verification Command |
+Announce the **Yellow Light** (5 min left to debug) and enforce the **Red Light** catch-up command below:
+
+| Lab | Yellow Light (Debug Cap) | Red Light Catch-Up Command *(Primary: Zero-Spoil Fast-Forward; Fallback: Manual `cp`)* | Verification Command |
 |---|---|---|---|
-| **Lab 1** | +22m *(Part A)* / +45m *(Part B)* | `cp solution/coding_agent/agent.py solution/coding_agent/architectures.py starter/coding_agent/ && cp solution/services.yaml solution/services.py starter/` *(keep `AGENT_ARCHITECTURE=simple` and `ENABLE_TELEMETRY_CALLBACKS=false` until Lab 3, since `solution/coding_agent/agent.py` imports Lab 3 callbacks)* | `./scripts/verify_lab.sh 1` |
-| **Lab 2** | +45 min | `cp solution/coding_agent/tools/sandbox_lifecycle.py solution/coding_agent/tools/sandbox_execution.py starter/coding_agent/tools/ && cp -r solution/sandbox_image/* starter/sandbox_image/` *(also complete `# TODO(lab-2)` in `starter/coding_agent/agent.py` or copy `solution/coding_agent/agent.py` with `ENABLE_TELEMETRY_CALLBACKS=false` until Lab 3)* | `./scripts/verify_lab.sh 2` |
-| **Lab 3** | +28 min | `cp solution/coding_agent/memory/session_manager.py solution/coding_agent/memory/memory_bank_manager.py starter/coding_agent/memory/ && cp solution/coding_agent/callbacks/telemetry_and_feedback.py starter/coding_agent/callbacks/ && cp solution/coding_agent/agent.py starter/coding_agent/agent.py` | `./scripts/verify_lab.sh 3` |
-| **Lab 4** | +28 min | `cp solution/coding_agent/tools/registry_loader.py starter/coding_agent/tools/ && cp solution/coding_agent/agent.py starter/coding_agent/agent.py` | `./scripts/verify_lab.sh 4` |
-| **Lab 5** | +32 min | `cp solution/main.py starter/main.py && cp -r solution/terraform/* starter/terraform/` | `./scripts/verify_lab.sh 5` |
-| **Lab 6** | +28 min | `cp -r solution/eval/* starter/eval/` | `./scripts/verify_lab.sh 6` |
-| **Lab 7 (Optional / Skippable)** | +25 min | *No `starter/` file cutover required — Lab 7 is an optional CLI, Terraform-diff & security-audit module; skip straight to Lab 8 with zero broken code* | `./scripts/verify_lab.sh 7` *(optional)* |
-| **Lab 8 (Optional GKE Overlay)** | +20 min | `cp -r solution/gke_reference/* starter/gke_reference/` | `./scripts/verify_lab.sh 8` |
-| **Full Reset** | Anytime | Switch working directory straight into `solution/` (`cd solution && uv sync`) | `./scripts/verify_lab.sh all --track solution` |
+| **Lab 1** | +22m *(Part A)* / +45m *(Part B)* | **`make fast-forward LAB=1`** *(manual fallback: `cp solution/coding_agent/agent.py solution/coding_agent/architectures.py starter/coding_agent/ && cp solution/services.yaml solution/services.py starter/` — keep `AGENT_ARCHITECTURE=simple` and `ENABLE_TELEMETRY_CALLBACKS=false` until Lab 3)* | `make verify-lab LAB=1` |
+| **Lab 2** | +45 min | **`make fast-forward LAB=2`** *(manual fallback: `cp solution/coding_agent/tools/sandbox_lifecycle.py solution/coding_agent/tools/sandbox_execution.py starter/coding_agent/tools/ && cp -r solution/sandbox_image/* starter/sandbox_image/` + Lab 2 wiring in `agent.py`)* | `make verify-lab LAB=2` |
+| **Lab 3** | +28 min | **`make fast-forward LAB=3`** *(manual fallback: `cp solution/coding_agent/memory/*.py starter/coding_agent/memory/ && cp solution/coding_agent/callbacks/telemetry_and_feedback.py starter/coding_agent/callbacks/ && cp solution/coding_agent/agent.py starter/coding_agent/agent.py`)* | `make verify-lab LAB=3` |
+| **Lab 4** | +28 min | **`make fast-forward LAB=4`** *(manual fallback: `cp solution/coding_agent/tools/registry_loader.py starter/coding_agent/tools/ && cp solution/coding_agent/agent.py starter/coding_agent/agent.py`)* | `make verify-lab LAB=4` |
+| **Lab 5** | +32 min | **`make fast-forward LAB=5`** *(manual fallback: `cp solution/main.py starter/main.py && cp -r solution/terraform/* starter/terraform/`)* | `make verify-lab LAB=5` |
+| **Lab 6** | +28 min | **`make fast-forward LAB=6`** *(manual fallback: `cp -r solution/eval/* starter/eval/`)* | `make verify-lab LAB=6` |
+| **Lab 7 (Optional / Skippable)** | +25 min | *No fast-forward needed (`0` starter TODOs) — Lab 7 is an optional CLI, Terraform-diff & security-audit module; skip straight to Lab 8 with zero broken code* | `make verify-lab LAB=7` *(optional)* |
+| **Lab 8 (Optional GKE Overlay)** | +20 min | **`make fast-forward LAB=8`** *(manual fallback: `cp -r solution/gke_reference/* starter/gke_reference/`)* | `make verify-lab LAB=8` |
+| **Full Reset** | Anytime | Switch working directory straight into `solution/` (`cd solution && uv sync`) or pass `TRACK=solution` to any `make` target | `make verify-lab LAB=all TRACK=solution` |
 
 ---
 

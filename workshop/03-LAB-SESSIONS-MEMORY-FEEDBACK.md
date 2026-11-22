@@ -19,11 +19,26 @@ By the end of this lab, you will be able to:
 
 ---
 
+## Quick-Run TL;DR (Classroom Fast Path)
+
+- **Focused Exercises (High-Signal TODOs):** `session_manager.py` (`build_adk_session_service`, `create_session`), `memory_bank_manager.py` (`build_adk_memory_service`, `generate_memories_from_session`, `retrieve_similar_memories`), `telemetry_and_feedback.py` (`after_tool_callback`, `submit_feedback`), and `agent.py` (`_build_optional_callbacks`) — *(CRUD & sanitizer helpers pre-filled!)*
+- **Key Commands (Zero Local Docker — Reuses Lab 2 Standalone Instance in `asia-southeast1`):**
+  ```bash
+  (cd starter && uv run python -m coding_agent.memory.session_manager --offline-check)
+  (cd starter && uv run python -m coding_agent.memory.memory_bank_manager --offline-check)
+  (cd starter && uv run python -m coding_agent.callbacks.telemetry_and_feedback --offline-check)
+  make verify-lab LAB=3
+  ```
+- **Antigravity AI-Assisted Mode (`.agents/skills/agent-platform-runtime-and-state`):** *"Using `agent-platform-runtime-and-state`, complete the `# TODO(lab-3)` functions across `session_manager.py`, `memory_bank_manager.py`, `telemetry_and_feedback.py`, and `agent.py` with `VertexAiSessionService`, Memory Bank similarity retrieval, and parent-runtime sandbox `stdout` logging."*
+- **Fell Behind? Instant Catch-Up:** `make fast-forward LAB=3` *(syncs only Lab 3 without spoiling Labs 4–8 TODOs).*
+
+---
+
 ## Half-Day Fast-Track Path (15-Minute Instructor Live Demo & Walkthrough)
 
 In the **3.5-hour Half-Day Fast-Track**, Lab 3 is delivered as a **15-minute instructor-led live demo and code walkthrough** (no attendee coding required) so the room stays on schedule for hands-on Labs 4, 5, and 8:
 - Watch the instructor run the verified reference demos from [`solution/coding_agent/memory/`](../solution/coding_agent/memory/) (`session_manager.py`, `memory_bank_manager.py`) and [`solution/coding_agent/callbacks/telemetry_and_feedback.py`](../solution/coding_agent/callbacks/telemetry_and_feedback.py) showing Managed Sessions, Memory Bank similarity retrieval, parent-runtime sandbox `stdout`/`stderr` structured logging, and Cloud Trace–linked `THUMBS_UP` feedback.
-- *(Optional fast-forward if you want live Lab 3 state wired into your `starter/` before Lab 4)*: copy the reference modules from `solution/` using the Lab 3 cutover command in [FACILITATOR-GUIDE.md](./FACILITATOR-GUIDE.md#52-hard-cutover-checkpoints-when-to-switch-from-starter-to-solution).
+- *(Optional fast-forward if you want live Lab 3 state wired into your `starter/` before Lab 4)*: run **`make fast-forward LAB=3`** from the repository root *(syncs only Lab 3 into `starter/` without spoiling Labs 4–8 TODOs; see [FACILITATOR-GUIDE.md](./FACILITATOR-GUIDE.md#52-hard-cutover-checkpoints-when-to-switch-from-starter-to-solution) for full track cutover options)*.
 
 ---
 
@@ -91,7 +106,7 @@ gcloud services enable \
 
 ## Part A: Managed Sessions (`starter/coding_agent/memory/session_manager.py`)
 
-Open [`starter/coding_agent/memory/session_manager.py`](../starter/coding_agent/memory/session_manager.py) and inspect the `# TODO(lab-3)` markers. You will implement both the **ADK integration** (`build_adk_session_service`) and the **direct Agent Platform SDK lifecycle wrapper** (`SessionLifecycleManager`).
+Open [`starter/coding_agent/memory/session_manager.py`](../starter/coding_agent/memory/session_manager.py). Across Parts A–C, Lab 3 focuses on **8 high-signal `# TODO(lab-3)` functions** (2 in `session_manager.py`, 3 in `memory_bank_manager.py`, 2 in `telemetry_and_feedback.py`, and 1 in `agent.py`). Here in Part A, complete the **2 `# TODO(lab-3)` functions** — **`build_adk_session_service()`** and **`SessionLifecycleManager.create_session()`** — while the remaining CRUD/event helpers (`get_session()`, `list_sessions()`, `append_event()`/`append_text_event()`/`append_raw_event()`, `list_events()`, `delete_session()`) are **pre-filled**.
 
 ### Step A1: Implement `build_adk_session_service()` (ADK `VertexAiSessionService`)
 
@@ -140,9 +155,9 @@ def build_adk_session_service(
 > **Combining Agent Platform Services with Custom Enterprise Stores (Lab 1 Service Registration):**
 > While this workshop uses Google-managed `VertexAiSessionService` and `VertexAiMemoryBankService` (invoked via `agentengine://`), teams migrating from existing internal databases or custom A2A task stores can plug in custom URI schemes (`mysession://`, `mymemory://`, `myartifact://`, `mytaskstore://`) using Lab 1's **ADK Python 2.0+ [Service Registration](https://adk.dev/agents/service-registration/)** templates ([`starter/services.yaml`](../starter/services.yaml) and [`starter/services.py`](../starter/services.py)). Remember that `services.py` overrides `services.yaml` on duplicate schemes, and per the [ADK 2.0 compatibility guide](https://adk.dev/2.0/), rigid custom SQL `BaseSessionService` schemas must add columns for ADK 2.0's `node_info` and `output` `Event` fields (JSON-blob stores require no schema changes).
 
-### Step A2: Implement `SessionLifecycleManager` (Direct `agentplatform` SDK)
+### Step A2: Implement `SessionLifecycleManager.create_session()` (Direct `agentplatform` SDK)
 
-For backend orchestrators, non-ADK microservices, or custom audit tooling, use `agentplatform.Client.sessions` directly inside `SessionLifecycleManager`:
+For backend orchestrators, non-ADK microservices, or custom audit tooling, `SessionLifecycleManager` wraps `agentplatform.Client.sessions` directly. Complete `# TODO(lab-3)` in **`create_session()`** (`get_session()`, `list_sessions()`, `append_event()`, `list_events()`, and `delete_session()` are **pre-filled** and shown below for reference):
 
 ```python
 import datetime
@@ -247,11 +262,11 @@ uv run python -m coding_agent.memory.session_manager --user-id workshop-dev --de
 
 Managed Sessions store *what happened in one chat*; **Memory Bank** distills and consolidates *what the Coding Agent should remember across future chats* (such as `"Always run pytest -q and ruff check before opening a PR"`).
 
-Open [`starter/coding_agent/memory/memory_bank_manager.py`](../starter/coding_agent/memory/memory_bank_manager.py) and complete the `# TODO(lab-3)` blocks.
+Open [`starter/coding_agent/memory/memory_bank_manager.py`](../starter/coding_agent/memory/memory_bank_manager.py). Complete the **3 focused `# TODO(lab-3)` functions** here — **`build_adk_memory_service()`**, **`MemoryBankManager.generate_memories_from_session()`**, and **`MemoryBankManager.retrieve_similar_memories()`** — while the defense-in-depth sanitizer/ingestion helpers (`inspect_for_memory_poisoning()`, `sanitize_for_memory_ingestion()`, `filter_and_sanitize_events_for_memory()`, `persist_turn_to_memory_callback()`) and config/CRUD/revision/purge helpers (`create_memory_bank()`, `configure_memory_bank()`, `generate_memories_from_text()`, `retrieve_scope_memories()`, `list_revisions()`, `rollback_memory()`, `delete_memory()`, `purge_user_memories()`) are **pre-filled**.
 
-### Step B1: Configure Memory Bank Topics, Models, Few-Shots & TTL
+### Step B1: Review Pre-Filled Memory Bank Topics, Models, Few-Shots & TTL
 
-Key platform defaults and rules to bake into `MemoryBankManager.configure_memory_bank(...)`:
+Key platform defaults and rules already wired into the pre-filled `MemoryBankManager.configure_memory_bank(...)` and `build_managed_semantic_memory_config(...)` helpers:
 - **Generation LLM Default:** **`gemini-3.5-flash`** (effective June 29, 2026; older instances default to `gemini-2.5-flash`).
 - **Embedding Model Default:** **`text-embedding-005`** (multilingual option: `gemini-embedding-2`, which ONLY accepts `global`, `us`, or `eu` in its model resource name — **NOT** regional paths like `asia-southeast1` or `us-central1`). **Critical:** The embedding model can **only be changed before storing the first memory**!
 - **Verified SDK Config Key Divergence:**
@@ -347,7 +362,7 @@ managed_semantic_memory_config = {
    ```
 
    - `VertexAiMemoryBankService` automatically scopes memories to `{"user_id": USER_ID, "app_name": APP_NAME}`.
-   - In [`starter/coding_agent/memory/memory_bank_manager.py`](../starter/coding_agent/memory/memory_bank_manager.py), `sanitize_for_memory_ingestion()` and `filter_and_sanitize_events_for_memory()` are wired out of the box into the module's ingestion flow (complete their `# TODO(lab-3)` stubs — or copy from [`solution/coding_agent/memory/memory_bank_manager.py`](../solution/coding_agent/memory/memory_bank_manager.py) — so poisoned events are dropped without mutating live `session.events`). Call `filter_and_sanitize_events_for_memory()` inside `persist_turn_to_memory_callback()`, then in [`starter/coding_agent/agent.py`](../starter/coding_agent/agent.py) attach **`PreloadMemoryTool()`** (auto-injects relevant memories on every turn) or **`LoadMemoryTool()`** (model decides when to query memory) and wire `persist_turn_to_memory_callback` as `after_agent_callback`:
+   - In [`starter/coding_agent/memory/memory_bank_manager.py`](../starter/coding_agent/memory/memory_bank_manager.py), **`inspect_for_memory_poisoning()`**, **`sanitize_for_memory_ingestion()`**, **`filter_and_sanitize_events_for_memory()`**, and **`persist_turn_to_memory_callback()`** are **pre-filled out of the box** (zero `# TODO(lab-3)` stubs to complete — poisoned events are dropped without mutating live `session.events`). In Step C5, you will attach **`PreloadMemoryTool()`** (auto-injects relevant memories on every turn) or **`LoadMemoryTool()`** (model decides when to query memory) and wire the pre-filled `persist_turn_to_memory_callback` as `after_agent_callback` inside `_build_optional_callbacks()` in [`starter/coding_agent/agent.py`](../starter/coding_agent/agent.py):
 
    ```python
    from google.adk.agents.callback_context import CallbackContext
@@ -386,9 +401,9 @@ managed_semantic_memory_config = {
    > [!TIP]
    > **Pairing Multi-Regional (`us`/`eu`) or `global` Memory Bank with Regional (`asia-southeast1`) Agent Runtime:** Keep Memory Bank collocated in Singapore (`asia-southeast1`) for lowest latency, or pass a `memory_service_builder` callable to `AdkApp(agent=root_agent, memory_service_builder=...)` returning `VertexAiMemoryBankService(project=..., location="global", agent_engine_id=MEMORY_BANK_ID)` when sharing long-term memories across regions.
 
-### Step B3: Implement `generate_memories`, Scope & Similarity Retrieval, Revisions & Purge
+### Step B3: Implement `generate_memories_from_session()` & `retrieve_similar_memories()` (Plus Pre-Filled Helpers)
 
-Complete these methods in `MemoryBankManager`:
+Complete the **2 `# TODO(lab-3)` methods** in `MemoryBankManager` — **`generate_memories_from_session()`** (via `vertex_session_source`) and **`retrieve_similar_memories()`** (via `similarity_search_params` + `resp.page`). The companion helpers shown below (`generate_memories_from_text`, `retrieve_scope_memories`, `list_revisions`, `rollback_memory`, and `purge_user_memories`) are **pre-filled** for reference and exercised by `--demo`:
 
 - **Scope Rules:** Maximum **5 key-value pairs**, **no `*` characters**, immutable once created. Consolidation and retrieval match **exact scope** (key order does not matter).
 - **Multimodal & Tool-Call Rule:** `memories.generate` extracts facts from text, `inline_data`, and `file_data` (images/audio/video), while **function calls and function responses are ignored**.
@@ -495,7 +510,7 @@ uv run python -m coding_agent.memory.memory_bank_manager --user-id workshop-dev 
 
 ## Part C: OTel Tracing, Structured Logging, Monitoring & Feedback (`starter/coding_agent/callbacks/telemetry_and_feedback.py`)
 
-Open [`starter/coding_agent/callbacks/telemetry_and_feedback.py`](../starter/coding_agent/callbacks/telemetry_and_feedback.py) and complete the `# TODO(lab-3)` markers.
+Open [`starter/coding_agent/callbacks/telemetry_and_feedback.py`](../starter/coding_agent/callbacks/telemetry_and_feedback.py). Complete the **2 focused `# TODO(lab-3)` hooks** here — **`after_tool_callback()`** and **`FeedbackClient.submit_feedback()`** — while `build_reasoning_engine_logger()`, `before_tool_callback()`, `attach_context_snapshot()`, `get_context_snapshot()`, and `list_session_feedback()` are **pre-filled**. In Step C5, you will complete the 8th `# TODO(lab-3)` function, **`_build_optional_callbacks()`** in [`starter/coding_agent/agent.py`](../starter/coding_agent/agent.py).
 
 ### Step C1: OpenTelemetry (OTel) Tracing Configuration
 
@@ -518,7 +533,7 @@ OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT="EVENT_ONLY"
 > [!IMPORTANT]
 > **Critical Platform Limitation (`scale/runtime/logging`):** Cloud Logging is bound to the `aiplatform.googleapis.com/ReasoningEngine` monitored resource (`reasoning_engine_stdout`, `reasoning_engine_stderr`, `reasoning_engine_build`) and is **NOT supported for child resources** — meaning Managed Sandbox `stdout`/`stderr`, Sessions, and Memory Bank do **not** auto-stream logs to Cloud Logging!
 
-To preserve forensic auditability for every command executed inside a Managed Sandbox, implement `before_tool_callback` and `after_tool_callback` in `starter/coding_agent/callbacks/telemetry_and_feedback.py` so the **parent Agent Runtime** emits structured JSON logs and OTel span attributes:
+To preserve forensic auditability for every command executed inside a Managed Sandbox, `build_reasoning_engine_logger()` and `before_tool_callback()` are **pre-filled** in `starter/coding_agent/callbacks/telemetry_and_feedback.py`; implement `# TODO(lab-3)` in **`after_tool_callback()`** so the **parent Agent Runtime** emits structured JSON logs and OTel span attributes:
 
 ```python
 import os
@@ -581,9 +596,9 @@ Inspect the built-in **Agent Runtime Overview** dashboard (requires `roles/monit
   - **User-defined custom metrics** (e.g., `custom.googleapis.com/token_count`, `CUMULATIVE`, `INT64`) **MUST** use `monitoredResourceTypes: ["generic_node"]` — Cloud Monitoring rejects `aiplatform.googleapis.com/ReasoningEngine` for user-defined custom metric descriptors!
 - **Recommended Latency Alert Baseline:** `Request Latency` (`aiplatform.googleapis.com/reasoning_engine/request_latencies`), `5min` rolling window, **99th percentile**, threshold **`5000ms`**. (In Lab 6, we extend alerting to **evaluation quality drops**!)
 
-### Step C4: Implement `FeedbackClient` Linked to Sessions & Cloud Trace
+### Step C4: Implement `FeedbackClient.submit_feedback()` Linked to Sessions & Cloud Trace
 
-Complete `FeedbackClient` in [`starter/coding_agent/callbacks/telemetry_and_feedback.py`](../starter/coding_agent/callbacks/telemetry_and_feedback.py) so end-user ratings attach directly to sessions and Cloud Trace spans:
+Complete `# TODO(lab-3)` in **`FeedbackClient.submit_feedback()`** inside [`starter/coding_agent/callbacks/telemetry_and_feedback.py`](../starter/coding_agent/callbacks/telemetry_and_feedback.py) (`attach_context_snapshot()`, `get_context_snapshot()`, and `list_session_feedback()` are **pre-filled**) so end-user ratings attach directly to sessions and Cloud Trace spans:
 
 - **IAM Role:** `roles/aiplatform.user` (the Reasoning Engine Service Agent already has access).
 - **Trace & Console UI Linking Rule:** The `event_id` parameter **MUST** match the OTel span attribute **`gcp.vertex.agent.event_id`** (the UUID on the `generate_content` / `execute_tool` span, or `raw_event.id` in Managed Sessions) for the feedback badge to render in Console **Traces -> Sessions view / Traces view**.

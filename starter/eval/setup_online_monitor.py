@@ -1,10 +1,13 @@
 """Online Evaluation Monitor Prerequisite Validator & Spec Generator (Lab 6 — Starter).
 
-Complete the ``# TODO(lab-6)`` blocks following ``workshop/06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md``.
+Core Lab 6 exercise (see ``workshop/06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md``):
+- ``validate_otel_prerequisites()``: Validate OpenTelemetry GenAI v1.37.0+ environment
+  variables (including the ADK Python ``EVENT_ONLY`` enum vs. boolean trap) and eval region.
+
 Note: Official ``evaluate-online`` documentation creates ``OnlineEvaluator`` monitors
 through the Cloud Console (no verified Python SDK creation method is published yet).
-This script validates OTel telemetry prerequisites and emits the monitor spec +
-Logs Explorer diagnostic queries.
+The monitor specification builder (``build_online_monitor_spec()``) and runtime verifier
+(``verify_deployed_runtime()``) are pre-filled helpers.
 """
 
 from __future__ import annotations
@@ -93,21 +96,80 @@ def build_online_monitor_spec(
     metrics: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build a verified Online Evaluation Monitor specification and ops runbook."""
-    # TODO(lab-6): Validate sampling_rate in (0.0, 1.0] and max_samples_per_run > 0, then return
-    # a dict documenting:
-    # - Console provisioning URL (`https://console.cloud.google.com/agent-platform/agent-evaluation`)
-    # - `target_agent_engine` using `runtime_location` (e.g., asia-southeast1) as fallback region
-    # - 10-minute cadence, sampling_percentage, max_samples_per_run, trace_filter, metrics
-    # - Exported Cloud Monitoring metrics (`aiplatform.googleapis.com/online_evaluator/scores`
-    #   and `aiplatform.googleapis.com/online_evaluator/evaluations_count`)
-    # - Operational warnings (first-monitor transient Failed up to 30m; P4SA project scope)
-    # - Logs Explorer queries (`resource.labels.online_evaluator` in eval `location`, `labels.reasoning_engine_id`, `labels.trace`)
-    raise NotImplementedError(
-        f"TODO(lab-6): Build Online Monitor spec for project={project_id!r}, "
-        f"eval_location={location!r}, runtime_location={runtime_location!r}, "
-        f"engine={reasoning_engine_name!r}, rate={sampling_rate}, "
-        f"max_samples={max_samples_per_run}, filter={trace_filter!r}, metrics={metrics!r}."
-    )
+    # Pre-filled boilerplate helper
+    if not (0.0 < sampling_rate <= 1.0):
+        raise ValueError(f"sampling_rate must be in (0.0, 1.0], got {sampling_rate}")
+    if max_samples_per_run <= 0:
+        raise ValueError(f"max_samples_per_run must be positive, got {max_samples_per_run}")
+
+    selected_metrics = metrics or list(DEFAULT_ONLINE_METRICS)
+    engine_id = reasoning_engine_name.rstrip("/").split("/")[-1] if reasoning_engine_name else "<REASONING_ENGINE_ID>"
+    proj = project_id or "<YOUR_PROJECT_ID>"
+    resolved_runtime_location = (runtime_location or "").strip() or location
+
+    return {
+        "monitor_display_name": "coding-agent-online-quality-monitor",
+        "eval_location": location,
+        "runtime_location": resolved_runtime_location,
+        "provisioning_channel": "Google Cloud Console (Agent Platform > Agents > Evaluation > Online monitors)",
+        "console_url": f"https://console.cloud.google.com/agent-platform/agent-evaluation?project={proj}",
+        "target_agent_engine": (
+            reasoning_engine_name
+            or f"projects/{proj}/locations/{resolved_runtime_location}/reasoningEngines/{engine_id}"
+        ),
+        "schedule_cadence": "Approximately every 10 minutes (Query -> Evaluate -> Report)",
+        "sampling_config": {
+            "sampling_percentage": round(sampling_rate * 100, 2),
+            "max_samples_per_run": max_samples_per_run,
+            "trace_filter": trace_filter,
+        },
+        "metrics": selected_metrics,
+        "required_otel_signals": REQUIRED_OTEL_SIGNALS,
+        "exported_cloud_monitoring_metrics": {
+            "monitored_resource": "aiplatform.googleapis.com/OnlineEvaluator",
+            "descriptors": [
+                {
+                    "metric_type": "aiplatform.googleapis.com/online_evaluator/scores",
+                    "kind": "DELTA",
+                    "value_type": "DISTRIBUTION",
+                    "labels": ["agent_resource_name", "evaluation_metric_name", "runtime_revision_id"],
+                },
+                {
+                    "metric_type": "aiplatform.googleapis.com/online_evaluator/evaluations_count",
+                    "kind": "DELTA",
+                    "value_type": "INT64",
+                    "labels": [
+                        "agent_resource_name",
+                        "evaluation_metric_name",
+                        "evaluation_status",
+                        "runtime_revision_id",
+                    ],
+                },
+            ],
+        },
+        "operational_warnings": [
+            (
+                "First-Monitor Transient Failed Status: The first Online Monitor in a project "
+                "often shows Failed ('permission denied') while P4SA IAM propagates. Do NOT "
+                "delete it; it retries automatically every ~10 minutes and becomes Active. "
+                "Troubleshoot IAM only if still Failed after 30 minutes."
+            ),
+            (
+                "P4SA Privilege Boundary: Online Evaluators execute under the project-level "
+                "service account (P4SA), so any user permitted to create an OnlineEvaluator "
+                "can attach it to any agent in the same project. Restrict creation to admins."
+            ),
+        ],
+        "logs_explorer_diagnostic_queries": {
+            "by_monitor_id": (
+                f'resource.labels.online_evaluator="projects/{proj}/locations/{location}'
+                '/onlineEvaluators/YOUR_MONITOR_ID"'
+            ),
+            "by_agent_id": f'labels.reasoning_engine_id="{engine_id}"',
+            "by_trace_id": 'labels.trace="YOUR_TRACE_ID"',
+            "inference_events": 'labels."event.name"="gen_ai.client.inference.operation.details"',
+        },
+    }
 
 
 def verify_deployed_runtime(project_id: str, location: str, reasoning_engine_name: str) -> dict[str, Any]:

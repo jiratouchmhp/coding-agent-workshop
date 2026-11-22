@@ -1,16 +1,19 @@
 """Memory Bank integration, governance sanitizer & CLI (starter track — Lab 3).
 
-Complete the ``# TODO(lab-3)`` sections below to wire:
-1. **ADK Integration (`build_adk_memory_service`, `persist_turn_to_memory_callback`):**
-   Return ``VertexAiMemoryBankService`` when configured (auto-scoped to
-   ``{"user_id": USER_ID, "app_name": APP_NAME}``), else ``InMemoryMemoryService``.
-2. **Prompt-Injection & Secret Sanitizer (`sanitize_for_memory_ingestion`):**
-   Screen untrusted text before Memory Bank ingestion and pair with Google Cloud's
-   three official mitigations (Model Armor, Adversarial Red-Teaming, Sandbox + Human Review).
-3. **Direct Agent Platform SDK (`MemoryBankManager`):**
-   Configure topics & TTLs, generate memories from sessions/events, retrieve via both
-   scope-based filtering and similarity search, inspect revisions, roll back, delete,
-   and dry-run/force purge.
+Focused Lab 3 exercises in this module (3 core Memory Bank operations):
+1. ``build_adk_memory_service()`` — Return ``VertexAiMemoryBankService`` when
+   configured (auto-scoped to ``{"user_id": USER_ID, "app_name": APP_NAME}``),
+   else ``InMemoryMemoryService``.
+2. ``MemoryBankManager.generate_memories_from_session()`` — Generate and
+   consolidate memories from a Managed Session with optional time window,
+   topic filters, and metadata merge strategy.
+3. ``MemoryBankManager.retrieve_similar_memories()`` — Retrieve memories by
+   semantic similarity within an exact scope, reading ``resp.page`` safely.
+
+Supporting defense-in-depth sanitizer helpers (``inspect_for_memory_poisoning``,
+``sanitize_for_memory_ingestion``, ``filter_and_sanitize_events_for_memory``,
+``persist_turn_to_memory_callback``) and CRUD/revision/purge helpers are pre-filled
+so you can focus on the core Memory Bank integration.
 
 Verified Platform Rules & Gotchas:
 - Unsupported regions: ``asia-southeast2``, ``australia-southeast2``, ``northamerica-northeast2``.
@@ -26,6 +29,7 @@ Verified Platform Rules & Gotchas:
 from __future__ import annotations
 
 import argparse
+import copy
 import datetime
 import json
 import logging
@@ -59,7 +63,9 @@ MEMORY_BANK_IAM_ROLES: tuple[str, ...] = (
     "roles/aiplatform.memoryUser",
 )
 
-# Reference regexes you can reuse when implementing inspect_for_memory_poisoning()
+# Defense-in-depth patterns for prompt-injection / memory-poisoning screening.
+# Always pair with Google Cloud Model Armor, adversarial red-teaming, and
+# sandboxed execution + human review (official scale/memory-bank guidance).
 _INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "instruction_override",
@@ -179,19 +185,64 @@ def build_memory_scope_iam_condition(key: str, value: str) -> str:
 def inspect_for_memory_poisoning(text: str) -> MemorySanitizationReport:
     """Screen text for indirect prompt-injection directives and credential leakage.
 
-    Always combine with Google Cloud's three official mitigations (``scale/memory-bank``):
-    1. Model Armor before Memory Bank ingestion and tool execution.
-    2. Adversarial red-teaming on extraction and retrieval paths.
-    3. Sandboxed execution + human review for critical actions.
+    Implements a deterministic local defense-in-depth screen aligned with Google Cloud's
+    Memory Bank governance guidance (``scale/memory-bank``):
+    - Drops utterances containing prompt-override / exfiltration directives so poisoned
+      instructions never persist into long-term memories.
+    - Strips explicit untrusted tool-output blocks (``<untrusted_content>...</untrusted_content>``).
+    - Redacts credential/secret patterns because Memory Bank's built-in PII exclusion
+      is explicitly documented as not infallible.
+
+    Always combine with Google Cloud's three official mitigations:
+    1. **Model Armor** prompt-injection & SDP inspection before Memory Bank ingestion.
+    2. **Adversarial red-teaming** across extraction and retrieval paths.
+    3. **Sandboxed execution + human review** for privileged actions.
     """
-    # TODO(lab-3): Implement defense-in-depth memory ingestion screening:
-    # 1. Strip any blocks matching ``_UNTRUSTED_BLOCK_PATTERNS``.
-    # 2. Check ``_INJECTION_PATTERNS`` — if any match, return a ``MemorySanitizationReport``
-    #    with ``blocked=True`` and ``sanitized_text=""`` so poisoned directives never persist.
-    # 3. Redact any credentials matching ``_SECRET_REDACTION_PATTERNS`` with ``[REDACTED]``.
-    # 4. Return ``MemorySanitizationReport`` with normalized ``sanitized_text``.
-    _ = text
-    raise NotImplementedError("Complete TODO(lab-3): inspect_for_memory_poisoning()")
+    # Pre-filled boilerplate helper (already working for the workshop)
+    if not text or not text.strip():
+        return MemorySanitizationReport(
+            original_length=len(text or ""),
+            sanitized_text="",
+            blocked=False,
+        )
+
+    cleaned = text
+    matched_rules: list[str] = []
+    redacted_secret_types: list[str] = []
+
+    for block_pattern in _UNTRUSTED_BLOCK_PATTERNS:
+        if block_pattern.search(cleaned):
+            matched_rules.append("untrusted_block_stripped")
+            cleaned = block_pattern.sub("", cleaned)
+
+    for rule_name, pattern in _INJECTION_PATTERNS:
+        if pattern.search(cleaned):
+            matched_rules.append(rule_name)
+
+    if any(r != "untrusted_block_stripped" for r in matched_rules):
+        return MemorySanitizationReport(
+            original_length=len(text),
+            sanitized_text="",
+            blocked=True,
+            matched_rules=matched_rules,
+        )
+
+    for secret_kind, secret_pattern in _SECRET_REDACTION_PATTERNS:
+        if secret_pattern.search(cleaned):
+            redacted_secret_types.append(secret_kind)
+            if secret_kind == "env_secret_assignment":
+                cleaned = secret_pattern.sub(r"\1=[REDACTED]", cleaned)
+            else:
+                cleaned = secret_pattern.sub("[REDACTED]", cleaned)
+
+    normalized = " ".join(cleaned.split()).strip()
+    return MemorySanitizationReport(
+        original_length=len(text),
+        sanitized_text=normalized,
+        blocked=False,
+        matched_rules=matched_rules,
+        redacted_secret_types=redacted_secret_types,
+    )
 
 
 @overload
@@ -273,22 +324,139 @@ def build_memory_service_builder(
     return _builder
 
 
+def _clone_event_for_sanitization(event: Any) -> Any:
+    """Return a deep copy of an ADK or dict event so live session state is never mutated."""
+    # Pre-filled boilerplate helper (already working for the workshop)
+    model_copy = getattr(event, "model_copy", None)
+    if callable(model_copy):
+        return model_copy(deep=True)
+    return copy.deepcopy(event)
+
+
+def _extract_event_parts(event: Any) -> Any:
+    """Return ``parts`` from wrapped ADK/API events or bare content dicts/objects."""
+    # Pre-filled boilerplate helper (already working for the workshop)
+    content = event.get("content") if isinstance(event, dict) else getattr(event, "content", None)
+    if content is not None:
+        parts = (
+            content.get("parts")
+            if isinstance(content, dict)
+            else getattr(content, "parts", None)
+        )
+        if parts is not None:
+            return parts
+    return event.get("parts") if isinstance(event, dict) else getattr(event, "parts", None)
+
+
 def filter_and_sanitize_events_for_memory(events: list[Any]) -> list[Any]:
     """Screen ADK/API events, bare content dicts/objects, or text items before Memory Bank ingestion.
 
-    Drops any item whose text triggers prompt-injection/exfiltration rules in
-    ``inspect_for_memory_poisoning()``, and deep-copy redacts secrets or untrusted
-    tool blocks without mutating caller inputs.
+    Extracts text parts from wrapped ADK/API events (``event['content']['parts']`` /
+    ``event.content.parts``), bare content dicts/objects (``event['parts']`` /
+    ``event.parts``), direct string ``text``/``content`` payloads, and plain ``str``
+    elements. Drops any item whose text triggers prompt-injection/exfiltration rules in
+    ``inspect_for_memory_poisoning()``, and deep-copy redacts secrets or untrusted tool
+    blocks on cloned copies without mutating caller inputs.
     """
-    # TODO(lab-3): Iterate ``events``, extracting text from wrapped ADK/API events
-    # (``event['content']['parts']`` / ``event.content.parts``), bare content dicts/objects
-    # (``event['parts']`` / ``event.parts``), direct string ``text``/``content`` dicts, and
-    # plain ``str`` elements. Screen with ``inspect_for_memory_poisoning()``, drop blocked
-    # items, deep-copy items needing redaction (via ``event.model_copy(deep=True)`` or
-    # ``copy.deepcopy(event)``) so caller inputs and live ``session.events`` are never
-    # mutated, and return the filtered list of safe items.
-    _ = events
-    raise NotImplementedError("Complete TODO(lab-3): filter_and_sanitize_events_for_memory()")
+    # Pre-filled boilerplate helper (already working for the workshop)
+    safe_events: list[Any] = []
+    for event in events:
+        if isinstance(event, str):
+            report = inspect_for_memory_poisoning(event)
+            if report.blocked:
+                logger.warning(
+                    "Blocked poisoned text item before Memory Bank ingestion (rules=%s).",
+                    report.matched_rules,
+                )
+                continue
+            if report.sanitized_text:
+                safe_events.append(report.sanitized_text)
+            continue
+
+        parts = _extract_event_parts(event)
+        if not parts:
+            if isinstance(event, dict):
+                direct_key = (
+                    "text"
+                    if isinstance(event.get("text"), str)
+                    else ("content" if isinstance(event.get("content"), str) else None)
+                )
+                if direct_key is not None:
+                    raw_direct = event[direct_key]
+                    if raw_direct.strip():
+                        report = inspect_for_memory_poisoning(raw_direct)
+                        if report.blocked:
+                            logger.warning(
+                                "Blocked poisoned event before Memory Bank ingestion (rules=%s).",
+                                report.matched_rules,
+                            )
+                            continue
+                        if report.sanitized_text != raw_direct:
+                            cloned = _clone_event_for_sanitization(event)
+                            cloned[direct_key] = report.sanitized_text
+                            safe_events.append(cloned)
+                            continue
+            else:
+                direct_text = getattr(event, "text", None)
+                if isinstance(direct_text, str) and direct_text.strip():
+                    report = inspect_for_memory_poisoning(direct_text)
+                    if report.blocked:
+                        logger.warning(
+                            "Blocked poisoned event before Memory Bank ingestion (rules=%s).",
+                            report.matched_rules,
+                        )
+                        continue
+                    if report.sanitized_text != direct_text:
+                        cloned = _clone_event_for_sanitization(event)
+                        cloned.text = report.sanitized_text
+                        safe_events.append(cloned)
+                        continue
+            safe_events.append(event)
+            continue
+
+        blocked = False
+        modifications: dict[int, str] = {}
+        for idx, part in enumerate(parts):
+            if isinstance(part, str):
+                raw_text: Any = part
+            elif isinstance(part, dict):
+                raw_text = part.get("text")
+            else:
+                raw_text = getattr(part, "text", None)
+            if not isinstance(raw_text, str) or not raw_text.strip():
+                continue
+            report = inspect_for_memory_poisoning(raw_text)
+            if report.blocked:
+                logger.warning(
+                    "Blocked poisoned session event before Memory Bank ingestion (rules=%s).",
+                    report.matched_rules,
+                )
+                blocked = True
+                break
+            if report.sanitized_text != raw_text:
+                modifications[idx] = report.sanitized_text
+
+        if blocked:
+            continue
+
+        if not modifications:
+            safe_events.append(event)
+            continue
+
+        cloned = _clone_event_for_sanitization(event)
+        cloned_parts = _extract_event_parts(cloned)
+        if cloned_parts:
+            for idx, clean_text in modifications.items():
+                part_obj = cloned_parts[idx]
+                if isinstance(part_obj, dict):
+                    part_obj["text"] = clean_text
+                elif isinstance(part_obj, str):
+                    if isinstance(cloned_parts, list):
+                        cloned_parts[idx] = clean_text
+                else:
+                    part_obj.text = clean_text
+        safe_events.append(cloned)
+    return safe_events
 
 
 async def persist_turn_to_memory_callback(
@@ -298,15 +466,35 @@ async def persist_turn_to_memory_callback(
     max_events: int = 5,
     sanitize: bool = True,
 ) -> None:
-    """ADK ``after_agent_callback`` incrementally ingesting recent events to Memory Bank."""
-    # TODO(lab-3): Screen ``list(callback_context.session.events[-max_events:])`` with
-    # ``filter_and_sanitize_events_for_memory()`` when ``sanitize=True`` (dropping poisoned
-    # events and redacting secrets on cloned copies), then call
-    # ``await callback_context.add_events_to_memory(events=safe_events,
-    # custom_metadata={"wait_for_completion": True} if wait_for_completion else None)``
-    # whenever ``safe_events`` is non-empty, then return ``None``.
-    _ = (callback_context, wait_for_completion, max_events, sanitize)
-    raise NotImplementedError("Complete TODO(lab-3): persist_turn_to_memory_callback()")
+    """ADK ``after_agent_callback`` incrementally ingesting recent events to Memory Bank.
+
+    Screens events through ``filter_and_sanitize_events_for_memory()`` (backed by
+    ``inspect_for_memory_poisoning()`` / ``sanitize_for_memory_ingestion()``) before
+    calling ``callback_context.add_events_to_memory`` (streaming ``IngestEvents``).
+    In production latency-sensitive deployments, set ``wait_for_completion=False`` (or omit
+    ``custom_metadata``) so ingestion runs asynchronously in the background.
+    """
+    # Pre-filled boilerplate helper (already working for the workshop)
+    add_fn = getattr(callback_context, "add_events_to_memory", None)
+    session = getattr(callback_context, "session", None)
+    events = getattr(session, "events", None) if session is not None else None
+    if not callable(add_fn) or not events:
+        return None
+
+    recent_events = list(events[-max_events:])
+    if sanitize:
+        recent_events = filter_and_sanitize_events_for_memory(recent_events)
+    if not recent_events:
+        return None
+
+    if wait_for_completion:
+        await add_fn(
+            events=recent_events,
+            custom_metadata={"wait_for_completion": True},
+        )
+    else:
+        await add_fn(events=recent_events)
+    return None
 
 
 def make_persist_turn_callback(
@@ -556,6 +744,7 @@ class MemoryBankManager:
         managed_semantic_memory_config: dict[str, Any] | None = None,
     ) -> str:
         """Create a standalone Memory Bank instance with custom topics and TTLs."""
+        # Pre-filled boilerplate helper (already working for the workshop)
         semantic_config = managed_semantic_memory_config or self.build_managed_semantic_memory_config(
             self.project_id,
             embedding_model=embedding_model,
@@ -564,11 +753,13 @@ class MemoryBankManager:
             revision_ttl_days=revision_ttl_days,
             scope_keys=scope_keys or ["user_id"],
         )
-        # TODO(lab-3): Call ``self.client.memory_banks.create(config={"display_name": display_name},
-        # managed_semantic_memory_config=semantic_config)``, store ``self._memory_bank_name = str(mb.name)``,
-        # and return ``self._memory_bank_name``.
-        _ = (display_name, semantic_config)
-        raise NotImplementedError("Complete TODO(lab-3): MemoryBankManager.create_memory_bank()")
+        memory_bank = self.client.memory_banks.create(
+            config={"display_name": display_name},
+            managed_semantic_memory_config=semantic_config,
+        )
+        self._memory_bank_name = str(memory_bank.name)
+        logger.info("Created Memory Bank instance: %s", self._memory_bank_name)
+        return self._memory_bank_name
 
     def configure_memory_bank(
         self,
@@ -580,7 +771,13 @@ class MemoryBankManager:
         scope_keys: list[str] | None = None,
         managed_semantic_memory_config: dict[str, Any] | None = None,
     ) -> Any:
-        """Update an existing Memory Bank instance's topics, models, and TTL config."""
+        """Update an existing Memory Bank instance's topics, models, and TTL config.
+
+        Handles the verified SDK schema divergence: ``memory_banks.create`` uses
+        ``unstructured_memory_configs`` whereas ``runtimes.update(..., context_spec=...)``
+        uses ``customization_configs``.
+        """
+        # Pre-filled boilerplate helper (already working for the workshop)
         target_name = self._require_memory_bank_name(memory_bank_name)
         semantic_config = managed_semantic_memory_config or self.build_managed_semantic_memory_config(
             self.project_id,
@@ -590,12 +787,17 @@ class MemoryBankManager:
             revision_ttl_days=revision_ttl_days,
             scope_keys=scope_keys or ["user_id"],
         )
-        # TODO(lab-3): Call ``self.client.runtimes.update(name=target_name, config={
-        # "context_spec": {"memory_bank_config": {...}}})``. Remember the verified SDK key
-        # divergence: map ``semantic_config["unstructured_memory_configs"]`` to
-        # ``"customization_configs"`` inside ``memory_bank_config``!
-        _ = (target_name, semantic_config)
-        raise NotImplementedError("Complete TODO(lab-3): MemoryBankManager.configure_memory_bank()")
+        memory_bank_config: dict[str, Any] = {
+            "generation_config": semantic_config["generation_config"],
+            "customization_configs": semantic_config["unstructured_memory_configs"],
+            "similarity_search_config": semantic_config["similarity_search_config"],
+            "ttl_config": semantic_config["ttl_config"],
+            "disable_memory_revisions": semantic_config.get("disable_memory_revisions", False),
+        }
+        return self.client.runtimes.update(
+            name=target_name,
+            config={"context_spec": {"memory_bank_config": memory_bank_config}},
+        )
 
     # -- Memory Generation & Streaming Ingestion -----------------------------
 
@@ -642,18 +844,42 @@ class MemoryBankManager:
         sanitize: bool = True,
         metadata: dict[str, Any] | None = None,
     ) -> Any | None:
-        """Sanitize inline developer utterances and generate consolidated memories."""
+        """Sanitize inline developer utterances and generate consolidated memories.
+
+        Returns ``None`` if all utterances were empty or blocked by the prompt-injection
+        sanitizer.
+        """
+        # Pre-filled boilerplate helper (already working for the workshop)
         target_name = self._require_memory_bank_name()
         resolved_scope = scope or {"user_id": user_id}
         validate_memory_scope(resolved_scope)
-        # TODO(lab-3): Sanitize each utterance with ``self.sanitize_for_memory_ingestion(text)``
-        # (dropping empty/blocked strings), wrap remaining strings into
-        # ``direct_contents_source={"events": [...]}``, and call
-        # ``self.client.memory_banks.memories.generate(name=target_name,
-        # direct_contents_source=..., scope=resolved_scope, config={...})``.
-        _ = (target_name, utterances, wait_for_completion, sanitize, metadata)
-        raise NotImplementedError(
-            "Complete TODO(lab-3): MemoryBankManager.generate_memories_from_text()"
+
+        processed = [
+            self.sanitize_for_memory_ingestion(text) if sanitize else text.strip()
+            for text in utterances
+        ]
+        events = [
+            {"content": {"role": "user", "parts": [{"text": text}]}}
+            for text in processed
+            if text
+        ]
+        if not events:
+            logger.warning("All utterances filtered by memory sanitizer; skipping generate().")
+            return None
+
+        return self.client.memory_banks.memories.generate(
+            name=target_name,
+            direct_contents_source={"events": events},
+            scope=resolved_scope,
+            config={
+                "wait_for_completion": wait_for_completion,
+                "metadata": metadata or {"source_app": {"string_value": "coding-agent"}},
+                "metadata_merge_strategy": "MERGE",
+                "allowed_topics": [
+                    {"managed_memory_topic": "USER_PREFERENCES"},
+                    {"custom_memory_topic_label": "coding_conventions"},
+                ],
+            },
         )
 
     def generate_memories_from_facts(
@@ -759,16 +985,41 @@ class MemoryBankManager:
         extra_filter: str | None = None,
     ) -> list[dict[str, Any]]:
         """Retrieve memories by exact scope with optional metadata DNF and EBNF filters."""
+        # Pre-filled boilerplate helper (already working for the workshop)
         target_name = self._require_memory_bank_name()
         resolved_scope = scope or {"user_id": user_id}
         validate_memory_scope(resolved_scope)
-        # TODO(lab-3): Call ``self.client.memory_banks.memories.retrieve(name=target_name,
-        # scope=resolved_scope, config={"filter_groups": [...], "filter": ...})`` and return
-        # ``[{"name": item.memory.name, "fact": item.memory.fact} for item in resp.page]``.
-        _ = (target_name, topic_label, source_app, extra_filter)
-        raise NotImplementedError(
-            "Complete TODO(lab-3): MemoryBankManager.retrieve_scope_memories()"
-        )
+
+        config: dict[str, Any] = {}
+        if source_app:
+            config["filter_groups"] = [
+                {"filters": [{"key": "source_app", "value": {"string_value": source_app}}]}
+            ]
+
+        filter_clauses: list[str] = []
+        if topic_label:
+            filter_clauses.append(f"topics.custom_memory_topic_label: {topic_label}")
+        if extra_filter:
+            filter_clauses.append(f"({extra_filter})")
+        if filter_clauses:
+            config["filter"] = " AND ".join(filter_clauses)
+
+        kwargs: dict[str, Any] = {
+            "name": target_name,
+            "scope": resolved_scope,
+        }
+        if config:
+            kwargs["config"] = config
+
+        resp = self.client.memory_banks.memories.retrieve(**kwargs)
+        items = getattr(resp, "page", resp) or []
+        return [
+            {
+                "name": str(getattr(item.memory, "name", "")),
+                "fact": str(getattr(item.memory, "fact", "")),
+            }
+            for item in items
+        ]
 
     def get_memory(self, memory_name: str) -> Any:
         """Fetch a single memory resource by full resource name."""
@@ -790,10 +1041,15 @@ class MemoryBankManager:
 
     def list_revisions(self, memory_name: str, *, filter_expr: str | None = None) -> list[Any]:
         """List immutable revisions for a memory (retained up to 48h after deletion)."""
-        # TODO(lab-3): Return ``list(self.client.memory_banks.memories.revisions.list(
-        # name=memory_name, ...))``.
-        _ = (memory_name, filter_expr)
-        raise NotImplementedError("Complete TODO(lab-3): MemoryBankManager.list_revisions()")
+        # Pre-filled boilerplate helper (already working for the workshop)
+        if filter_expr:
+            return list(
+                self.client.memory_banks.memories.revisions.list(
+                    name=memory_name,
+                    config={"filter": filter_expr},
+                )
+            )
+        return list(self.client.memory_banks.memories.revisions.list(name=memory_name))
 
     def get_revision(self, revision_name: str) -> Any:
         """Fetch a single memory revision snapshot."""
@@ -801,27 +1057,34 @@ class MemoryBankManager:
 
     def rollback_memory(self, memory_name: str, target_revision_id: str) -> Any:
         """Roll back a memory to an earlier revision ID."""
-        # TODO(lab-3): Return ``self.client.memory_banks.memories.rollback(
-        # name=memory_name, target_revision_id=target_revision_id)``.
-        _ = (memory_name, target_revision_id)
-        raise NotImplementedError("Complete TODO(lab-3): MemoryBankManager.rollback_memory()")
+        # Pre-filled boilerplate helper (already working for the workshop)
+        return self.client.memory_banks.memories.rollback(
+            name=memory_name,
+            target_revision_id=target_revision_id,
+        )
 
     def delete_memory(self, memory_name: str, *, wait_for_completion: bool = True) -> Any:
         """Delete a single memory by resource name."""
-        # TODO(lab-3): Return ``self.client.memory_banks.memories.delete(
-        # name=memory_name, config={"wait_for_completion": wait_for_completion})``.
-        _ = (memory_name, wait_for_completion)
-        raise NotImplementedError("Complete TODO(lab-3): MemoryBankManager.delete_memory()")
+        # Pre-filled boilerplate helper (already working for the workshop)
+        return self.client.memory_banks.memories.delete(
+            name=memory_name,
+            config={"wait_for_completion": wait_for_completion},
+        )
 
     def purge_user_memories(self, user_id: str, force: bool = False) -> int:
         """Dry-run (``force=False``) or permanently purge (``force=True``) a user's memories."""
+        # Pre-filled boilerplate helper (already working for the workshop)
         target_name = self._require_memory_bank_name()
         validate_memory_scope({"user_id": user_id})
-        # TODO(lab-3): Call ``self.client.memory_banks.memories.purge(name=target_name,
-        # filter=f'scope.user_id="{user_id}"', force=force, config={"wait_for_completion": True})``
-        # and return ``int(getattr(op.response, "purge_count", 0) or 0)``.
-        _ = (target_name, force)
-        raise NotImplementedError("Complete TODO(lab-3): MemoryBankManager.purge_user_memories()")
+        escaped = user_id.replace("\\", "\\\\").replace('"', '\\"')
+        op = self.client.memory_banks.memories.purge(
+            name=target_name,
+            filter=f'scope.user_id="{escaped}"',
+            force=force,
+            config={"wait_for_completion": True},
+        )
+        response = getattr(op, "response", op)
+        return int(getattr(response, "purge_count", 0) or 0)
 
     def run_demo(
         self,

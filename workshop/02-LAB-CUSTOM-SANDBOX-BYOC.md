@@ -13,9 +13,24 @@
 By the end of Lab 2, you will:
 
 1. Smoke-test the non-root BYOC runner locally in pure Python (`make test-sandbox-local` — **zero local Docker!**), build and push the **non-root Debian BYOC coding sandbox image** (`starter/sandbox_image/Dockerfile` + `runner.py`) remotely via Cloud Build in **Bangkok (`asia-southeast3`)** into Artifact Registry (`make push-sandbox`), and grant **`roles/artifactregistry.reader`** to the **Agent Sandbox Service Agent** (`service-PROJECT_NUMBER@gcp-sa-vertex-sandbox.iam.gserviceaccount.com`) — or take the zero-build **`SANDBOX_MODE=shell`** fast-track in **Singapore (`asia-southeast1`)**.
-2. Implement `TODO(lab-2)` in [`starter/coding_agent/tools/sandbox_lifecycle.py`](../starter/coding_agent/tools/sandbox_lifecycle.py) covering the **complete `SandboxEnvironmentTemplate`, `SandboxEnvironment`, and `SandboxEnvironmentSnapshot` lifecycles** (create, get, list, update/recreate, pause, resume, snapshot/restore, delete) in **Singapore (`asia-southeast1`)**.
-3. Implement `TODO(lab-2)` in [`starter/coding_agent/tools/sandbox_execution.py`](../starter/coding_agent/tools/sandbox_execution.py) across **all three execution paths**—Shell Sandbox (`execute_bash`), BYOC Custom Container (`/exec`), and Code Execution (`execute_code` + ADK `AgentEngineSandboxCodeExecutor`)—plus a custom ADK **`BaseEnvironment`** subclass (`AgentPlatformSandboxEnvironment`) that lets `EnvironmentToolset` operate transparently against a remote managed sandbox.
+2. Implement the 4 focused `# TODO(lab-2)` lifecycle hooks (`create_template`, `create_sandbox`, `pause_sandbox`, `snapshot_sandbox`) in [`starter/coding_agent/tools/sandbox_lifecycle.py`](../starter/coding_agent/tools/sandbox_lifecycle.py) — alongside pre-filled CRUD/query helpers (`get`, `list`, `update`, `resume`, `delete`) — to run the complete **`SandboxEnvironmentTemplate`, `SandboxEnvironment`, and `SandboxEnvironmentSnapshot`** lifecycles in **Singapore (`asia-southeast1`)**.
+3. Implement the 2 focused `# TODO(lab-2)` execution hooks (`execute_byoc_command`, `AgentPlatformSandboxEnvironment.execute`) in [`starter/coding_agent/tools/sandbox_execution.py`](../starter/coding_agent/tools/sandbox_execution.py) — with supporting adapters (`execute_shell_command`, `execute_code_snippet`, `build_code_execution_executor`, and `AgentPlatformSandboxEnvironment`'s `initialize`/`read_file`/`write_file`) pre-filled — and wire `_build_remote_execution_components` in [`starter/coding_agent/agent.py`](../starter/coding_agent/agent.py) so ADK `EnvironmentToolset` operates transparently against a remote managed sandbox.
 4. Verify **gVisor credential isolation** (zero ambient credentials, blocked metadata server `169.254.169.254:80`), design **PSC-I + Cloud NGFW / Secure Web Proxy egress allowlisting**, and account for **TTLs (7d/14d), cold-start latencies (2m vs. seconds), and Cloud Audit Log / `stdout` blind spots**.
+
+---
+
+## Quick-Run TL;DR (Classroom Fast Path)
+
+- **Focused Exercises (High-Signal TODOs):** `sandbox_lifecycle.py` (`create_template`, `create_sandbox`, `pause_sandbox`, `snapshot_sandbox`), `sandbox_execution.py` (`execute_byoc_command`, `AgentPlatformSandboxEnvironment.execute`), and `agent.py` (`_build_remote_execution_components`) — *(CRUD `get`/`list`/`update`/`resume`/`delete` & supporting execution adapters pre-filled!)*
+- **Key Commands (Zero Local Docker — Bangkok Build + Singapore Sandboxes):**
+  ```bash
+  make test-sandbox-local                                   # Pure-Python localhost runner.py smoke test (zero Docker!)
+  make push-sandbox                                         # Remote Cloud Build (--region=asia-southeast3) -> AR (or SANDBOX_MODE=shell)
+  make sandbox-lifecycle-demo                               # Template -> Sandbox -> Pause -> Resume -> Snapshot -> Delete (asia-southeast1)
+  make verify-lab LAB=2
+  ```
+- **Antigravity AI-Assisted Mode (`.agents/skills/agent-platform-sandbox-byoc`):** *"Using `agent-platform-sandbox-byoc`, implement the `# TODO(lab-2)` lifecycle and execution functions in `starter/coding_agent/tools/` and `agent.py`, ensuring `BaseEnvironment` overrides accept keyword-only `*, ctx: Context | None = None`."*
+- **Fell Behind? Instant Catch-Up:** `make fast-forward LAB=2` *(syncs only Lab 2 without spoiling Labs 3–8 TODOs).*
 
 ---
 
@@ -162,7 +177,7 @@ Update `.env` with your `SANDBOX_IMAGE_URI` value before proceeding to Part B (o
 
 ## Part B: Implement `TODO(lab-2)` in `starter/coding_agent/tools/sandbox_lifecycle.py`
 
-Open [`starter/coding_agent/tools/sandbox_lifecycle.py`](../starter/coding_agent/tools/sandbox_lifecycle.py). You will implement `SandboxLifecycleManager` covering **every verified lifecycle operation** across all three resources:
+Open [`starter/coding_agent/tools/sandbox_lifecycle.py`](../starter/coding_agent/tools/sandbox_lifecycle.py). All CRUD/query helpers (`get`, `list`, `update`, `resume`, `delete` across templates, sandboxes, and snapshots) are **pre-filled**, so you focus strictly on the **4 `# TODO(lab-2)` lifecycle hooks** (`create_template`, `create_sandbox`, `pause_sandbox`, `snapshot_sandbox`) while reviewing the complete verified lifecycle across all three resources:
 
 1. **Lightweight Standalone Agent Platform Instance (`ReasoningEngine`)**: Prerequisite for all Managed Sandboxes — created in **~3 seconds** via `client.runtimes.create()` with **zero code deployment**. This single lightweight backing instance powers **both Lab 2 Sandboxes and Lab 3 Managed Sessions / Memory Bank**, letting you finish building your entire agent locally before deploying ONCE in Lab 5!
 2. **`SandboxEnvironmentTemplate`** (Create, Get, List, Update = Delete + Recreate, Delete).
@@ -338,7 +353,7 @@ Observe the timing difference firsthand: creating a brand-new template/sandbox f
 
 ## Part C: Implement `TODO(lab-2)` in `starter/coding_agent/tools/sandbox_execution.py`
 
-Open [`starter/coding_agent/tools/sandbox_execution.py`](../starter/coding_agent/tools/sandbox_execution.py). You will wire **all four execution adapters** so your Coding Agent can choose the right sandbox execution path for any workload.
+Open [`starter/coding_agent/tools/sandbox_execution.py`](../starter/coding_agent/tools/sandbox_execution.py). Supporting execution adapters (`execute_shell_command`, `execute_code_snippet`, `build_code_execution_executor`, and `AgentPlatformSandboxEnvironment`'s `initialize`, `read_file`, and `write_file` helpers) are **pre-filled** so you focus strictly on the **2 `# TODO(lab-2)` execution hooks** (`execute_byoc_command` and `AgentPlatformSandboxEnvironment.execute`) — plus `_build_remote_execution_components` in [`starter/coding_agent/agent.py`](../starter/coding_agent/agent.py) (7 `# TODO(lab-2)` functions total across Lab 2) — while reviewing how all four execution paths work together.
 
 ### Path A: Managed Shell Sandbox (`execute_bash()` -> `/exec`)
 

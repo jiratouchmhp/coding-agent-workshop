@@ -21,6 +21,21 @@ By the end of this lab, you will close the production quality flywheel for your 
 
 ---
 
+## Quick-Run TL;DR (Classroom Fast Path)
+
+- **Focused Exercises (High-Signal TODOs):** `run_offline_eval.py` (`evaluate_split_datasets`, `run_loss_clustering`), `run_simulated_eval.py` (`generate_scenarios`, `run_user_simulation`), `setup_online_monitor.py` (`validate_otel_prerequisites`), `setup_quality_alerts.py` (`build_alert_policy_dict`), and `optimize_prompt.py` (`run_prompt_optimization`, `publish_updated_skill`) — *(client/metrics/feedback setup helpers pre-filled!)*
+- **Key Commands (Zero Local Docker — `EVAL_LOCATION=global` + `asia-southeast1` Runtime):**
+  ```bash
+  make eval-offline                                         # Split single-turn & multi-turn JSON eval + global loss clustering
+  make eval-simulated                                       # 2-step simulated user personas (--count 5 --max-turns 5)
+  (cd starter && uv run python eval/setup_quality_alerts.py --dry-run && uv run python eval/optimize_prompt.py --iterations 2 --batch-size 4)
+  make verify-lab LAB=6
+  ```
+- **Antigravity AI-Assisted Mode (`.agents/skills/agent-platform-optimize-and-eval`):** *"Using `agent-platform-optimize-and-eval`, implement the `# TODO(lab-6)` functions in `starter/eval/` keeping `EVAL_LOCATION=global` for `generate_loss_clusters`, strict single/multi-turn dataset separation, and `monitoring_v3` `online_evaluator/scores` alerts."*
+- **Fell Behind? Instant Catch-Up:** `make fast-forward LAB=6` *(syncs only Lab 6 without spoiling Lab 8 TODOs).*
+
+---
+
 ## Half-Day Fast-Track Path (15-Minute Instructor Live Demo & Walkthrough)
 
 In the **3.5-hour Half-Day Fast-Track**, Lab 6 is delivered as a **15-minute instructor-led live demo and code walkthrough** (no attendee coding required) so the session reserves 25 full minutes for the [Lab 8](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) architecture briefing (skipping [Optional Lab 7](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md) cleanly):
@@ -233,10 +248,9 @@ Therefore, our 8 coding-agent evaluation cases are **explicitly split** into two
 - **[`starter/eval/datasets/coding_agent_eval.jsonl`](../starter/eval/datasets/coding_agent_eval.jsonl)**: Combined 8-case JSONL dataset automatically partitioned by `run_offline_eval.py --jsonl-dataset` into single-turn vs. multi-turn suites before calling the API.
 - **[`starter/eval/eval_config.yaml`](../starter/eval/eval_config.yaml)**: Declarative `agents-cli eval --config` configuration selecting metrics and custom criteria cleanly.
 
-Open [`starter/eval/run_offline_eval.py`](../starter/eval/run_offline_eval.py) and complete the `# TODO(lab-6)` blocks:
+Open [`starter/eval/run_offline_eval.py`](../starter/eval/run_offline_eval.py). Setup helpers **`build_eval_client()`** (initializing `vertexai.Client` targeting `EVAL_LOCATION`, default **`global`** for Bangkok/Singapore cohorts — APAC-ready and compatible with `generate_loss_clusters` in the same client; US/EU cohorts can alternatively use `us-central1` or `europe-west4`) and **`register_custom_coding_metrics()`** (registering custom LLM metric `coding_rigor_rubric` via `types.LLMMetric` and custom Code metric `multi_turn_has_turns` via `types.CodeExecutionMetric`) are **pre-filled** out of the box (shown below for reference). Complete the **2 `# TODO(lab-6)` functions** in **`evaluate_split_datasets()`** and **`run_loss_clustering()`**:
 
-1. **Initialize `vertexai.Client`** targeting `EVAL_LOCATION` (default **`global`** for Bangkok/Singapore cohorts — APAC-ready and compatible with `generate_loss_clusters` in the same client; US/EU cohorts can alternatively use `us-central1` or `europe-west4`).
-2. **Register a Custom LLM Metric (`types.LLMMetric`)** (`coding_rigor_rubric`) and a **Custom Code Metric (`types.CodeExecutionMetric`)** (`multi_turn_has_turns`) via `client.evals.create_evaluation_metric(...)`:
+1. *(Pre-filled helper reference — `build_eval_client()` & `register_custom_coding_metrics()`)* **Initialize `vertexai.Client` and register custom LLM (`types.LLMMetric`) / Code (`types.CodeExecutionMetric`) metrics via `client.evals.create_evaluation_metric(...)`:**
    ```python
    from vertexai import Client, types
 
@@ -272,7 +286,7 @@ Open [`starter/eval/run_offline_eval.py`](../starter/eval/run_offline_eval.py) a
    )
    code_metric_path = client.evals.create_evaluation_metric(metric=verify_turns_metric)
    ```
-3. **Run Offline Evaluation** with `client.evals.evaluate(...)` using the 4 predefined single-turn metrics with `SAFETY(version="v1")` pinned (when running live trace inference via `--run-inference` or trace-populated cases; static prompt/response datasets fall back to `GENERAL_QUALITY`, `FINAL_RESPONSE_MATCH`, `FINAL_RESPONSE_REFERENCE_FREE`, and `SAFETY(version="v1")`) plus the 3 `multi_turn_*` metrics for multi-turn session datasets, and capture the evaluation result for failure clustering in Part 4:
+2. **Implement `# TODO(lab-6)` in `evaluate_split_datasets()` and `run_loss_clustering()`:** Run `client.evals.evaluate(...)` separately for single-turn and multi-turn datasets using the 4 predefined single-turn metrics with `SAFETY(version="v1")` pinned (when running live trace inference via `--run-inference` or trace-populated cases; static prompt/response datasets fall back to `GENERAL_QUALITY`, `FINAL_RESPONSE_MATCH`, `FINAL_RESPONSE_REFERENCE_FREE`, and `SAFETY(version="v1")`) plus the 3 `multi_turn_*` metrics for multi-turn session datasets, and wire `run_loss_clustering()` (`location="global"`) for failure clustering in Part 4:
    ```python
    eval_result = client.evals.evaluate(
        dataset=eval_dataset,
@@ -363,7 +377,7 @@ The **2-Step User Simulation** workflow solves this:
 
 ### 3.1 Implement & Run `starter/eval/run_simulated_eval.py`
 
-Open [`starter/eval/run_simulated_eval.py`](../starter/eval/run_simulated_eval.py) and fill in the `# TODO(lab-6)` sections:
+Open [`starter/eval/run_simulated_eval.py`](../starter/eval/run_simulated_eval.py) and complete the **2 `# TODO(lab-6)` functions** (`generate_scenarios()` and `run_user_simulation()`; downstream `grade_simulated_traces()` and `cluster_simulation_failures()` helpers are **pre-filled**):
 
 ```python
 from vertexai import Client, types
@@ -458,7 +472,7 @@ Raw aggregate averages hide systemic engineering bugs (for example, a 0.78 Task 
 > 1. **`location="global"` ONLY:** The `GenerateLossClusters` API is **only available in the `global` region** — calling it on a regional `Client(location="us-central1")` fails at runtime!
 > 2. **Explicit `metric=` for Multi-Metric Results:** Auto-inference only works when `eval_result` contains a single metric. Because `sim_eval_result` contains **3 metrics** (`MULTI_TURN_TASK_SUCCESS`, `MULTI_TURN_TOOL_USE_QUALITY`, `MULTI_TURN_TRAJECTORY_QUALITY`), you **MUST** pass `metric=` explicitly!
 
-In `starter/eval/run_simulated_eval.py` (or a notebook), run Automatic Loss Analysis over your evaluation result using a **`global`** client and an explicit **`metric=`**:
+In `starter/eval/run_offline_eval.py` (`# TODO(lab-6)` in `run_loss_clustering()`) — and already pre-filled in `starter/eval/run_simulated_eval.py` (`cluster_simulation_failures()`) — Automatic Loss Analysis runs over your evaluation result using a **`global`** client and an explicit **`metric=`**:
 
 ```python
 from vertexai import Client, types
@@ -517,7 +531,7 @@ Offline tests validate known scenarios; **Online Evaluation Monitors** continuou
 > **Programmatic SDK Status (Verified Honesty):**
 > The official `evaluate-online` documentation currently configures `OnlineEvaluator` resources via the **Google Cloud Console** (no verified Python SDK `create_online_monitor()` signature is published in the docs). Therefore, [`starter/eval/setup_online_monitor.py`](../starter/eval/setup_online_monitor.py) programmatically validates your OTel telemetry env vars, verifies your deployed `ReasoningEngine`, outputs the exact monitor specification (sampling percentage, max samples/run, filter criteria, metrics), and prints ready-to-paste Logs Explorer diagnostic queries.
 
-Complete the `# TODO(lab-6)` validation checks in [`starter/eval/setup_online_monitor.py`](../starter/eval/setup_online_monitor.py) and run it:
+Complete `# TODO(lab-6)` in **`validate_otel_prerequisites()`** inside [`starter/eval/setup_online_monitor.py`](../starter/eval/setup_online_monitor.py) (`build_online_monitor_spec()` and `verify_deployed_runtime()` are **pre-filled**) and run it:
 
 ```bash
 cd starter && uv run python eval/setup_online_monitor.py
@@ -553,7 +567,7 @@ Online Monitors export two verified Cloud Monitoring metric descriptors under mo
 - **`aiplatform.googleapis.com/online_evaluator/scores`** (`DELTA`, `DISTRIBUTION`; labels: `agent_resource_name`, `evaluation_metric_name`, `runtime_revision_id`)
 - **`aiplatform.googleapis.com/online_evaluator/evaluations_count`** (`DELTA`, `INT64`; labels: `agent_resource_name`, `evaluation_metric_name`, `evaluation_status`, `runtime_revision_id`)
 
-Open [`starter/eval/setup_quality_alerts.py`](../starter/eval/setup_quality_alerts.py) and complete the `# TODO(lab-6)` block using `google.cloud.monitoring_v3`:
+Open [`starter/eval/setup_quality_alerts.py`](../starter/eval/setup_quality_alerts.py) and complete `# TODO(lab-6)` in **`build_alert_policy_dict()`** using `google.cloud.monitoring_v3` (`create_alert_policy()` is **pre-filled**):
 
 ```python
 from google.cloud import monitoring_v3
@@ -646,11 +660,9 @@ Now feed your **Failure Clusters** (Part 4) and **Feedback Service** negative en
 
 ### 6.2 Implement & Run `starter/eval/optimize_prompt.py` + `agents-cli eval optimize`
 
-Open [`starter/eval/optimize_prompt.py`](../starter/eval/optimize_prompt.py) and complete the `# TODO(lab-6)` blocks to:
-1. Pull recent `THUMBS_DOWN` entries from the Feedback Service (`client.feedback_entries.list(...)`) to prioritize real user failure cases.
-2. Run ADK's `SimplePromptOptimizer`, `GEPARootAgentPromptOptimizer`, or **`GEPARootAgentOptimizer`** (`--optimizer gepa-skills`) via `LocalEvalSampler` + `LocalEvalSetsManager` without mutating your original `root_agent`.
-3. When `--optimizer gepa-skills` is chosen, attach your local skill directory (`--skill-dir skills_to_register/secure-code-review`) via `from google.adk.skills import load_skill_from_dir`, extract the optimized skill instructions while **preserving the original YAML frontmatter**, and write candidate diffs to `artifacts/optimized_instruction.txt` and `artifacts/optimized_skills/secure-code-review/SKILL.md`.
-4. Implement `publish_updated_skill()` (`--publish-skill`) to re-validate all 16 atomic Skill Registry rules and hot-update Vertex AI Skill Registry via `client.skills.update(...)`.
+Open [`starter/eval/optimize_prompt.py`](../starter/eval/optimize_prompt.py). Setup helpers **`fetch_negative_feedback()`** (pulling recent `THUMBS_DOWN` entries from the Feedback Service via `client.feedback_entries.list(...)`), **`_attach_local_skill_for_gepa()`** (loading local skills via `from google.adk.skills import load_skill_from_dir` for `GEPARootAgentOptimizer`), **`_extract_optimized_skills()`** (preserving original YAML frontmatter), and **`build_adk_sampler_and_optimizer()`** (wiring `LocalEvalSampler`, `LocalEvalSetsManager`, and `SimplePromptOptimizer` / `GEPARootAgentPromptOptimizer` / `GEPARootAgentOptimizer`) are **pre-filled** out of the box. Complete the **2 `# TODO(lab-6)` functions**:
+1. **`run_prompt_optimization()`:** Verify `root_agent`'s instruction via `_extract_root_instruction()`, attach your local skill directory (`--skill-dir skills_to_register/secure-code-review`) via `_attach_local_skill_for_gepa()` when `--optimizer gepa-skills` is chosen, invoke `build_adk_sampler_and_optimizer()` and await `optimizer.optimize(target_agent, sampler)` without mutating your original `root_agent`, extract frontmatter-preserved skill instructions via `_extract_optimized_skills()`, and return unified diffs so `main()` writes candidate outputs to `artifacts/optimized_instruction.txt` and `artifacts/optimized_skills/secure-code-review/SKILL.md`.
+2. **`publish_updated_skill()` (`--publish-skill`):** Re-validate all 16 atomic Skill Registry rules via `scripts/package_registry_skill.py` and hot-update Vertex AI Skill Registry via `client.skills.update(...)` with zero agent container rebuild.
 
 > [!IMPORTANT]
 > **Two Source-Verified ADK `GEPARootAgentOptimizer` Gotchas:**

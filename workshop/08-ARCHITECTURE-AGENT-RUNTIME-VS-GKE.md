@@ -20,6 +20,20 @@ By the end of this module, you will be able to:
 
 ---
 
+## Quick-Run TL;DR (Classroom Fast Path)
+
+- **Focused Exercises (High-Signal TODOs):** Optional GKE comparison overlay in `starter/gke_reference/gke_agent_example.py` (`build_gke_code_executor`, `build_gke_coding_agent`, `run_warmpool_sdk_smoke_test`) + `rbac.yaml` / `sandbox_template.yaml` / `sandbox_warmpool.yaml` *(architecture review & manifest walkthrough require zero live GKE cluster!)*.
+- **Key Commands (Zero Local Docker — Optional GKE Cluster in Bangkok `asia-southeast3`):**
+  ```bash
+  make verify-lab LAB=8                                     # Validate starter/gke_reference/ YAML + Python TODOs locally
+  make verify-lab LAB=8 TRACK=solution                      # Inspect/verify complete GKE Agent Sandbox overlay directly
+  kubectl apply -f solution/gke_reference/                  # Optional (only if a GKE gVisor cluster is provisioned)
+  ```
+- **Antigravity AI-Assisted Mode (`.agents/skills/agent-runtime-vs-gke-architecture`):** *"Using `agent-runtime-vs-gke-architecture`, complete the `# TODO(lab-8)` VAP hardening in `starter/gke_reference/` and evaluate whether our workload belongs on Agent Runtime (`asia-southeast1`) or Self-Hosted GKE (`asia-southeast3`)."*
+- **Fell Behind? Instant Catch-Up:** `make fast-forward LAB=8` *(syncs only Lab 8 `gke_reference/` files from `solution/`).*
+
+---
+
 ## 1. The Four Production Architecture Options
 
 ### Option A — Gemini Enterprise Agent Platform (Agent Runtime + Managed BYOC Sandbox)

@@ -28,6 +28,7 @@ SKILL_DIR ?= $(TRACK)/skills_to_register/secure-code-review
 SKILL_ZIP_OUT ?= dist/secure-code-review.zip
 PYTHON ?= python3
 PREFLIGHT_ARGS ?=
+FAST_FORWARD_ARGS ?=
 CLEANUP_ARGS ?=
 
 # Helper shell snippet to load `.env` without breaking on comments or quotes
@@ -98,7 +99,7 @@ export _TEST_AGENT_LOCAL_PY
 .PHONY: help preflight install install-pip lint test-sandbox-local build-sandbox \
         push-sandbox sandbox-lifecycle-demo package-skill test-agent-local \
         pack-agent-source push-agent tf-plan tf-apply eval-offline eval-simulated \
-        validate-skills verify-lab cleanup
+        validate-skills fast-forward verify-lab cleanup
 
 help: ## Print available workshop targets and usage examples
 	@echo "Enterprise Coding Agent Workshop — Makefile Targets"
@@ -115,6 +116,8 @@ help: ## Print available workshop targets and usage examples
 	@echo "  make test-agent-local          # Lab 5 zero-Docker smoke test"
 	@echo "  make pack-agent-source         # Lab 5 zero-Docker / zero-AR tarball"
 	@echo "  make validate-skills"
+	@echo "  make fast-forward LAB=2        # Catch up on Lab 2 without spoiling Labs 3-6"
+	@echo "  make fast-forward LAB=2 FAST_FORWARD_ARGS=--dry-run"
 	@echo "  make verify-lab LAB=1"
 	@echo "  make TRACK=solution eval-offline"
 	@echo "  make cleanup CLEANUP_ARGS=--dry-run"
@@ -375,6 +378,10 @@ eval-simulated: ## Lab 6: Run 2-step simulated user evaluation personas
 validate-skills: ## Validate all Antigravity workshop skills under .agents/skills/
 	@echo "==> Validating .agents/skills/..."
 	$(PYTHON) scripts/validate_skills.py .agents/skills
+
+fast-forward: ## Catch up on a lab by syncing solution/ into starter/ without spoiling later labs (usage: make fast-forward LAB=1..6|8|all; supports FAST_FORWARD_ARGS=--dry-run)
+	@echo "==> Fast-forwarding starter/ for LAB=$(LAB)..."
+	./scripts/fast_forward_lab.sh "$(LAB)" $(FAST_FORWARD_ARGS)
 
 verify-lab: ## Verify Labs 1-8 checkpoints locally (usage: make verify-lab LAB=1..8|all)
 	@echo "==> Running verify_lab.sh for LAB=$(LAB) (TRACK=$(TRACK))..."

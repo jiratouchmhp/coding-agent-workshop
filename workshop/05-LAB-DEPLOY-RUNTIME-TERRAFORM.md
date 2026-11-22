@@ -31,6 +31,21 @@ By the end of this lab, you will be able to:
 
 ---
 
+## Quick-Run TL;DR (Classroom Fast Path)
+
+- **Focused Exercises (High-Signal TODOs):** `starter/main.py` (`get_runtime_app`, `query_endpoint`, `stream_query_endpoint`) + `starter/terraform/main.tf` (5 focused uncomment blocks: `roles/aiplatform.memoryUser`, dual service-agent AR bindings, `container_spec`, runtime `env` & `secret_env`, and IAM `depends_on`) — *(Dockerfile, variables & outputs pre-filled!)*
+- **Key Commands (Zero Local Docker — Choose `push-agent` OR Zero-AR `pack-agent-source`):**
+  ```bash
+  make test-agent-local                                     # Pure-Python FastAPI localhost smoke test (GET / -> 200; zero Docker!)
+  make push-agent                                           # Remote Cloud Build (--region=asia-southeast3) — OR: make pack-agent-source (zero AR!)
+  make tf-plan && make tf-apply                             # Declarative deploy to Singapore (asia-southeast1) with IAM depends_on
+  make verify-lab LAB=5
+  ```
+- **Antigravity AI-Assisted Mode (`.agents/skills/agent-platform-runtime-and-state`):** *"Using `agent-platform-runtime-and-state`, complete the `# TODO(lab-5)` handlers in `starter/main.py` and uncomment the 5 IAM/`container_spec`/`depends_on` blocks in `starter/terraform/main.tf` without triggering `IMAGE_PULL_BACKOFF`."*
+- **Fell Behind? Instant Catch-Up:** `make fast-forward LAB=5` *(syncs only Lab 5 without spoiling Labs 6–8 TODOs).*
+
+---
+
 ## Half-Day Fast-Track Path
 
 If you are running on the **3.5-hour Half-Day Fast-Track** (30 minutes):

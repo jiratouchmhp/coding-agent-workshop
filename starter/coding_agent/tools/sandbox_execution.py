@@ -1,5 +1,15 @@
 """Managed Sandbox Execution Paths & Custom ADK BaseEnvironment (starter track — Lab 2).
 
+Focused Lab 2 exercises in this module (2 core execution hooks):
+- ``execute_byoc_command()`` — invoke a BYOC container's ``/exec`` endpoint via direct
+  HTTP (local / PSC-E) or the Managed Sandbox data-plane proxy (``send_command``).
+- ``AgentPlatformSandboxEnvironment.execute()`` — dispatch ADK ``EnvironmentToolset``
+  commands to the session's Managed Shell or BYOC Sandbox and return ``ExecutionResult``.
+
+All supporting adapters (``execute_shell_command``, ``execute_code_snippet``,
+``build_code_execution_executor``, and ``AgentPlatformSandboxEnvironment``'s
+``initialize`` / ``read_file`` / ``write_file`` helpers) are pre-filled for the workshop.
+
 Covers ALL FOUR verified execution adapters on Gemini Enterprise Agent Platform:
 - **Path A — Shell Sandbox (`execute_bash()` via `/exec`):**
   Uses caller ADC/IAM automatically (`aiplatform.sandboxEnvironments.execute`).
@@ -28,10 +38,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import json
 import logging
 import posixpath
+import shlex
 import sys
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Literal
@@ -171,12 +184,20 @@ def execute_shell_command(
       stateless shell per call under ``/workspace`` — chain ``cd`` & env vars in one
       command or write state to files under ``/workspace``.
     """
-    # TODO(lab-2): Resolve ``sandboxes_ns = get_sandboxes_namespace(client)``,
-    # call ``sandboxes_ns.execute_bash(name=sandbox_name, command=command, cwd=cwd, ...)``
-    # (passing ``timeout=int(timeout)`` when ``timeout is not None``), and return
-    # ``_normalize_command_response(result, elapsed_ms)``.
-    _ = (client, sandbox_name, command, cwd, timeout)
-    raise NotImplementedError("Complete TODO(lab-2): execute_shell_command()")
+    # Pre-filled boilerplate helper (already working for the workshop)
+    sandboxes_ns = get_sandboxes_namespace(client)
+    kwargs: dict[str, Any] = {
+        "name": sandbox_name,
+        "command": command,
+        "cwd": cwd,
+    }
+    if timeout is not None:
+        kwargs["timeout"] = max(1, int(timeout))
+
+    start = time.monotonic()
+    raw_result = sandboxes_ns.execute_bash(**kwargs)
+    elapsed_ms = max(0, int((time.monotonic() - start) * 1000))
+    return _normalize_command_response(raw_result, elapsed_ms)
 
 
 # ---------------------------------------------------------------------------
@@ -276,12 +297,51 @@ def execute_code_snippet(
     and output files arrive as separate ``Chunk`` items with ``chunk.attributes["file_name"]``
     and raw bytes in ``chunk.data``.
     """
-    # TODO(lab-2): Build ``input_data = {"code": code}`` (adding ``"files": files`` if provided),
-    # invoke ``sandboxes_ns.execute_code(name=sandbox_name, input_data=input_data)``,
-    # iterate ``response.outputs`` chunks (JSON vs binary file chunks), and return
-    # ``CodeExecutionOutput(stdout=..., stderr=..., files=...)``.
-    _ = (client, sandbox_name, code, files)
-    raise NotImplementedError("Complete TODO(lab-2): execute_code_snippet()")
+    # Pre-filled boilerplate helper (already working for the workshop)
+    sandboxes_ns = get_sandboxes_namespace(client)
+    input_data: dict[str, Any] = {"code": code}
+    if files:
+        input_data["files"] = files
+
+    response = sandboxes_ns.execute_code(name=sandbox_name, input_data=input_data)
+
+    stdout_parts: list[str] = []
+    stderr_parts: list[str] = []
+    output_files: list[dict[str, Any]] = []
+
+    for chunk in getattr(response, "outputs", None) or []:
+        mime_type = str(getattr(chunk, "mime_type", "") or "")
+        raw_data = getattr(chunk, "data", b"") or b""
+        if mime_type == "application/json":
+            decoded = (
+                raw_data.decode("utf-8", errors="replace")
+                if isinstance(raw_data, (bytes, bytearray))
+                else str(raw_data)
+            )
+            status = json.loads(decoded)
+            if status.get("msg_out"):
+                stdout_parts.append(str(status["msg_out"]))
+            if status.get("msg_err"):
+                stderr_parts.append(str(status["msg_err"]))
+        else:
+            attrs = getattr(chunk, "attributes", None) or {}
+            output_files.append(
+                {
+                    "name": attrs.get("file_name", ""),
+                    "mime_type": mime_type,
+                    "content": (
+                        bytes(raw_data)
+                        if isinstance(raw_data, (bytes, bytearray))
+                        else str(raw_data).encode("utf-8")
+                    ),
+                }
+            )
+
+    return CodeExecutionOutput(
+        stdout="".join(stdout_parts),
+        stderr="".join(stderr_parts),
+        files=output_files,
+    )
 
 
 def build_code_execution_executor(
@@ -295,13 +355,21 @@ def build_code_execution_executor(
     - ``sandbox_resource_name``: reuse a specific pre-created Code Execution sandbox, OR
     - ``agent_engine_resource_name``: let ADK auto-create one persistent sandbox per session.
     """
-    # TODO(lab-2): Import ``AgentEngineSandboxCodeExecutor`` from
-    # ``google.adk.code_executors.agent_engine_sandbox_code_executor``.
-    # Validate that at least one resource name is non-empty and return
-    # ``AgentEngineSandboxCodeExecutor(sandbox_resource_name=...)`` OR
-    # ``AgentEngineSandboxCodeExecutor(agent_engine_resource_name=...)``.
-    _ = (sandbox_resource_name, agent_engine_resource_name)
-    raise NotImplementedError("Complete TODO(lab-2): build_code_execution_executor()")
+    # Pre-filled boilerplate helper (already working for the workshop)
+    from google.adk.code_executors.agent_engine_sandbox_code_executor import (
+        AgentEngineSandboxCodeExecutor,
+    )
+
+    if sandbox_resource_name:
+        return AgentEngineSandboxCodeExecutor(sandbox_resource_name=sandbox_resource_name)
+    if agent_engine_resource_name:
+        return AgentEngineSandboxCodeExecutor(
+            agent_engine_resource_name=agent_engine_resource_name
+        )
+    raise ValueError(
+        "build_code_execution_executor() requires either `sandbox_resource_name` "
+        "or `agent_engine_resource_name` (REASONING_ENGINE_NAME)."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -371,6 +439,15 @@ class AgentPlatformSandboxEnvironment(BaseEnvironment):
                 return str(state[self.STATE_KEY])
         return self._fallback_sandbox_name
 
+    def _store_active_sandbox_name(self, sandbox_name: str, ctx: Context | None) -> None:
+        # Pre-filled boilerplate helper (already working for the workshop)
+        if ctx is not None:
+            state = getattr(ctx, "state", None)
+            if state is not None:
+                state[self.STATE_KEY] = sandbox_name
+                return
+        self._fallback_sandbox_name = sandbox_name
+
     @property
     @override
     def scope(self) -> EnvironmentScope:
@@ -385,32 +462,60 @@ class AgentPlatformSandboxEnvironment(BaseEnvironment):
     @override
     async def initialize(self, *, ctx: Context | None = None) -> None:
         """Ensure the current session has a live Managed Sandbox recorded in ``ctx.state``."""
+        # Pre-filled boilerplate helper (already working for the workshop)
         # CRITICAL: Do NOT short-circuit on `if self._is_initialized: return`!
         # Always check `ctx.state.get(self.STATE_KEY)` per session.
         if self._runner_base_url:
             self._is_initialized = True
             return
 
-        # TODO(lab-2):
-        # 1. If ``self._get_active_sandbox_name(ctx)`` is already set, return immediately.
-        # 2. If ``self._fixed_sandbox_name`` was provided, store it in ``ctx.state[self.STATE_KEY]``
-        #    (if ``ctx is not None``) and mark ``self._is_initialized = True``.
-        # 3. Otherwise resolve the owning parent ReasoningEngine BEFORE constructing
-        #    ``SandboxLifecycleManager``:
-        #      ``resolved_parent = (_infer_parent_instance(self._template_name) if self._template_name else "") or self._instance_name or None``
-        #    so BYOC templates always target their owning Lab 2 parent ReasoningEngine (per the
-        #    REST contract: templates must belong to the parent Agent Engine resource), while
-        #    template-less ``shell`` mode reuses the deployed Agent Runtime (auto-synthesized
-        #    from ``GOOGLE_CLOUD_AGENT_ENGINE_ID``) without spawning orphan engines.
-        # 4. Provision a Managed Sandbox via ``SandboxLifecycleManager(..., instance_name=resolved_parent)``
-        #    inside ``await asyncio.to_thread(...)``: only send inline ``spec`` when no template is set
-        #    (``spec = None if self._template_name else ({"shell_environment": {}} if self._mode == "shell" else None)``)
-        #    so an explicit shell or BYOC template never collides with an inline ``spec``; pass
-        #    ``template_name=self._template_name`` and ``spec=spec``, store ``sandbox.name`` in
-        #    ``ctx.state[self.STATE_KEY]`` (or ``self._fallback_sandbox_name``), append to
-        #    ``self._created_sandboxes``, and set ``self._is_initialized = True``.
-        _ = _infer_parent_instance
-        raise NotImplementedError("Complete TODO(lab-2): AgentPlatformSandboxEnvironment.initialize()")
+        if self._get_active_sandbox_name(ctx):
+            self._is_initialized = True
+            return
+
+        if self._fixed_sandbox_name:
+            self._store_active_sandbox_name(self._fixed_sandbox_name, ctx)
+            self._is_initialized = True
+            return
+
+        if self._mode == "byoc" and not self._template_name:
+            raise ValueError(
+                "BYOC mode requires `template_name` (SANDBOX_TEMPLATE_NAME), "
+                "a pre-created `sandbox_name`, or `runner_base_url`."
+            )
+
+        def _provision() -> str:
+            resolved_parent = (
+                (_infer_parent_instance(self._template_name) if self._template_name else "")
+                or self._instance_name
+                or None
+            )
+            manager = SandboxLifecycleManager(
+                project_id=self._project_id,
+                location=self._location,
+                instance_name=resolved_parent,
+                client=self._get_client(),
+            )
+            parent = manager.ensure_parent_instance(display_name="coding-agent-sandbox-parent")
+            self._instance_name = parent
+            # Only pass inline `spec` when no template is configured so an explicit template
+            # never collides with an inline `spec`.
+            spec = None if self._template_name else ({"shell_environment": {}} if self._mode == "shell" else None)
+            created = manager.create_sandbox(
+                display_name=f"coding-agent-{self._mode}-session",
+                template_name=self._template_name,
+                spec=spec,
+                ttl=self._ttl,
+                wait_for_completion=True,
+                instance_name=parent,
+            )
+            return created.name
+
+        sandbox_name = await asyncio.to_thread(_provision)
+        self._created_sandboxes.append(sandbox_name)
+        self._store_active_sandbox_name(sandbox_name, ctx)
+        self._is_initialized = True
+        logger.info("Bound session to Managed Sandbox: %s", sandbox_name)
 
     @override
     async def execute(
@@ -432,13 +537,21 @@ class AgentPlatformSandboxEnvironment(BaseEnvironment):
     @override
     async def read_file(self, path: Path, *, ctx: Context | None = None) -> bytes:
         """Read raw bytes from ``path`` inside the sandbox (raises ``FileNotFoundError`` if missing)."""
+        # Pre-filled boilerplate helper (already working for the workshop)
         resolved = resolve_sandbox_path(path, self._working_dir)
-        # TODO(lab-2): Run a small Python one-liner via ``await self.execute(...)`` that
-        # reads ``str(resolved)`` as binary and prints base64 to stdout (exiting with
-        # ``_MISSING_FILE_EXIT_CODE`` if the file does not exist). Raise ``FileNotFoundError``
-        # when ``res.exit_code == _MISSING_FILE_EXIT_CODE`` and decode base64 to ``bytes``.
-        _ = (resolved, ctx)
-        raise NotImplementedError("Complete TODO(lab-2): AgentPlatformSandboxEnvironment.read_file()")
+        py_script = (
+            "import base64, pathlib, sys; "
+            "p = pathlib.Path(sys.argv[1]); "
+            f"sys.exit({_MISSING_FILE_EXIT_CODE}) if not p.is_file() else None; "
+            "sys.stdout.write(base64.b64encode(p.read_bytes()).decode('ascii'))"
+        )
+        cmd = f"python3 -c {shlex.quote(py_script)} {shlex.quote(str(resolved))}"
+        res = await self.execute(cmd, ctx=ctx)
+        if res.exit_code == _MISSING_FILE_EXIT_CODE:
+            raise FileNotFoundError(str(resolved))
+        if res.exit_code != 0:
+            raise OSError(f"Failed to read {str(resolved)!r} inside sandbox: {res.stderr.strip()}")
+        return base64.b64decode(res.stdout.encode("ascii"))
 
     @override
     async def write_file(
@@ -449,13 +562,37 @@ class AgentPlatformSandboxEnvironment(BaseEnvironment):
         ctx: Context | None = None,
     ) -> None:
         """Create parent directories and write ``str`` (UTF-8) or ``bytes`` inside the sandbox."""
+        # Pre-filled boilerplate helper (already working for the workshop)
         resolved = resolve_sandbox_path(path, self._working_dir)
         raw_bytes = content.encode("utf-8") if isinstance(content, str) else bytes(content)
-        # TODO(lab-2): Write ``raw_bytes`` to ``str(resolved)`` via ``await self.execute(...)``
-        # (creating parent dirs with ``mkdir(parents=True, exist_ok=True)`` and chunking large
-        # payloads in ``_WRITE_CHUNK_BYTES`` base64 blocks so shell ARG_MAX is never exceeded).
-        _ = (resolved, raw_bytes, ctx)
-        raise NotImplementedError("Complete TODO(lab-2): AgentPlatformSandboxEnvironment.write_file()")
+
+        # Split large writes into base64 chunks so OS ARG_MAX limits are never exceeded.
+        chunks = [
+            raw_bytes[i : i + _WRITE_CHUNK_BYTES]
+            for i in range(0, len(raw_bytes), _WRITE_CHUNK_BYTES)
+        ] or [b""]
+
+        py_script = (
+            "import base64, pathlib, sys; "
+            "p = pathlib.Path(sys.argv[1]); "
+            "mode = sys.argv[2]; "
+            "data = base64.b64decode(sys.argv[3].encode('ascii')); "
+            "p.parent.mkdir(parents=True, exist_ok=True); "
+            "f = p.open(mode); f.write(data); f.close()"
+        )
+
+        for idx, chunk in enumerate(chunks):
+            file_mode = "wb" if idx == 0 else "ab"
+            b64_payload = base64.b64encode(chunk).decode("ascii")
+            cmd = (
+                f"python3 -c {shlex.quote(py_script)} "
+                f"{shlex.quote(str(resolved))} {file_mode} {shlex.quote(b64_payload)}"
+            )
+            res = await self.execute(cmd, ctx=ctx)
+            if res.exit_code != 0:
+                raise OSError(
+                    f"Failed to write {str(resolved)!r} inside sandbox: {res.stderr.strip()}"
+                )
 
     @override
     async def close(self) -> None:

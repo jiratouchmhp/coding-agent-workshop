@@ -1,13 +1,13 @@
 """2-Step Simulated User Evaluation & Loss Clustering (Lab 6 — Starter).
 
-Complete the ``# TODO(lab-6)`` blocks following ``workshop/06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md``:
-1. Extract ``types.evals.AgentInfo.load_from_agent(agent=root_agent)`` and call
-   ``client.evals.generate_conversation_scenarios(...)``.
-2. Execute multi-turn simulation with ``client.evals.run_inference(...)`` and
-   ``user_simulator_config={"max_turn": max_turns}``.
-3. Grade simulated traces strictly with the 3 ``MULTI_TURN_*`` metrics.
-4. Cluster failures with ``Client(project=project_id, location="global")`` and
-   an explicit ``metric=`` argument.
+Core Lab 6 exercises (see ``workshop/06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md``):
+1. ``generate_scenarios()``: Extract ``types.evals.AgentInfo.load_from_agent(agent=root_agent)``
+   and call ``client.evals.generate_conversation_scenarios(...)``.
+2. ``run_user_simulation()``: Execute multi-turn simulation with
+   ``client.evals.run_inference(...)`` and ``user_simulator_config={"max_turn": max_turns}``.
+
+Downstream grading and failure clustering helpers (``grade_simulated_traces()``,
+``cluster_simulation_failures()``) are pre-filled so you can focus on 2-step user simulation.
 """
 
 from __future__ import annotations
@@ -93,13 +93,16 @@ def run_user_simulation(
 
 def grade_simulated_traces(client: Any, simulated_traces: Any) -> Any:
     """Step 3: Grade multi-turn traces strictly using ``MULTI_TURN_*`` metrics."""
-    # TODO(lab-6): Call `client.evals.evaluate(dataset=simulated_traces, metrics=[
-    #     types.RubricMetric.MULTI_TURN_TASK_SUCCESS,
-    #     types.RubricMetric.MULTI_TURN_TOOL_USE_QUALITY,
-    #     types.RubricMetric.MULTI_TURN_TRAJECTORY_QUALITY,
-    # ])`.
-    raise NotImplementedError(
-        f"TODO(lab-6): Grade {simulated_traces!r} with MULTI_TURN_* metrics using {client!r}."
+    # Pre-filled boilerplate helper
+    from vertexai import types
+
+    return client.evals.evaluate(
+        dataset=simulated_traces,
+        metrics=[
+            types.RubricMetric.MULTI_TURN_TASK_SUCCESS,
+            types.RubricMetric.MULTI_TURN_TOOL_USE_QUALITY,
+            types.RubricMetric.MULTI_TURN_TRAJECTORY_QUALITY,
+        ],
     )
 
 
@@ -109,11 +112,20 @@ def cluster_simulation_failures(
     metric_name: str = "multi_turn_task_success",
 ) -> Any:
     """Step 4: Run Automatic Loss Analysis in ``global`` with explicit ``metric=``."""
-    # TODO(lab-6): Create `global_client = Client(project=project_id, location="global")`
-    # and return `global_client.evals.generate_loss_clusters(eval_result=sim_eval_result, metric=...)`.
-    raise NotImplementedError(
-        f"TODO(lab-6): Cluster failures in global region for project={project_id!r}, "
-        f"metric={metric_name!r}, result={sim_eval_result!r}."
+    # Pre-filled boilerplate helper
+    from vertexai import Client, types
+
+    metric_map = {
+        "multi_turn_task_success": types.RubricMetric.MULTI_TURN_TASK_SUCCESS,
+        "multi_turn_tool_use_quality": types.RubricMetric.MULTI_TURN_TOOL_USE_QUALITY,
+    }
+    if metric_name not in metric_map:
+        raise ValueError(f"Unsupported metric {metric_name!r}; expected {sorted(metric_map)}.")
+
+    global_client = Client(project=project_id, location="global")
+    return global_client.evals.generate_loss_clusters(
+        eval_result=sim_eval_result,
+        metric=metric_map[metric_name],
     )
 
 

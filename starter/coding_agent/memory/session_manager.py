@@ -1,13 +1,15 @@
 """Managed Sessions integration & lifecycle CLI (starter track — Lab 3).
 
-Complete the ``# TODO(lab-3)`` sections below to wire:
-1. **ADK Integration (`build_adk_session_service`):**
-   Return ``VertexAiSessionService`` when GCP project + ``agent_engine_id`` are
-   configured, with fallback to ``InMemorySessionService`` for offline local runs.
-2. **Direct Agent Platform SDK (`SessionLifecycleManager`):**
-   Wrap ``agentplatform.Client.sessions.{create, get, list, delete}`` and
-   ``agentplatform.Client.sessions.events.{append, list}`` with safe handling for
-   both LRO (``.response.name``) and direct Session (``.name``) return types.
+Focused Lab 3 exercises in this module (2 core session operations):
+1. ``build_adk_session_service()`` — Return ``VertexAiSessionService`` when GCP
+   project + ``agent_engine_id`` are configured, with fallback to
+   ``InMemorySessionService`` for offline local runs.
+2. ``SessionLifecycleManager.create_session()`` — Create a Managed Session with
+   explicit TTL/expiry and safe handling for both LRO (``.response.name``) and
+   direct Session (``.name``) return types.
+
+All remaining CRUD/event helpers (``get_session``, ``list_sessions``,
+``append_event``, ``list_events``, ``delete_session``) are pre-filled for the workshop.
 
 Verified Platform Rules & Gotchas:
 - ``user_id`` max length is **128 characters**.
@@ -269,18 +271,27 @@ class SessionLifecycleManager:
 
     def get_session(self, session_name: str, user_id: str) -> Any:
         """Fetch a single Managed Session resource."""
+        # Pre-filled boilerplate helper (already working for the workshop)
         validate_session_identifiers(user_id)
-        # TODO(lab-3): Return ``self.client.sessions.get(name=session_name, user_id=user_id)``.
-        _ = (session_name, user_id)
-        raise NotImplementedError("Complete TODO(lab-3): SessionLifecycleManager.get_session()")
+        return self.client.sessions.get(name=session_name, user_id=user_id)
 
     def list_sessions(self, user_id: str | None = None) -> list[Any]:
-        """List Managed Sessions under the parent runtime (default order: ``create_time desc``)."""
+        """List Managed Sessions under the parent runtime (default order: ``create_time desc``).
+
+        Note: The Python SDK does not expose ``order_by``; use REST
+        ``GET .../sessions?orderBy=update_time`` when custom sort orders are required.
+        """
+        # Pre-filled boilerplate helper (already working for the workshop)
         runtime_name = self._require_runtime_name()
-        # TODO(lab-3): Call ``self.client.sessions.list(name=runtime_name, config={"filter": f"user_id={user_id}"})``
-        # when ``user_id`` is provided (else omit ``config``) and return ``list(...)``.
-        _ = (runtime_name, user_id)
-        raise NotImplementedError("Complete TODO(lab-3): SessionLifecycleManager.list_sessions()")
+        if user_id is not None:
+            validate_session_identifiers(user_id)
+            return list(
+                self.client.sessions.list(
+                    name=runtime_name,
+                    config={"filter": f"user_id={user_id}"},
+                )
+            )
+        return list(self.client.sessions.list(name=runtime_name))
 
     def append_event(
         self,
@@ -294,18 +305,26 @@ class SessionLifecycleManager:
         timestamp: datetime.datetime | None = None,
     ) -> Any:
         """Append either a structured ``content`` event or a custom ``raw_event`` payload."""
+        # Pre-filled boilerplate helper (already working for the workshop)
         if text is None and raw_event is None:
             raise ValueError("Provide either text or raw_event when appending a session event.")
         if text is not None and raw_event is not None:
             raise ValueError("Provide either text or raw_event, not both.")
 
         event_ts = timestamp or datetime.datetime.now(tz=datetime.UTC)
-        # TODO(lab-3): Build ``config={"raw_event": raw_event}`` or
-        # ``config={"content": {"role": role, "parts": [{"text": text}]}}`` and return
-        # ``self.client.sessions.events.append(name=session_name, author=author,
-        # invocation_id=invocation_id, timestamp=event_ts, config=config)``.
-        _ = (session_name, author, invocation_id, text, role, raw_event, event_ts)
-        raise NotImplementedError("Complete TODO(lab-3): SessionLifecycleManager.append_event()")
+        config: dict[str, Any]
+        if raw_event is not None:
+            config = {"raw_event": raw_event}
+        else:
+            config = {"content": {"role": role, "parts": [{"text": text}]}}
+
+        return self.client.sessions.events.append(
+            name=session_name,
+            author=author,
+            invocation_id=invocation_id,
+            timestamp=event_ts,
+            config=config,
+        )
 
     def append_text_event(
         self,
@@ -341,15 +360,13 @@ class SessionLifecycleManager:
 
     def list_events(self, session_name: str) -> list[Any]:
         """List all persisted events in a Managed Session."""
-        # TODO(lab-3): Return ``list(self.client.sessions.events.list(name=session_name))``.
-        _ = session_name
-        raise NotImplementedError("Complete TODO(lab-3): SessionLifecycleManager.list_events()")
+        # Pre-filled boilerplate helper (already working for the workshop)
+        return list(self.client.sessions.events.list(name=session_name))
 
     def delete_session(self, session_name: str) -> None:
         """Delete a Managed Session by full resource name."""
-        # TODO(lab-3): Call ``self.client.sessions.delete(name=session_name)``.
-        _ = session_name
-        raise NotImplementedError("Complete TODO(lab-3): SessionLifecycleManager.delete_session()")
+        # Pre-filled boilerplate helper (already working for the workshop)
+        self.client.sessions.delete(name=session_name)
 
     def run_demo(
         self,

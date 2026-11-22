@@ -1,13 +1,15 @@
 """Offline Evaluation & Automatic Failure Clustering for the Coding Agent (Lab 6 — Starter).
 
-Complete the ``# TODO(lab-6)`` blocks following ``workshop/06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md``:
-1. Initialize ``vertexai.Client`` in a supported Evaluation region (14 US/EU regions + ``global``).
-2. Register custom LLM (``types.LLMMetric``) and Code Execution (``types.CodeExecutionMetric``)
-   metrics via ``client.evals.create_evaluation_metric(metric=...)``.
-3. Evaluate single-turn and multi-turn datasets separately (NEVER mix single-turn metrics
-   with multi-turn traces, or the Evaluation Service returns HTTP 400).
-4. Run Automatic Loss Analysis (``generate_loss_clusters``) using ``location="global"``
-   and an explicit ``metric=`` parameter.
+Core Lab 6 exercises (see ``workshop/06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md``):
+1. ``evaluate_split_datasets()``: Evaluate single-turn and multi-turn datasets separately
+   (NEVER mix single-turn metrics with multi-turn traces, or the Evaluation Service returns
+   HTTP 400), wrap ``run_inference(src=...)`` inputs in ``types.EvaluationDataset``, and pin
+   ``types.RubricMetric.SAFETY(version="v1")``.
+2. ``run_loss_clustering()``: Run Automatic Loss Analysis (``generate_loss_clusters``)
+   using ``location="global"`` and an explicit ``metric=`` parameter.
+
+Setup helpers (``build_eval_client()``, ``register_custom_coding_metrics()``) are pre-filled
+so you can focus on split evaluation and failure clustering.
 """
 
 from __future__ import annotations
@@ -144,27 +146,36 @@ def assert_clean_turn_separation(
 
 
 def build_eval_client(project_id: str, location: str) -> Any:
-    """Initialize the Vertex AI GenAI Client for offline evaluation."""
+    """Initialize the verified Vertex AI GenAI Client for evaluation."""
+    # Pre-filled boilerplate helper
     validate_eval_location(location)
-    # TODO(lab-6): Import `Client` from `vertexai` and return
-    # `Client(project=project_id, location=location)`.
-    raise NotImplementedError(
-        f"TODO(lab-6): Initialize vertexai.Client for project={project_id!r}, location={location!r}."
-    )
+    from vertexai import Client
+
+    return Client(project=project_id, location=location)
 
 
 def register_custom_coding_metrics(client: Any) -> dict[str, str]:
     """Register custom LLM and Code Execution coding-quality metrics."""
-    # TODO(lab-6): Import `types` from `vertexai`, build:
-    #   1. `types.LLMMetric(name="coding_rigor_rubric", prompt_template=CODING_RIGOR_PROMPT_TEMPLATE,
-    #      result_parsing_function=CODING_RIGOR_PARSER_CODE)`
-    #   2. `types.CodeExecutionMetric(name="multi_turn_has_turns",
-    #      custom_function=MULTI_TURN_HAS_TURNS_CODE)`
-    # Register both with `client.evals.create_evaluation_metric(metric=...)` and return
-    # `{"coding_rigor_rubric": ..., "multi_turn_has_turns": ...}`.
-    raise NotImplementedError(
-        f"TODO(lab-6): Register custom metrics using {client!r}."
+    # Pre-filled boilerplate helper
+    from vertexai import types
+
+    coding_rigor_metric = types.LLMMetric(
+        name="coding_rigor_rubric",
+        prompt_template=CODING_RIGOR_PROMPT_TEMPLATE,
+        result_parsing_function=CODING_RIGOR_PARSER_CODE,
     )
+    llm_metric_path = client.evals.create_evaluation_metric(metric=coding_rigor_metric)
+
+    has_turns_metric = types.CodeExecutionMetric(
+        name="multi_turn_has_turns",
+        custom_function=MULTI_TURN_HAS_TURNS_CODE,
+    )
+    code_metric_path = client.evals.create_evaluation_metric(metric=has_turns_metric)
+
+    return {
+        "coding_rigor_rubric": str(llm_metric_path),
+        "multi_turn_has_turns": str(code_metric_path),
+    }
 
 
 def has_agent_trace_fields(cases: list[dict[str, Any]]) -> bool:

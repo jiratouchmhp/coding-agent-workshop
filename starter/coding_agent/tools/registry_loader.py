@@ -1,16 +1,18 @@
 """Skill Registry & Agent Registry ADK integration and publisher (starter — Lab 4).
 
-Complete the ``# TODO(lab-4)`` sections below to wire:
-1. ``build_skill_registry_toolset()``: ``GCPSkillRegistry`` + ``SkillToolset`` with
-   graceful fallback to locally bundled skills when running inside an air-gapped
+Focused Lab 4 exercises in this module (3 core registry integrations):
+1. ``build_skill_registry_toolset()`` — wire ``GCPSkillRegistry`` + ``SkillToolset``
+   with graceful fallback to locally bundled skills when running inside an air-gapped
    sandbox without outbound Vertex AI / Agent Registry egress.
-2. ``GoogleApiAuth`` (aliased as ``GoogleAuth``) + ``build_agent_registry_integrations()``:
-   ``AgentRegistry`` discovery (``list_agents``, ``list_mcp_servers``),
-   ``get_remote_a2a_agent`` with ``httpx.AsyncClient(auth=GoogleApiAuth(...))``,
-   and ``get_mcp_toolset`` with ``GcpAuthProvider`` / ``header_provider``.
-3. ``SkillRegistryPublisher``: create, update, search (``retrieve``), and list skills
-   in Vertex AI Skill Registry, accounting for the built-in ``gcp-skill-registry``
-   first-call async ingestion quirk.
+2. ``build_agent_registry_integrations()`` — configure ``AgentRegistry`` discovery
+   (``list_agents``, ``list_mcp_servers``), ``get_remote_a2a_agent`` with
+   ``httpx.AsyncClient(auth=GoogleApiAuth(...))``, and ``get_mcp_toolset`` with
+   ``GcpAuthProvider`` / ``header_provider``.
+3. ``SkillRegistryPublisher.create_skill()`` — publish a local skill directory
+   (auto-zipped) or pre-validated ``.zip`` to Vertex AI Skill Registry.
+
+Supporting helpers (``GoogleApiAuth.auth_flow``, ``list_skills``, ``update_skill``,
+and ``search_skills``) are pre-filled for the workshop.
 
 Verified Gotchas:
 - ``google.adk.integrations.agent_registry`` imports ``a2a-sdk`` and Agent Identity at
@@ -145,12 +147,15 @@ class GoogleApiAuth(httpx.Auth):
             self._creds, _ = google.auth.default(scopes=effective_scopes)
 
     def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
-        # TODO(lab-4): Refresh ``self._creds`` with ``google.auth.transport.requests.Request()``
-        # when ``not self._creds.valid``, set ``Authorization: Bearer {token}`` and
-        # (when ``self._quota_project_id`` is set) ``X-Goog-User-Project``, then ``yield request``.
-        _ = request
-        raise NotImplementedError("Complete TODO(lab-4): GoogleApiAuth.auth_flow()")
-        yield request  # pragma: no cover
+        # Pre-filled boilerplate helper (already working for the workshop)
+        from google.auth.transport.requests import Request
+
+        if not self._creds.valid:
+            self._creds.refresh(Request())
+        request.headers["Authorization"] = f"Bearer {self._creds.token}"
+        if self._quota_project_id:
+            request.headers["X-Goog-User-Project"] = self._quota_project_id
+        yield request
 
 
 # Alias matching `adk.dev/integrations/agent-registry` examples
@@ -323,14 +328,33 @@ class SkillRegistryPublisher:
         trigger_builtin_warmup: bool = False,
         warmup_delay_seconds: float = 2.0,
     ) -> list[Any]:
-        """List skills in Vertex AI Skill Registry (handling first-call ``gcp-skill-registry`` quirk)."""
-        # TODO(lab-4): Call ``list(self.client.skills.list())``. Remember that the built-in
-        # ``gcp-skill-registry`` skill starts ingesting asynchronously on the project's FIRST
-        # API call and appears starting on call #2 — when ``trigger_builtin_warmup=True`` and
-        # ``gcp-skill-registry`` is missing from the first response, sleep ``warmup_delay_seconds``
-        # and issue a second ``list(self.client.skills.list())`` call.
-        _ = (trigger_builtin_warmup, warmup_delay_seconds, time)
-        raise NotImplementedError("Complete TODO(lab-4): SkillRegistryPublisher.list_skills()")
+        """List skills in Vertex AI Skill Registry.
+
+        When ``trigger_builtin_warmup=True``, performs an initial list call to kick off
+        async ingestion of the built-in ``gcp-skill-registry`` skill, waits briefly, and
+        returns the second call's results.
+        """
+        # Pre-filled boilerplate helper (already working for the workshop)
+        first_result = list(self.client.skills.list())
+        if not trigger_builtin_warmup:
+            return first_result
+
+        has_builtin = any(
+            str(getattr(item, "name", "")).endswith(f"/{BUILTIN_SKILL_ID}")
+            for item in first_result
+        )
+        if has_builtin:
+            return first_result
+
+        logger.info(
+            "Built-in %s not present on first API call (expected async ingestion quirk); "
+            "re-listing after %.1fs...",
+            BUILTIN_SKILL_ID,
+            warmup_delay_seconds,
+        )
+        if warmup_delay_seconds > 0:
+            time.sleep(warmup_delay_seconds)
+        return list(self.client.skills.list())
 
     def create_skill(
         self,
@@ -360,12 +384,25 @@ class SkillRegistryPublisher:
         local_path: str | Path | None = None,
     ) -> Any:
         """Update an existing skill's metadata and/or upload a new skill payload revision."""
+        # Pre-filled boilerplate helper (already working for the workshop)
         validate_skill_id(skill_id)
-        # TODO(lab-4): Build ``config`` containing non-None ``display_name``, ``description``,
-        # and ``local_path`` and return ``self.client.skills.update(
-        # name=self.skill_resource_name(skill_id), config=config)``.
-        _ = (display_name, description, local_path)
-        raise NotImplementedError("Complete TODO(lab-4): SkillRegistryPublisher.update_skill()")
+        config: dict[str, Any] = {}
+        if display_name is not None:
+            config["display_name"] = display_name
+        if description is not None:
+            config["description"] = description
+        if local_path is not None:
+            resolved = Path(local_path).resolve()
+            if not resolved.exists():
+                raise FileNotFoundError(f"Skill path does not exist: {resolved}")
+            config["local_path"] = str(resolved)
+        if not config:
+            raise ValueError("Specify at least one of display_name, description, or local_path.")
+
+        return self.client.skills.update(
+            name=self.skill_resource_name(skill_id),
+            config=config,
+        )
 
     def get_skill(self, skill_id: str) -> Any:
         """Fetch metadata for a single skill (including built-in ``gcp-skill-registry``)."""
@@ -386,12 +423,11 @@ class SkillRegistryPublisher:
 
     def search_skills(self, query: str, top_k: int = 5) -> list[Any]:
         """Run semantic skill retrieval via ``client.skills.retrieve(...)``."""
+        # Pre-filled boilerplate helper (already working for the workshop)
         if not query or not query.strip():
             raise ValueError("Search query must be non-empty.")
-        # TODO(lab-4): Call ``self.client.skills.retrieve(query=query, config={"top_k": top_k})``
-        # and return ``list(getattr(response, "retrieved_skills", []) or [])``.
-        _ = top_k
-        raise NotImplementedError("Complete TODO(lab-4): SkillRegistryPublisher.search_skills()")
+        response = self.client.skills.retrieve(query=query, config={"top_k": top_k})
+        return list(getattr(response, "retrieved_skills", []) or [])
 
     def delete_skill(self, skill_id: str) -> None:
         """Delete a user-created skill (never built-in ``gcp-*`` skills)."""

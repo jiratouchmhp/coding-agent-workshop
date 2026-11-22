@@ -1,22 +1,25 @@
 """Closed-Loop Prompt & Skill Optimization Flywheel (Lab 6 — Starter).
 
-Complete the ``# TODO(lab-6)`` blocks following ``workshop/06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md``:
-1. Query recent ``THUMBS_DOWN`` entries from the Feedback Service
-   (``agentplatform.Client.feedback_entries.list(...)``).
-2. Wire ADK's ``LocalEvalSampler`` + ``SimplePromptOptimizer`` /
-   ``GEPARootAgentPromptOptimizer`` / ``GEPARootAgentOptimizer`` (``adk.dev/optimize/``).
-3. Run non-mutating optimization (attaching local skills via ``load_skill_from_dir``
-   when ``--optimizer gepa-skills`` is chosen so ``GEPARootAgentOptimizer`` optimizes
-   ``SkillToolset.skills``) and save candidate outputs for human diff review.
-4. Close the skill loop with zero container rebuild: re-validate all 16 atomic
-   Skill Registry rules and hot-update Vertex AI Skill Registry via
-   ``client.skills.update(...)`` (or promote an immutable Agent Registry ``v2`` revision).
+Core Lab 6 exercises (see ``workshop/06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md``):
+1. ``run_prompt_optimization()``: Run non-mutating ADK optimization (attaching local skills
+   via ``_attach_local_skill_for_gepa()`` when ``--optimizer gepa-skills`` is chosen so
+   ``GEPARootAgentOptimizer`` optimizes ``SkillToolset.skills``) and return candidate diffs
+   for human review.
+2. ``publish_updated_skill()``: Close the skill loop with zero container rebuild — re-validate
+   all 16 atomic Skill Registry rules via ``scripts/package_registry_skill.py`` and hot-update
+   Vertex AI Skill Registry via ``client.skills.update(...)`` (or promote an immutable
+   Agent Registry ``v2`` revision).
+
+Setup helpers (``fetch_negative_feedback()``, ``_attach_local_skill_for_gepa()``,
+``build_adk_sampler_and_optimizer()``) are pre-filled so you can focus on the core
+optimization and zero-redeploy skill publishing loop.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import difflib
 import json
 import logging
 import os
@@ -86,6 +89,34 @@ def _split_frontmatter(skill_md_text: str) -> tuple[str, str]:
     return frontmatter, body
 
 
+def _read_skill_metadata(skill_dir: Path) -> tuple[str, str]:
+    """Extract display name and description from ``skill_dir/SKILL.md`` frontmatter."""
+    # Pre-filled boilerplate helper
+    skill_md = skill_dir / "SKILL.md"
+    default_display = skill_dir.name.replace("-", " ").title()
+    default_desc = f"Updated enterprise coding-agent skill package ({skill_dir.name})."
+    if not skill_md.is_file():
+        return default_display, default_desc
+
+    frontmatter, _ = _split_frontmatter(skill_md.read_text(encoding="utf-8"))
+    if not frontmatter:
+        return default_display, default_desc
+
+    try:
+        import yaml
+
+        raw_yaml = frontmatter.strip().strip("-").strip()
+        parsed = yaml.safe_load(raw_yaml) or {}
+        if isinstance(parsed, dict):
+            name_val = str(parsed.get("name") or "").strip()
+            desc_val = str(parsed.get("description") or "").strip()
+            display = name_val.replace("-", " ").title() if name_val else default_display
+            return display, (desc_val or default_desc)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Falling back to default skill metadata (%s).", exc)
+    return default_display, default_desc
+
+
 def fetch_negative_feedback(
     *,
     project_id: str,
@@ -94,14 +125,42 @@ def fetch_negative_feedback(
     limit: int = 20,
 ) -> list[dict[str, Any]]:
     """Fetch recent ``THUMBS_DOWN`` entries from the Agent Platform Feedback Service."""
-    # TODO(lab-6): Set `os.environ["GOOGLE_GENAI_USE_ENTERPRISE"] = "TRUE"`, initialize
-    # `agentplatform.Client(project=project_id, location=location)`, and call
-    # `client.feedback_entries.list(name=runtime_name, config={"filter": 'feedback_type="THUMBS_DOWN"',
-    # "order_by": "create_time desc"})`. Normalize up to `limit` entries into dicts.
-    raise NotImplementedError(
-        f"TODO(lab-6): Fetch up to {limit} THUMBS_DOWN entries for "
-        f"project={project_id!r}, location={location!r}, runtime={runtime_name!r}."
-    )
+    # Pre-filled boilerplate helper
+    if not project_id or not runtime_name:
+        return []
+
+    os.environ["GOOGLE_GENAI_USE_ENTERPRISE"] = "TRUE"
+    try:
+        import agentplatform
+
+        client = agentplatform.Client(project=project_id, location=location)
+    except ImportError:
+        logger.warning("agentplatform SDK not installed; skipping remote Feedback Service query.")
+        return []
+
+    entries = list(
+        client.feedback_entries.list(
+            name=runtime_name,
+            config={
+                "filter": 'feedback_type="THUMBS_DOWN"',
+                "order_by": "create_time desc",
+            },
+        )
+    )[:limit]
+
+    normalized: list[dict[str, Any]] = []
+    for entry in entries:
+        normalized.append(
+            {
+                "name": getattr(entry, "name", ""),
+                "session_id": getattr(entry, "session_id", ""),
+                "event_id": getattr(entry, "event_id", ""),
+                "feedback_type": getattr(entry, "feedback_type", "THUMBS_DOWN"),
+                "feedback_labels": list(getattr(entry, "feedback_labels", []) or []),
+                "feedback_text": getattr(entry, "feedback_text", ""),
+            }
+        )
+    return normalized
 
 
 def summarize_failure_signals(
@@ -136,15 +195,103 @@ def summarize_failure_signals(
 
 
 def _attach_local_skill_for_gepa(root_agent: Any, skill_dir: Path | None) -> Any:
-    """Clone ``root_agent`` with a local ``SkillToolset(skills=[...])`` for ``GEPARootAgentOptimizer``."""
-    # TODO(lab-6): When `skill_dir` contains `SKILL.md`, load it via
-    # `from google.adk.skills import load_skill_from_dir` and clone `root_agent`
-    # with `SkillToolset(skills=[load_skill_from_dir(skill_dir)])` so
-    # `GEPARootAgentOptimizer` sees local `tool.skills` (it ignores lazy remote
-    # `GCPSkillRegistry` handles). See `solution/eval/optimize_prompt.py`.
-    raise NotImplementedError(
-        f"TODO(lab-6): Attach local skill {skill_dir} via load_skill_from_dir() for GEPARootAgentOptimizer."
-    )
+    """Clone ``root_agent`` with a local ``SkillToolset(skills=[...])`` for ``GEPARootAgentOptimizer``.
+
+    Source-verified ADK gotcha: ``GEPARootAgentOptimizer`` inspects ``tool.skills``
+    (local in-memory skills on ``SkillToolset``), NOT skills fetched lazily from a
+    remote ``GCPSkillRegistry``. Loading ``skill_dir`` via ``load_skill_from_dir``
+    lets GEPA optimize ``skill_instructions:<skill_name>`` cleanly offline before
+    repackaging and publishing back to Skill Registry / Agent Registry.
+    """
+    # Pre-filled boilerplate helper
+    if skill_dir is None or not (skill_dir / "SKILL.md").is_file():
+        return root_agent
+
+    from google.adk.skills import load_skill_from_dir
+    from google.adk.tools.skill_toolset import SkillToolset
+
+    local_skill = load_skill_from_dir(skill_dir)
+    existing_tools = list(getattr(root_agent, "tools", []) or [])
+    new_tools: list[Any] = []
+    attached = False
+
+    for tool in existing_tools:
+        if isinstance(tool, SkillToolset):
+            current_skills = list(getattr(tool, "skills", []) or [])
+            if any(getattr(s, "name", "") == local_skill.name for s in current_skills):
+                new_tools.append(tool)
+            else:
+                clone_fn = getattr(tool, "clone_with_updated_skills", None)
+                if callable(clone_fn):
+                    new_tools.append(clone_fn([*current_skills, local_skill]))
+                else:
+                    new_tools.append(SkillToolset(skills=[*current_skills, local_skill]))
+            attached = True
+        else:
+            new_tools.append(tool)
+
+    if not attached:
+        new_tools.append(SkillToolset(skills=[local_skill]))
+
+    clone_agent = getattr(root_agent, "clone", None)
+    if callable(clone_agent):
+        return clone_agent(update={"tools": new_tools})
+    return root_agent
+
+
+def _extract_optimized_skills(
+    *,
+    original_skill_dir: Path | None,
+    optimized_agent: Any,
+    gepa_candidate: dict[str, str] | None = None,
+) -> dict[str, dict[str, str]]:
+    """Extract optimized ``SkillToolset`` instructions and preserve YAML frontmatter."""
+    # Pre-filled boilerplate helper
+    extracted_bodies: dict[str, str] = {}
+
+    try:
+        from google.adk.tools.skill_toolset import SkillToolset
+    except ImportError:
+        SkillToolset = None  # type: ignore[assignment, misc]
+
+    for tool in getattr(optimized_agent, "tools", []) or []:
+        if SkillToolset is not None and isinstance(tool, SkillToolset):
+            for skill in getattr(tool, "skills", []) or []:
+                name = str(getattr(skill, "name", "")).strip()
+                inst = str(getattr(skill, "instructions", "")).strip()
+                if name and inst:
+                    extracted_bodies[name] = inst
+
+    if isinstance(gepa_candidate, dict):
+        prefix = "skill_instructions:"
+        for key, value in gepa_candidate.items():
+            if key.startswith(prefix) and isinstance(value, str) and value.strip():
+                skill_name = key[len(prefix) :].strip()
+                extracted_bodies.setdefault(skill_name, value.strip())
+
+    results: dict[str, dict[str, str]] = {}
+    for skill_name, optimized_body in extracted_bodies.items():
+        original_md = ""
+        frontmatter = ""
+        if original_skill_dir is not None and (original_skill_dir / "SKILL.md").is_file():
+            if original_skill_dir.name == skill_name or len(extracted_bodies) == 1:
+                original_md = (original_skill_dir / "SKILL.md").read_text(encoding="utf-8")
+                frontmatter, _ = _split_frontmatter(original_md)
+
+        candidate_md = f"{frontmatter}{optimized_body.rstrip()}\n"
+        diff_lines = list(
+            difflib.unified_diff(
+                original_md.splitlines(keepends=True),
+                candidate_md.splitlines(keepends=True),
+                fromfile=f"skills_to_register/{skill_name}/SKILL.md (before)",
+                tofile=f"artifacts/optimized_skills/{skill_name}/SKILL.md (candidate)",
+            )
+        )
+        results[skill_name] = {
+            "candidate_skill_md": candidate_md,
+            "unified_diff": "".join(diff_lines),
+        }
+    return results
 
 
 def build_adk_sampler_and_optimizer(
@@ -157,19 +304,69 @@ def build_adk_sampler_and_optimizer(
     optimizer_model: str = "gemini-2.5-flash",
 ) -> tuple[Any, Any]:
     """Instantiate ADK ``LocalEvalSampler`` and the selected ``google.adk.optimization`` optimizer."""
-    # TODO(lab-6): Load `sampler_config_path`, construct:
-    #   - `LocalEvalSamplerConfig(eval_config=EvalConfig(...), app_name="coding_agent", train_eval_set="train_eval_set")`
-    #   - `LocalEvalSetsManager(agents_dir=str(agents_dir))`
-    #   - `LocalEvalSampler(sampler_config, eval_sets_manager)`
-    #   - Selected optimizer from `google.adk.optimization`:
-    #       * "simple" -> `SimplePromptOptimizer(config=SimplePromptOptimizerConfig(...))`
-    #       * "gepa" -> `GEPARootAgentPromptOptimizer(config=GEPARootAgentPromptOptimizerConfig(...))`
-    #       * "gepa-skills" -> `GEPARootAgentOptimizer(config=GEPARootAgentOptimizerConfig(...))`
-    # Return `(sampler, optimizer)`.
-    raise NotImplementedError(
-        f"TODO(lab-6): Build ADK sampler ({sampler_config_path}) + optimizer ({optimizer_choice}, "
-        f"iterations={iterations}, batch_size={batch_size}, model={optimizer_model}, agents_dir={agents_dir})."
+    # Pre-filled boilerplate helper
+    from google.adk.evaluation.eval_config import EvalConfig
+    from google.adk.evaluation.local_eval_sets_manager import LocalEvalSetsManager
+    from google.adk.optimization.local_eval_sampler import (
+        LocalEvalSampler,
+        LocalEvalSamplerConfig,
     )
+
+    raw_cfg = json.loads(sampler_config_path.read_text(encoding="utf-8"))
+    eval_cfg_dict = raw_cfg.get("eval_config") or {"criteria": {"response_match_score": 0.75}}
+
+    sampler_config = LocalEvalSamplerConfig(
+        eval_config=EvalConfig(**eval_cfg_dict),
+        app_name=raw_cfg.get("app_name", "coding_agent"),
+        train_eval_set=raw_cfg.get("train_eval_set", "train_eval_set"),
+        validation_eval_set=raw_cfg.get("validation_eval_set"),
+    )
+    eval_sets_manager = LocalEvalSetsManager(agents_dir=str(agents_dir))
+    sampler = LocalEvalSampler(sampler_config, eval_sets_manager)
+
+    if optimizer_choice == "simple":
+        from google.adk.optimization.simple_prompt_optimizer import (
+            SimplePromptOptimizer,
+            SimplePromptOptimizerConfig,
+        )
+
+        optimizer = SimplePromptOptimizer(
+            config=SimplePromptOptimizerConfig(
+                num_iterations=iterations,
+                batch_size=batch_size,
+                optimizer_model=optimizer_model,
+            )
+        )
+    elif optimizer_choice == "gepa":
+        from google.adk.optimization.gepa_root_agent_prompt_optimizer import (
+            GEPARootAgentPromptOptimizer,
+            GEPARootAgentPromptOptimizerConfig,
+        )
+
+        optimizer = GEPARootAgentPromptOptimizer(
+            config=GEPARootAgentPromptOptimizerConfig(
+                optimizer_model=optimizer_model,
+                max_metric_calls=max(10, iterations * batch_size * 2),
+                reflection_minibatch_size=min(3, max(1, batch_size)),
+            )
+        )
+    elif optimizer_choice == "gepa-skills":
+        from google.adk.optimization.gepa_root_agent_optimizer import (
+            GEPARootAgentOptimizer,
+            GEPARootAgentOptimizerConfig,
+        )
+
+        optimizer = GEPARootAgentOptimizer(
+            config=GEPARootAgentOptimizerConfig(
+                optimizer_model=optimizer_model,
+                max_metric_calls=max(10, iterations * batch_size * 2),
+                reflection_minibatch_size=min(3, max(1, batch_size)),
+            )
+        )
+    else:
+        raise ValueError(f"Unsupported optimizer_choice: {optimizer_choice!r}")
+
+    return sampler, optimizer
 
 
 def _extract_root_instruction(root_agent: Any, *, agent_architecture: str) -> str:
@@ -203,9 +400,9 @@ async def run_prompt_optimization(
     # If `optimizer_choice == "gepa-skills"`, attach local `skill_dir` via
     # `_attach_local_skill_for_gepa(root_agent, skill_dir)`. Then call
     # `build_adk_sampler_and_optimizer(...)`, await `optimizer.optimize(target_agent, sampler)`,
-    # extract both the best root instruction and any optimized `SkillToolset.skills`
-    # (or `gepa_result["candidates"][best_idx]["skill_instructions:<name>"]`) preserving
-    # original YAML frontmatter via `_split_frontmatter()`, compute unified diffs, and return
+    # select `best_idx`, extract any optimized `SkillToolset.skills` via
+    # `_extract_optimized_skills(...)` (preserving YAML frontmatter with `_split_frontmatter()`),
+    # compute unified diff via `difflib.unified_diff(...)`, and return:
     # `{"optimizer": ..., "best_idx": ..., "overall_score": ..., "original_instruction": ...,
     #   "optimized_instruction": ..., "unified_diff": ..., "optimized_skills": {...}}`.
     raise NotImplementedError(
@@ -228,8 +425,10 @@ def publish_updated_skill(
 ) -> dict[str, Any]:
     """Validate all 16 atomic Skill Registry rules and hot-update the skill via ``client.skills.update``."""
     # TODO(lab-6):
-    # 1. Run `scripts/package_registry_skill.py <skill_dir>` (`--dry-run` when `dry_run=True`,
-    #    else `--output dist/<skill_id>.zip`) and fail fast if any of the 16 atomic rules fail.
+    # 1. Resolve defaults via `_read_skill_metadata(skill_dir)` and run
+    #    `scripts/package_registry_skill.py <skill_dir>` via `subprocess.run(...)`
+    #    (`--dry-run` when `dry_run=True`, else `--output dist/<skill_id>.zip`), failing fast
+    #    if any of the 16 atomic rules fail.
     # 2. When `not dry_run`, set `os.environ["GOOGLE_GENAI_USE_ENTERPRISE"] = "TRUE"`,
     #    initialize `agentplatform.Client(project=project_id, location=skill_location)`, and call:
     #      `client.skills.update(name=f"projects/{project_id}/locations/{skill_location}/skills/{skill_id}",`

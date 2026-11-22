@@ -214,11 +214,18 @@ verify_lab_1() {
   check_file_exists ".env.example"
   check_file_exists "Makefile"
   check_file_exists "scripts/preflight_check.sh"
+  check_file_exists "scripts/fast_forward_lab.sh"
   check_file_exists "scripts/cleanup_workshop.sh"
   check_file_exists "scripts/live_gcp_e2e_validate.sh"
   check_bash_syntax "scripts/preflight_check.sh"
+  check_bash_syntax "scripts/fast_forward_lab.sh"
   check_bash_syntax "scripts/cleanup_workshop.sh"
   check_bash_syntax "scripts/live_gcp_e2e_validate.sh"
+  if [[ -x "scripts/fast_forward_lab.sh" ]]; then
+    pass "scripts/fast_forward_lab.sh is executable (+x)"
+  else
+    fail "scripts/fast_forward_lab.sh is not executable (run: chmod +x scripts/fast_forward_lab.sh)"
+  fi
   check_file_exists "${TRACK}/pyproject.toml"
   check_file_exists "${TRACK}/agents-cli-manifest.yaml"
   check_file_exists "${TRACK}/coding_agent/config.py"
@@ -240,6 +247,7 @@ verify_lab_1() {
   check_pattern "Makefile" "^test-sandbox-local:" "Makefile defines zero-Docker test-sandbox-local target"
   check_pattern "Makefile" "^test-agent-local:" "Makefile defines zero-Docker test-agent-local target"
   check_pattern "Makefile" "^pack-agent-source:" "Makefile defines zero-Docker/zero-AR pack-agent-source target"
+  check_pattern "Makefile" "^fast-forward:" "Makefile defines fast-forward target"
   check_pattern "Makefile" "^cleanup:" "Makefile defines cleanup target"
 
   check_pattern "${TRACK}/agents-cli-manifest.yaml" "agent_directory:[[:space:]]*coding_agent" "agents-cli manifest sets agent_directory: coding_agent"

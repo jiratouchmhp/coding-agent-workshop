@@ -1,12 +1,17 @@
 """Managed Sandbox Lifecycle Manager & CLI (starter track — Lab 2).
 
-Covers every verified Gemini Enterprise Agent Platform Scale Sandbox lifecycle
-operation across all three resources:
-- ``SandboxEnvironmentTemplate``: create (BYOC / Shell / Computer Use), get, list,
-  update (delete + recreate), delete.
-- ``SandboxEnvironment``: create (template / shell / code_execution / snapshot),
-  get, list, pause, resume, snapshot, delete.
-- ``SandboxEnvironmentSnapshot``: create, restore/branch, get, list, delete.
+Focused Lab 2 exercises in this module (4 core lifecycle operations):
+- ``SandboxLifecycleManager.create_template()`` — provision a reusable BYOC / Shell /
+  Computer Use ``SandboxEnvironmentTemplate`` with pre-warmed pool creation.
+- ``SandboxLifecycleManager.create_sandbox()`` — provision a ``SandboxEnvironment``
+  from a template, direct ``spec``, or snapshot with an explicit ``ttl``.
+- ``SandboxLifecycleManager.pause_sandbox()`` — pause a running sandbox to release
+  compute while preserving disk state and connection ID.
+- ``SandboxLifecycleManager.snapshot_sandbox()`` — snapshot disk, installed libraries,
+  and memory state to managed GCS, resolving ``snapshot_name`` dynamically.
+
+All remaining CRUD/query helpers (get, list, update, resume, delete for templates,
+sandboxes, and snapshots) are pre-filled so you can focus on the core lifecycle APIs.
 
 Verified SDK & operational rules (from official Scale Sandbox docs):
 1. Always pass ``http_options={"api_version": "v1beta1"}`` for BYOC templates,
@@ -422,19 +427,17 @@ class SandboxLifecycleManager:
 
     def get_template(self, template_name: str) -> TemplateSummary:
         """Fetch metadata and configuration for a single ``SandboxEnvironmentTemplate``."""
-        # TODO(lab-2): Call ``self.sandboxes.templates.get(name=template_name)``
-        # and return ``_summarize_template(resource)``.
-        _ = template_name
-        raise NotImplementedError("Complete TODO(lab-2): SandboxLifecycleManager.get_template")
+        # Pre-filled boilerplate helper (already working for the workshop)
+        resource = self.sandboxes.templates.get(name=template_name)
+        return _summarize_template(resource)
 
     def list_templates(self, instance_name: str | None = None) -> list[TemplateSummary]:
         """List all ``SandboxEnvironmentTemplate`` resources under the parent instance."""
+        # Pre-filled boilerplate helper (already working for the workshop)
         parent_name = self._require_instance_name(instance_name)
-        # TODO(lab-2): Call ``self.sandboxes.templates.list(name=parent_name)``,
-        # read ``getattr(resp, "sandbox_environment_templates", resp) or []``,
-        # and return ``[_summarize_template(tpl) for tpl in items]``.
-        _ = parent_name
-        raise NotImplementedError("Complete TODO(lab-2): SandboxLifecycleManager.list_templates")
+        response = self.sandboxes.templates.list(name=parent_name)
+        items = getattr(response, "sandbox_environment_templates", response) or []
+        return [_summarize_template(tpl) for tpl in items]
 
     def update_template(
         self,
@@ -449,33 +452,32 @@ class SandboxLifecycleManager:
         enable_private_ingress: bool = False,
         instance_name: str | None = None,
     ) -> TemplateSummary:
-        """Update a template using the verified delete-and-recreate pattern.
+        """Update a template via the documented delete-and-recreate pattern.
 
-        Official ``scale/sandbox/manage-templates`` docs do NOT expose an in-place SDK
-        update call: to change an image URI, resource limits, or egress config, delete
-        the existing template (once no warm pool or sandbox creation is active) and
-        create a new template with the updated configuration.
+        Per ``scale/sandbox/manage-templates``, no in-place SDK update method is
+        documented: delete the existing template (fails if warm pool or sandbox
+        creation is actively in progress) and create a new template with the updated
+        configuration.
         """
-        # TODO(lab-2): Call ``self.delete_template(old_template_name)`` and then
-        # return ``self.create_template(...)`` with the updated configuration.
-        _ = (
-            old_template_name,
-            display_name,
-            kind,
-            image_uri,
-            resources,
-            ports,
-            egress,
-            enable_private_ingress,
-            instance_name,
+        # Pre-filled boilerplate helper (already working for the workshop)
+        parent = instance_name or self.instance_name or _infer_parent_instance(old_template_name)
+        self.delete_template(old_template_name)
+        return self.create_template(
+            display_name=display_name,
+            kind=kind,
+            image_uri=image_uri,
+            resources=resources,
+            ports=ports,
+            egress=egress,
+            enable_private_ingress=enable_private_ingress,
+            instance_name=parent or None,
         )
-        raise NotImplementedError("Complete TODO(lab-2): SandboxLifecycleManager.update_template")
 
     def delete_template(self, template_name: str) -> None:
         """Delete a ``SandboxEnvironmentTemplate`` (fails if warm pool/sandbox creation is active)."""
-        # TODO(lab-2): Call ``self.sandboxes.templates.delete(name=template_name)``.
-        _ = template_name
-        raise NotImplementedError("Complete TODO(lab-2): SandboxLifecycleManager.delete_template")
+        # Pre-filled boilerplate helper (already working for the workshop)
+        self.sandboxes.templates.delete(name=template_name)
+        logger.info("Deleted sandbox template: %s", template_name)
 
     # -- Sandbox Lifecycle (Create / Get / List / Pause / Resume / Snapshot / Delete) --
 
@@ -521,18 +523,17 @@ class SandboxLifecycleManager:
 
     def get_sandbox(self, sandbox_name: str) -> SandboxSummary:
         """Fetch live state, template link, expiry, and optional PSC-E service attachment."""
-        # TODO(lab-2): Call ``self.sandboxes.get(name=sandbox_name)`` and return
-        # ``_summarize_sandbox(sandbox)``.
-        _ = sandbox_name
-        raise NotImplementedError("Complete TODO(lab-2): SandboxLifecycleManager.get_sandbox")
+        # Pre-filled boilerplate helper (already working for the workshop)
+        resource = self.sandboxes.get(name=sandbox_name)
+        return _summarize_sandbox(resource)
 
     def list_sandboxes(self, instance_name: str | None = None) -> list[SandboxSummary]:
         """List all ``SandboxEnvironment`` instances under the parent Agent Platform instance."""
+        # Pre-filled boilerplate helper (already working for the workshop)
         parent_name = self._require_instance_name(instance_name)
-        # TODO(lab-2): Call ``self.sandboxes.list(name=parent_name)`` and return
-        # ``[_summarize_sandbox(sb) for sb in sandboxes]``.
-        _ = parent_name
-        raise NotImplementedError("Complete TODO(lab-2): SandboxLifecycleManager.list_sandboxes")
+        response = self.sandboxes.list(name=parent_name)
+        items = getattr(response, "sandbox_environments", response) or []
+        return [_summarize_sandbox(sb) for sb in items]
 
     def pause_sandbox(
         self,
@@ -557,11 +558,14 @@ class SandboxLifecycleManager:
 
         NOTE: Calling ``resume()`` on an already-running sandbox raises ``FAILED_PRECONDITION``.
         """
-        # TODO(lab-2): Call ``self.sandboxes.resume(name=sandbox_name,
-        # config={"wait_for_completion": wait_for_completion})``, extract response,
-        # and return ``_summarize_sandbox(resumed)``.
-        _ = (sandbox_name, wait_for_completion)
-        raise NotImplementedError("Complete TODO(lab-2): SandboxLifecycleManager.resume_sandbox")
+        # Pre-filled boilerplate helper (already working for the workshop)
+        operation = self.sandboxes.resume(
+            name=sandbox_name,
+            config={"wait_for_completion": wait_for_completion},
+        )
+        summary = _summarize_sandbox(_extract_response(operation))
+        logger.info("Resumed sandbox: %s (state=%s)", summary.name or sandbox_name, summary.state)
+        return summary
 
     def snapshot_sandbox(
         self,
@@ -593,33 +597,31 @@ class SandboxLifecycleManager:
 
     def delete_sandbox(self, sandbox_name: str) -> None:
         """Delete a sandbox to stop billing (does NOT delete its backing template)."""
-        # TODO(lab-2): Call ``self.sandboxes.delete(name=sandbox_name)``.
-        _ = sandbox_name
-        raise NotImplementedError("Complete TODO(lab-2): SandboxLifecycleManager.delete_sandbox")
+        # Pre-filled boilerplate helper (already working for the workshop)
+        self.sandboxes.delete(name=sandbox_name)
+        logger.info("Deleted sandbox: %s", sandbox_name)
 
     # -- Snapshot Lifecycle (List / Get / Delete) ----------------------------
 
     def list_snapshots(self, instance_name: str | None = None) -> list[SnapshotSummary]:
         """List all ``SandboxEnvironmentSnapshot`` resources under the parent instance."""
+        # Pre-filled boilerplate helper (already working for the workshop)
         parent_name = self._require_instance_name(instance_name)
-        # TODO(lab-2): Call ``self.sandboxes.snapshots.list(name=parent_name)``,
-        # read ``getattr(resp, "sandbox_environment_snapshots", resp) or []``,
-        # and return ``[_summarize_snapshot(s) for s in items]``.
-        _ = parent_name
-        raise NotImplementedError("Complete TODO(lab-2): SandboxLifecycleManager.list_snapshots")
+        response = self.sandboxes.snapshots.list(name=parent_name)
+        items = getattr(response, "sandbox_environment_snapshots", response) or []
+        return [_summarize_snapshot(snap) for snap in items]
 
     def get_snapshot(self, snapshot_name: str) -> SnapshotSummary:
         """Fetch metadata for a specific ``SandboxEnvironmentSnapshot``."""
-        # TODO(lab-2): Call ``self.sandboxes.snapshots.get(name=snapshot_name)``
-        # and return ``_summarize_snapshot(snap)``.
-        _ = snapshot_name
-        raise NotImplementedError("Complete TODO(lab-2): SandboxLifecycleManager.get_snapshot")
+        # Pre-filled boilerplate helper (already working for the workshop)
+        resource = self.sandboxes.snapshots.get(name=snapshot_name)
+        return _summarize_snapshot(resource)
 
     def delete_snapshot(self, snapshot_name: str) -> None:
         """Delete a ``SandboxEnvironmentSnapshot`` prior to its TTL expiration."""
-        # TODO(lab-2): Call ``self.sandboxes.snapshots.delete(name=snapshot_name)``.
-        _ = snapshot_name
-        raise NotImplementedError("Complete TODO(lab-2): SandboxLifecycleManager.delete_snapshot")
+        # Pre-filled boilerplate helper (already working for the workshop)
+        self.sandboxes.snapshots.delete(name=snapshot_name)
+        logger.info("Deleted snapshot: %s", snapshot_name)
 
     # -- End-to-End Lifecycle Demo & Cleanup ---------------------------------
 

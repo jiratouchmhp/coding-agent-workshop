@@ -18,6 +18,21 @@ By the end of this lab, you will be able to:
 
 ---
 
+## Quick-Run TL;DR (Classroom Fast Path)
+
+- **Focused Exercises (High-Signal TODOs):** `registry_loader.py` (`build_skill_registry_toolset`, `build_agent_registry_integrations`, `create_skill`) and `agent.py` (`_build_optional_skill_toolset`) — *(search/list/update/auth helpers pre-filled!)*
+- **Key Commands (Zero Local Docker — `us-central1` Skill Registry + `asia-southeast3` Agent Registry):**
+  ```bash
+  make package-skill                                        # Validates all 16 atomic Skill Registry ZIP/SKILL.md checks -> dist/secure-code-review.zip
+  (cd starter && uv run python -m coding_agent.tools.registry_loader offline-check)
+  (cd starter && uv run python -m coding_agent.tools.registry_loader list-skills --warmup)
+  make verify-lab LAB=4
+  ```
+- **Antigravity AI-Assisted Mode (`.agents/skills/agent-platform-governance-and-registries`):** *"Using `agent-platform-governance-and-registries`, complete `# TODO(lab-4)` in `registry_loader.py` and `agent.py` to wire `GCPSkillRegistry` + `SkillToolset(environment=sandbox_env)` with air-gapped fallback and `AgentRegistry` MCP/A2A discovery."*
+- **Fell Behind? Instant Catch-Up:** `make fast-forward LAB=4` *(syncs only Lab 4 without spoiling Labs 5–8 TODOs).*
+
+---
+
 ## Half-Day Fast-Track Path (30 Minutes)
 
 If you are running on the **3.5-hour Half-Day Fast-Track**, Lab 4 is already streamlined as a pure developer extensibility flow:
@@ -161,7 +176,7 @@ for item in retrieved.retrieved_skills:
 
 ### Step B2: Smoke-Test Semantic Retrieval via `registry_loader.py` CLI
 
-Once you complete `SkillRegistryPublisher` in Part C below, you can publish, list (with `--warmup` for the `gcp-skill-registry` quirk), and search skills directly from the CLI:
+Once you complete `SkillRegistryPublisher.create_skill()` in Part C below (`list_skills()`, `update_skill()`, and `search_skills()` are already pre-filled), you can publish, list (with `--warmup` for the `gcp-skill-registry` quirk), and search skills directly from the CLI:
 
 ```bash
 cd starter
@@ -178,7 +193,7 @@ uv run python -m coding_agent.tools.registry_loader search-skills \
 
 ## Part C: Dynamic ADK Consumption (`starter/coding_agent/tools/registry_loader.py`)
 
-Open [`starter/coding_agent/tools/registry_loader.py`](../starter/coding_agent/tools/registry_loader.py) and complete the `# TODO(lab-4)` markers for `build_skill_registry_toolset()`, `GoogleApiAuth.auth_flow()`, `build_agent_registry_integrations()`, and `SkillRegistryPublisher`.
+Open [`starter/coding_agent/tools/registry_loader.py`](../starter/coding_agent/tools/registry_loader.py) and complete the **3 `# TODO(lab-4)` functions**: **`build_skill_registry_toolset()`**, **`build_agent_registry_integrations()`**, and **`SkillRegistryPublisher.create_skill()`**. Supporting helpers — **`GoogleApiAuth.auth_flow()`**, **`list_skills()`**, **`update_skill()`**, and **`search_skills()`** — are **pre-filled** out of the box (and in Step C3 below you will also complete `_build_optional_skill_toolset()` in [`starter/coding_agent/agent.py`](../starter/coding_agent/agent.py)).
 
 ### Step C1: Mandatory ADK Extras (`ImportError` Trap!)
 

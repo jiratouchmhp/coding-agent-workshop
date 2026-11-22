@@ -1,15 +1,18 @@
 """ADK OTel Telemetry Callbacks, Sandbox Cloud Logging & Feedback Client (starter — Lab 3).
 
-Complete the ``# TODO(lab-3)`` sections below to implement:
-1. ``build_reasoning_engine_logger()`` bound to ``aiplatform.googleapis.com/ReasoningEngine``
-   (mitigating the platform limitation that child resources — Managed Sandboxes, Sessions,
-   Memory Bank, Code Execution — do NOT auto-stream logs to Cloud Logging).
-2. ``before_tool_callback()`` and ``after_tool_callback()`` emitting OpenTelemetry tool
-   span attributes and structured JSON Cloud Logs with secret-redacted sandbox
-   ``stdout`` / ``stderr`` previews and ``exit_code``.
-3. ``FeedbackClient`` submitting thumbs/score/comment feedback linked to ``session_id``
-   and ``event_id`` (matching OTel ``gcp.vertex.agent.event_id`` / ``raw_event.id``) plus
-   durable ``FeedbackContext`` transcript snapshots.
+Focused Lab 3 exercises in this module (2 core observability/feedback hooks):
+1. ``after_tool_callback()`` — emit OpenTelemetry tool span attributes and
+   parent-runtime structured JSON Cloud Logs with secret-redacted sandbox
+   ``stdout`` / ``stderr`` previews and ``exit_code`` (mitigating the platform
+   limitation that child resources — Managed Sandboxes, Sessions, Memory Bank,
+   Code Execution — do NOT auto-stream logs to Cloud Logging).
+2. ``FeedbackClient.submit_feedback()`` — submit thumbs/score/comment feedback
+   linked to ``session_id`` and ``event_id`` (matching OTel
+   ``gcp.vertex.agent.event_id`` / ``raw_event.id``).
+
+Supporting helpers (``build_reasoning_engine_logger``, ``before_tool_callback``,
+``attach_context_snapshot``, ``get_context_snapshot``, and ``list_session_feedback``)
+are pre-filled for the workshop.
 """
 
 from __future__ import annotations
@@ -202,15 +205,31 @@ def build_reasoning_engine_logger(
     log_id: str = DEFAULT_TOOL_LOG_ID,
     reasoning_engine_id: str | None = None,
 ) -> Any:
-    """Create a Cloud Logging logger bound to ``aiplatform.googleapis.com/ReasoningEngine``."""
-    # TODO(lab-3): Import ``google.cloud.logging``, instantiate
-    # ``google.cloud.logging.Client(project=project_id)`` and
-    # ``google.cloud.logging.Resource(type="aiplatform.googleapis.com/ReasoningEngine",
-    # labels={"location": location, "resource_container": project_id,
-    # "reasoning_engine_id": reasoning_engine_id or os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID", "local-dev")})``,
-    # and return ``logging_client.logger(name=log_id, resource=resource)``.
-    _ = (project_id, location, log_id, reasoning_engine_id)
-    raise NotImplementedError("Complete TODO(lab-3): build_reasoning_engine_logger()")
+    """Create a Cloud Logging logger bound to ``aiplatform.googleapis.com/ReasoningEngine``.
+
+    Because Cloud Logging is NOT supported for child resources (Managed Sandboxes,
+    Sessions, Memory Bank, Code Execution), parent-runtime tool callbacks write
+    structured sandbox execution logs through this monitored resource.
+    """
+    # Pre-filled boilerplate helper (already working for the workshop)
+    import google.cloud.logging
+
+    engine_id = (
+        reasoning_engine_id
+        or os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID")
+        or get_settings().reasoning_engine_id
+        or "local-dev"
+    )
+    logging_client = google.cloud.logging.Client(project=project_id)
+    resource = google.cloud.logging.Resource(
+        type="aiplatform.googleapis.com/ReasoningEngine",
+        labels={
+            "location": location,
+            "resource_container": project_id,
+            "reasoning_engine_id": engine_id,
+        },
+    )
+    return logging_client.logger(name=log_id, resource=resource)
 
 
 @functools.lru_cache(maxsize=8)
@@ -266,11 +285,22 @@ def before_tool_callback(
     args: dict[str, Any],
     tool_context: Any,
 ) -> dict[str, Any] | None:
-    """Record tool start timestamp and annotate the active OpenTelemetry span."""
-    # TODO(lab-3): Store ``time.monotonic()`` in ``tool_context.state[f"_tool_start_ts:{tool_name}"]``,
-    # set ``coding_agent.tool.name`` on ``trace.get_current_span()`` when recording, and return ``None``.
-    _ = (tool, args, tool_context, time)
-    raise NotImplementedError("Complete TODO(lab-3): before_tool_callback()")
+    """Record tool start timestamp and annotate the active OpenTelemetry span.
+
+    Returns ``None`` so ADK continues executing the tool normally.
+    """
+    # Pre-filled boilerplate helper (already working for the workshop)
+    tool_name = str(getattr(tool, "name", None) or getattr(tool, "__name__", "tool"))
+    state = getattr(tool_context, "state", None)
+    if state is not None:
+        state[f"_tool_start_ts:{tool_name}"] = time.monotonic()
+
+    span = trace.get_current_span()
+    if span is not None and span.is_recording():
+        span.set_attribute("coding_agent.tool.name", tool_name)
+        if isinstance(args, Mapping):
+            span.set_attribute("coding_agent.tool.arg_keys", ",".join(sorted(str(k) for k in args)))
+    return None
 
 
 def after_tool_callback(
@@ -487,20 +517,30 @@ class FeedbackClient:
         entry_name: str,
         context_events: list[dict[str, Any]],
     ) -> Any:
-        """Preserve transcript events in ``FeedbackContext`` even if the original session expires."""
-        # TODO(lab-3): Call ``self.client.feedback_entries.feedback_contexts.update(
-        # name=entry_name, context_events=context_events)``.
-        # Verified SDK path quirk: pass ``entry_name`` (WITHOUT ``/feedbackContext``) to update!
-        _ = (entry_name, context_events)
-        raise NotImplementedError("Complete TODO(lab-3): FeedbackClient.attach_context_snapshot()")
+        """Preserve transcript events in ``FeedbackContext`` even if the original session expires.
+
+        Verified SDK path quirk: ``feedback_contexts.update()`` takes ``name=entry_name``
+        (``.../feedbackEntries/ID``), NOT ``.../feedbackContext``.
+        """
+        # Pre-filled boilerplate helper (already working for the workshop)
+        return self.client.feedback_entries.feedback_contexts.update(
+            name=entry_name,
+            context_events=context_events,
+        )
 
     def get_context_snapshot(self, entry_name: str) -> Any:
-        """Retrieve the persisted ``FeedbackContext`` for a feedback entry."""
-        # TODO(lab-3): Call ``self.client.feedback_entries.feedback_contexts.get(
-        # name=f"{entry_name}/feedbackContext")``.
-        # Verified SDK path quirk: pass ``f"{entry_name}/feedbackContext"`` to get!
-        _ = entry_name
-        raise NotImplementedError("Complete TODO(lab-3): FeedbackClient.get_context_snapshot()")
+        """Retrieve the persisted ``FeedbackContext`` for a feedback entry.
+
+        Verified SDK path quirk: ``feedback_contexts.get()`` takes
+        ``name=f"{entry_name}/feedbackContext"``.
+        """
+        # Pre-filled boilerplate helper (already working for the workshop)
+        target = (
+            entry_name
+            if entry_name.endswith("/feedbackContext")
+            else f"{entry_name}/feedbackContext"
+        )
+        return self.client.feedback_entries.feedback_contexts.get(name=target)
 
     def list_session_feedback(
         self,
@@ -509,11 +549,17 @@ class FeedbackClient:
         order_by: str = "create_time desc",
     ) -> list[Any]:
         """List feedback entries filtered to a single ``session_id``."""
-        # TODO(lab-3): Return ``list(self.client.feedback_entries.list(
-        # name=self._require_runtime_name(),
-        # config={"filter": f'session_id="{session_id}"', "order_by": order_by}))``.
-        _ = (session_id, order_by)
-        raise NotImplementedError("Complete TODO(lab-3): FeedbackClient.list_session_feedback()")
+        # Pre-filled boilerplate helper (already working for the workshop)
+        escaped = session_id.replace("\\", "\\\\").replace('"', '\\"')
+        return list(
+            self.client.feedback_entries.list(
+                name=self._require_runtime_name(),
+                config={
+                    "filter": f'session_id="{escaped}"',
+                    "order_by": order_by,
+                },
+            )
+        )
 
     def delete_feedback(self, entry_name: str) -> None:
         """Delete a feedback entry (automatically deletes its child ``FeedbackContext``)."""

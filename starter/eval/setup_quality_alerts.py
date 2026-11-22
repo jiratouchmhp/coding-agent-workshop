@@ -1,10 +1,12 @@
 """Cloud Monitoring Quality Alerts for Online Evaluation Metrics (Lab 6 — Starter).
 
-Complete the ``# TODO(lab-6)`` blocks following ``workshop/06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md``:
-1. Construct a Cloud Monitoring ``AlertPolicy`` dictionary targeting
-   ``aiplatform.googleapis.com/online_evaluator/scores`` with
-   ``COMPARISON_LT``, ``ALIGN_MEAN``, and ``ConditionCombinerType.OR``.
-2. Create the alerting policy via ``google.cloud.monitoring_v3.AlertPolicyServiceClient``.
+Core Lab 6 exercise (see ``workshop/06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md``):
+- ``build_alert_policy_dict()``: Construct a Cloud Monitoring ``AlertPolicy`` dictionary
+  targeting ``aiplatform.googleapis.com/online_evaluator/scores`` with
+  ``COMPARISON_LT``, ``ALIGN_MEAN``, and ``ConditionCombinerType.OR``.
+
+Policy submission via ``google.cloud.monitoring_v3.AlertPolicyServiceClient``
+(``create_alert_policy()``) is pre-filled so you can focus on the policy structure.
 """
 
 from __future__ import annotations
@@ -118,13 +120,13 @@ def render_gcloud_policy_yaml(
 
 def create_alert_policy(project_id: str, policy: dict[str, Any]) -> str:
     """Create the alerting policy in Cloud Monitoring via ``monitoring_v3``."""
-    # TODO(lab-6): Instantiate `client = monitoring_v3.AlertPolicyServiceClient()`
-    # and call `client.create_alert_policy(name=f"projects/{project_id}", alert_policy=policy)`.
-    # Return `str(response.name)`.
-    raise NotImplementedError(
-        f"TODO(lab-6): Create Cloud Monitoring alert policy in projects/{project_id} "
-        f"with keys={sorted(policy.keys())}."
-    )
+    # Pre-filled boilerplate helper
+    from google.cloud import monitoring_v3
+
+    client = monitoring_v3.AlertPolicyServiceClient()
+    project_name = f"projects/{project_id}"
+    response = client.create_alert_policy(name=project_name, alert_policy=policy)
+    return str(response.name)
 
 
 def _parse_notification_channels(cli_channels: list[str] | None) -> list[str]:
@@ -192,16 +194,22 @@ def main(argv: list[str] | None = None) -> int:
     print("\n=== Equivalent gcloud command ===")
     print(gcloud_cmd)
 
-    policy = build_alert_policy_dict(
-        display_name=display_name,
-        metric_name=args.metric_name,
-        threshold=args.threshold,
-        duration_seconds=args.duration_seconds,
-        alignment_period_seconds=args.alignment_period_seconds,
-        agent_resource_name=agent_resource_name,
-        runtime_revision_id=args.runtime_revision_id,
-        notification_channels=channels,
-    )
+    try:
+        policy = build_alert_policy_dict(
+            display_name=display_name,
+            metric_name=args.metric_name,
+            threshold=args.threshold,
+            duration_seconds=args.duration_seconds,
+            alignment_period_seconds=args.alignment_period_seconds,
+            agent_resource_name=agent_resource_name,
+            runtime_revision_id=args.runtime_revision_id,
+            notification_channels=channels,
+        )
+    except NotImplementedError as exc:
+        if args.dry_run:
+            print(f"\n=== Python monitoring_v3 payload (dry-run — pending exercise) ===\n{exc}")
+            return 0
+        raise
 
     if args.dry_run:
         print("\n=== Python monitoring_v3 payload (dry-run) ===")
