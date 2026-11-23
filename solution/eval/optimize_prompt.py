@@ -328,7 +328,7 @@ def build_adk_sampler_and_optimizer(
     optimizer_choice: OptimizerChoice = "simple",
     iterations: int = 2,
     batch_size: int = 4,
-    optimizer_model: str = "gemini-2.5-flash",
+    optimizer_model: str = "gemini-4-hydrogen",
 ) -> tuple[Any, Any]:
     """Instantiate ADK ``LocalEvalSampler`` and the selected ``google.adk.optimization`` optimizer."""
     from google.adk.evaluation.eval_config import EvalConfig
@@ -417,7 +417,7 @@ async def run_prompt_optimization(
     optimizer_choice: OptimizerChoice = "simple",
     iterations: int = 2,
     batch_size: int = 4,
-    optimizer_model: str = "gemini-2.5-flash",
+    optimizer_model: str = "gemini-4-hydrogen",
     skill_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Run non-mutating ADK prompt (and optional skill) optimization and return best candidate."""
@@ -715,8 +715,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, default=4, help="Batch size per iteration (default: 4).")
     parser.add_argument(
         "--optimizer-model",
-        default="gemini-2.5-flash",
-        help="Model powering optimization critique/reflection.",
+        default=None,
+        help="Model powering optimization critique/reflection (defaults to MODEL_NAME / gemini-4-hydrogen).",
     )
     parser.add_argument(
         "--sampler-config",
@@ -782,7 +782,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
     settings = get_settings()
 
-    if settings.agent_architecture in {"graph", "dynamic"}:
+    if settings.agent_architecture in {"graph", "dynamic", "agy_harness"}:
         logger.warning(
             "AGENT_ARCHITECTURE=%r exposes an ADK 2.0 Workflow root_agent with no top-level "
             "`.instruction`. Switch to AGENT_ARCHITECTURE=simple (or target an inner LlmAgent "
@@ -880,6 +880,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
+    resolved_optimizer_model = args.optimizer_model or settings.model_name
     opt_result = asyncio.run(
         run_prompt_optimization(
             sampler_config_path=sampler_path,
@@ -887,7 +888,7 @@ def main(argv: list[str] | None = None) -> int:
             optimizer_choice=args.optimizer,
             iterations=args.iterations,
             batch_size=args.batch_size,
-            optimizer_model=args.optimizer_model,
+            optimizer_model=resolved_optimizer_model,
             skill_dir=skill_dir if (skill_dir / "SKILL.md").is_file() else None,
         )
     )

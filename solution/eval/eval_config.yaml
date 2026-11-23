@@ -56,7 +56,7 @@ custom_metrics:
       Full trace: {agent_data}
 
       Return strict JSON: {"score": <1|2|3|4|5>, "explanation": "<concise reason>"}
-    judge_model: gemini-2.5-flash
+    judge_model: gemini-4-hydrogen
     judge_model_sampling_count: 3
 
 thresholds:

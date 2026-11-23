@@ -37,7 +37,9 @@ class GkeSandboxSettings:
     sandbox_template: str = "coding-sandbox-template"
     warmpool: str = "coding-sandbox-warmpool"
     sandbox_gateway_name: str | None = None
-    model_name: str = "gemini-2.5-flash"
+    model_name: str = "gemini-4-hydrogen"
+    model_location: str = "global"
+    google_cloud_project: str | None = None
     kubeconfig_path: str | None = None
     kubeconfig_context: str | None = None
 
@@ -45,6 +47,7 @@ class GkeSandboxSettings:
     def from_env(cls) -> GkeSandboxSettings:
         """Load settings from environment variables with workshop defaults."""
         gateway = os.environ.get("GKE_SANDBOX_GATEWAY_NAME", "").strip() or None
+        project = os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip() or None
         kubeconfig = os.environ.get("KUBECONFIG", "").strip() or None
         kube_ctx = os.environ.get("KUBECONFIG_CONTEXT", "").strip() or None
         return cls(
@@ -54,7 +57,10 @@ class GkeSandboxSettings:
             ).strip(),
             warmpool=os.environ.get("GKE_SANDBOX_WARMPOOL", "coding-sandbox-warmpool").strip(),
             sandbox_gateway_name=gateway,
-            model_name=os.environ.get("MODEL_NAME", "gemini-2.5-flash").strip(),
+            model_name=os.environ.get("MODEL_NAME", "gemini-4-hydrogen").strip()
+            or "gemini-4-hydrogen",
+            model_location=os.environ.get("MODEL_LOCATION", "global").strip() or "global",
+            google_cloud_project=project,
             kubeconfig_path=kubeconfig,
             kubeconfig_context=kube_ctx,
         )
@@ -83,15 +89,24 @@ def build_gke_code_executor(settings: GkeSandboxSettings) -> Any:
 
 
 def build_gke_coding_agent(settings: GkeSandboxSettings) -> Any:
-    """Construct an ADK ``LlmAgent`` wired with ``GkeCodeExecutor``."""
-    # TODO(lab-8): Import ``LlmAgent`` from ``google.adk.agents``, build the
-    # executor via ``build_gke_code_executor(settings)``, and return:
-    #   LlmAgent(
-    #       name="gke_sandbox_coding_agent",
-    #       model=settings.model_name,
-    #       instruction=GKE_SYSTEM_INSTRUCTION,
-    #       code_executor=executor,
-    #   )
+    """Construct an ADK ``LlmAgent`` wired with Frontier Gemini 4 and ``GkeCodeExecutor``."""
+    # TODO(lab-8): Import ``inspect``, ``genai`` from ``google``, ``LlmAgent`` from
+    # ``google.adk.agents``, and ``Gemini`` from ``google.adk.models``:
+    # 1. Inspect ``inspect.signature(genai.Client.__init__).parameters`` to select
+    #    ``auth_key = "enterprise"`` when supported (else ``"vertexai"``).
+    # 2. Construct ``client_kwargs = {auth_key: True, "location": settings.model_location}``
+    #    (adding ``"project"`` from ``settings.google_cloud_project`` / ``GOOGLE_CLOUD_PROJECT``
+    #    when set) and build ``gemini_model = Gemini(model=settings.model_name,
+    #    client_kwargs=client_kwargs)`` so Frontier Gemini 4 models route to ``global``
+    #    (or ``gemini-4-argon`` on ``asia-southeast1`` for strict regional residency).
+    # 3. Build ``executor = build_gke_code_executor(settings)`` and return:
+    #      LlmAgent(
+    #          name="gke_sandbox_coding_agent",
+    #          model=gemini_model,
+    #          instruction=GKE_SYSTEM_INSTRUCTION,
+    #          code_executor=executor,
+    #      )
+    # Compare with ``solution/gke_reference/gke_agent_example.py`` for the complete wiring.
     raise NotImplementedError(
         "Complete TODO(lab-8) in starter/gke_reference/gke_agent_example.py: "
         "build_gke_coding_agent()."

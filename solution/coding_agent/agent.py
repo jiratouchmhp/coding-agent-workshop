@@ -6,11 +6,13 @@ Supports all four execution modes via ``SANDBOX_MODE``:
 - ``byoc`` (Lab 2): Per-session BYOC Custom Container Sandbox via ``AgentPlatformSandboxEnvironment``.
 - ``code_execution`` (Lab 2): ADK ``AgentEngineSandboxCodeExecutor``.
 
-And four ADK 2.0 architectures via ``AGENT_ARCHITECTURE`` (default: ``simple``):
+And five ADK 2.0 architectures via ``AGENT_ARCHITECTURE`` (default: ``simple``):
 - ``simple`` (default; 100% compatible with Labs 2-8): Single ``LlmAgent``.
 - ``collaborative``: ADK 2.0 Coordinator + ``single_turn``/``task`` subagents + ``GlobalInstructionPlugin``.
 - ``graph``: ADK 2.0 declarative ``Workflow`` graph with parallel checks, ``JoinNode``, and HITL.
 - ``dynamic``: ADK 2.0 programmatic ``@node(rerun_on_resume=True)`` workflow orchestrator.
+- ``agy_harness``: ADK 2.0 outer orchestrator + Antigravity (``agy``) headless coding harness +
+  independent pytest/ruff verification + ``gemini-4-neon`` review + optional HITL.
 
 Also wires:
 - Lab 3: OTel + parent-runtime Cloud Logging callbacks and optional Memory Bank hooks.
@@ -27,12 +29,12 @@ from typing import Any
 from google.adk.agents import LlmAgent
 from google.adk.apps import App, ResumabilityConfig
 from google.adk.environment import BaseEnvironment, LocalEnvironment
-from google.adk.models import Gemini
 from google.adk.tools.environment import EnvironmentToolset
 from google.genai import types
 from opentelemetry import trace
 
 from coding_agent.config import Settings, get_settings
+from coding_agent.models import build_gemini4_generate_config, build_gemini_model
 from coding_agent.tools.sandbox_execution import (
     AgentPlatformSandboxEnvironment,
     build_code_execution_executor,
@@ -202,7 +204,10 @@ def _fallback_after_tool_callback(
     del args
     tool_name = str(getattr(tool, "name", "tool"))
     state = getattr(tool_context, "state", None)
-    start_ts = state.pop(f"_tool_start_ts:{tool_name}", None) if state is not None else None
+    start_key = f"_tool_start_ts:{tool_name}"
+    start_ts = state.get(start_key, None) if state is not None else None
+    if state is not None and start_ts is not None:
+        state[start_key] = None
     duration_ms = int((time.monotonic() - start_ts) * 1000) if start_ts is not None else -1
 
     span = trace.get_current_span()
@@ -285,25 +290,21 @@ def build_coding_agent(settings: Settings | None = None) -> LlmAgent:
     cfg = settings or get_settings()
     tools, callback_bundle, code_executor = _assemble_runtime_components(cfg)
 
-    # Always use an explicit versioned Gemini model ID (do NOT use `gemini-flash-latest`
-    # on regional Vertex AI / Agent Platform endpoints). Keep `output_schema` unset on this
-    # tool-heavy LlmAgent as a cross-model reliability best practice: ADK Python supports
-    # `output_schema` + `tools` on Gemini on Google Cloud, whereas other models fall back to
-    # an injected `set_model_response` tool that can be unreliable (isolate structured outputs
-    # in dedicated specialist/formatter agents such as `code_reviewer`).
+    # Route Gemini 4 inference (`gemini-4-hydrogen` / `gemini-4-neon`) via `MODEL_LOCATION=global`
+    # while keeping `GOOGLE_CLOUD_LOCATION=asia-southeast1` for Agent Runtime, Sandboxes, Sessions,
+    # Memory Bank, and Feedback. Keep `output_schema` unset on this tool-heavy LlmAgent as a
+    # cross-model reliability best practice (isolate structured outputs in dedicated specialist
+    # agents such as `code_reviewer` and `spec_planner`).
     agent_kwargs: dict[str, Any] = {
         "name": "coding_agent",
-        "model": Gemini(
-            model=cfg.model_name,
-            retry_options=types.HttpRetryOptions(initial_delay=1, attempts=2),
-        ),
+        "model": build_gemini_model(cfg, role="coding"),
         "description": (
             "Enterprise Coding Agent that reads, edits, writes, and verifies code "
             "inside a confined local or remote Managed Sandbox environment."
         ),
         "instruction": SYSTEM_INSTRUCTION,
         "tools": tools,
-        "generate_content_config": types.GenerateContentConfig(temperature=0.2),
+        "generate_content_config": build_gemini4_generate_config(cfg),
     }
     if code_executor is not None:
         agent_kwargs["code_executor"] = code_executor
@@ -324,6 +325,7 @@ def build_root_agent(settings: Settings | None = None) -> Any:
     - ``collaborative``: ADK 2.0 Coordinator + ``single_turn``/``task`` subagents.
     - ``graph``: ADK 2.0 declarative ``Workflow`` graph with ``JoinNode`` + bounded fix loop.
     - ``dynamic``: ADK 2.0 programmatic ``@node(rerun_on_resume=True)`` orchestrator.
+    - ``agy_harness``: ADK 2.0 outer orchestrator + Antigravity (``agy``) headless coding harness.
     """
     cfg = settings or get_settings()
     if cfg.agent_architecture == "simple":
@@ -332,6 +334,7 @@ def build_root_agent(settings: Settings | None = None) -> Any:
     tools, callback_bundle, code_executor = _assemble_runtime_components(cfg)
 
     from coding_agent.architectures import (
+        build_agy_harness_workflow,
         build_collaborative_coding_team,
         build_dynamic_coding_workflow,
         build_graph_coding_workflow,
@@ -358,6 +361,13 @@ def build_root_agent(settings: Settings | None = None) -> Any:
             callbacks=callback_bundle,
             code_executor=code_executor,
         )
+    if cfg.agent_architecture == "agy_harness":
+        return build_agy_harness_workflow(
+            settings=cfg,
+            tools=tools,
+            callbacks=callback_bundle,
+            code_executor=code_executor,
+        )
     raise ValueError(f"Unsupported AGENT_ARCHITECTURE={cfg.agent_architecture!r}.")
 
 
@@ -365,7 +375,7 @@ def _build_app_options(settings: Settings | None = None) -> dict[str, Any]:
     """Build ``App`` resumability and optional ``GlobalInstructionPlugin`` kwargs.
 
     Attaches ``GlobalInstructionPlugin`` across multi-agent and workflow modes
-    (``collaborative``, ``graph``, ``dynamic``) per ADK 2.0 guidance
+    (``collaborative``, ``graph``, ``dynamic``, ``agy_harness``) per ADK 2.0 guidance
     (``adk.dev/graphs/``, ``adk.dev/workflows/collaboration/``), while keeping
     ``simple`` mode unchanged for Labs 2-8 backward compatibility.
     """
@@ -373,7 +383,7 @@ def _build_app_options(settings: Settings | None = None) -> dict[str, Any]:
     options: dict[str, Any] = {
         "resumability_config": ResumabilityConfig(is_resumable=True),
     }
-    if cfg.agent_architecture in {"collaborative", "graph", "dynamic"}:
+    if cfg.agent_architecture in {"collaborative", "graph", "dynamic", "agy_harness"}:
         from coding_agent.architectures import build_global_instruction_plugin
 
         options["plugins"] = [build_global_instruction_plugin()]

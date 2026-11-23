@@ -17,6 +17,7 @@ Optional dependencies (not installed by default in ``solution/pyproject.toml``):
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 from dataclasses import asdict, dataclass
@@ -37,7 +38,9 @@ class GkeSandboxSettings:
     sandbox_template: str = "coding-sandbox-template"
     warmpool: str = "coding-sandbox-warmpool"
     sandbox_gateway_name: str | None = None
-    model_name: str = "gemini-2.5-flash"
+    model_name: str = "gemini-4-hydrogen"
+    model_location: str = "global"
+    google_cloud_project: str | None = None
     kubeconfig_path: str | None = None
     kubeconfig_context: str | None = None
 
@@ -45,6 +48,7 @@ class GkeSandboxSettings:
     def from_env(cls) -> GkeSandboxSettings:
         """Load settings from environment variables with workshop defaults."""
         gateway = os.environ.get("GKE_SANDBOX_GATEWAY_NAME", "").strip() or None
+        project = os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip() or None
         kubeconfig = os.environ.get("KUBECONFIG", "").strip() or None
         kube_ctx = os.environ.get("KUBECONFIG_CONTEXT", "").strip() or None
         return cls(
@@ -54,7 +58,10 @@ class GkeSandboxSettings:
             ).strip(),
             warmpool=os.environ.get("GKE_SANDBOX_WARMPOOL", "coding-sandbox-warmpool").strip(),
             sandbox_gateway_name=gateway,
-            model_name=os.environ.get("MODEL_NAME", "gemini-2.5-flash").strip(),
+            model_name=os.environ.get("MODEL_NAME", "gemini-4-hydrogen").strip()
+            or "gemini-4-hydrogen",
+            model_location=os.environ.get("MODEL_LOCATION", "global").strip() or "global",
+            google_cloud_project=project,
             kubeconfig_path=kubeconfig,
             kubeconfig_context=kube_ctx,
         )
@@ -91,18 +98,47 @@ def build_gke_code_executor(settings: GkeSandboxSettings) -> Any:
 
 
 def build_gke_coding_agent(settings: GkeSandboxSettings) -> Any:
-    """Construct an ADK ``LlmAgent`` wired with ``GkeCodeExecutor``."""
+    """Construct an ADK ``LlmAgent`` wired with Frontier Gemini 4 and ``GkeCodeExecutor``."""
     try:
+        from google import genai
         from google.adk.agents import LlmAgent
+        from google.adk.models import Gemini
     except ImportError as exc:
         raise ImportError(
             "ADK LlmAgent requires `pip install \"google-adk[extensions]\"`."
         ) from exc
 
+    # Route Frontier Gemini 4 models (e.g., gemini-4-hydrogen on global, or
+    # gemini-4-argon on asia-southeast1 for strict regional residency) cleanly
+    # across google-genai versions without overriding ADK's api_client property.
+    try:
+        params = inspect.signature(genai.Client.__init__).parameters
+    except (TypeError, ValueError):
+        params = {}
+    auth_key = "enterprise" if "enterprise" in params else "vertexai"
+
+    client_kwargs: dict[str, Any] = {
+        auth_key: True,
+        "location": settings.model_location,
+    }
+    project = (
+        settings.google_cloud_project
+        or os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
+        or None
+    )
+    if project:
+        client_kwargs["project"] = project
+
+    gemini_kwargs: dict[str, Any] = {"model": settings.model_name}
+    model_fields = getattr(Gemini, "model_fields", None)
+    if model_fields is None or "client_kwargs" in model_fields:
+        gemini_kwargs["client_kwargs"] = client_kwargs
+    gemini_model = Gemini(**gemini_kwargs)
+
     executor = build_gke_code_executor(settings)
     return LlmAgent(
         name="gke_sandbox_coding_agent",
-        model=settings.model_name,
+        model=gemini_model,
         instruction=GKE_SYSTEM_INSTRUCTION,
         code_executor=executor,
     )

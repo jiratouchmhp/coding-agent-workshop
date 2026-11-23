@@ -36,7 +36,8 @@ Usage: ./scripts/fast_forward_lab.sh <1|2|3|4|5|6|8|all> [--dry-run]
 Catch up on a workshop lab by syncing completed reference code from solution/
 into starter/ without spoiling later labs' # TODO(lab-N) checkpoints:
 
-  1    Lab 1: coding_agent/architectures.py, services.yaml, services.py +
+  1    Lab 1: coding_agent/models.py, coding_agent/tools/agy_headless_harness.py,
+              coding_agent/architectures.py, services.yaml, services.py +
               AST-splice build_local_environment_toolset & _assemble_runtime_components
   2    Lab 2: coding_agent/tools/sandbox_lifecycle.py, sandbox_execution.py +
               AST-splice _build_remote_execution_components
@@ -636,7 +637,9 @@ fast_forward_lab() {
   local lab="$1"
   case "${lab}" in
     1)
-      section "Fast-Forward Lab 1 (Setup & ADK Build)"
+      section "Fast-Forward Lab 1 (Setup, Gemini 4 Models, agy Harness & ADK Build)"
+      copy_solution_file "coding_agent/models.py"
+      copy_solution_file "coding_agent/tools/agy_headless_harness.py"
       copy_solution_file "coding_agent/architectures.py"
       copy_solution_file "services.yaml"
       copy_solution_file "services.py"

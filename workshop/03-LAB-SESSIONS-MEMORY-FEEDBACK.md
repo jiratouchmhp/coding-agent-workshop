@@ -82,6 +82,7 @@ source .env
 export GOOGLE_GENAI_USE_ENTERPRISE="TRUE"   # MANDATORY for Feedback Service & ADK enterprise features
 export GOOGLE_CLOUD_PROJECT="${GOOGLE_CLOUD_PROJECT}"
 export GOOGLE_CLOUD_LOCATION="${GOOGLE_CLOUD_LOCATION:-asia-southeast1}"  # Singapore fallback (Sessions/Memory/Feedback not yet in Bangkok asia-southeast3)
+export MODEL_LOCATION="${MODEL_LOCATION:-global}"                          # Frontier Gemini 4 Hydrogen/Neon inference endpoint (or asia-southeast1 with gemini-4-argon)
 ```
 
 Verify required APIs are enabled:
@@ -273,7 +274,7 @@ Open [`starter/coding_agent/memory/memory_bank_manager.py`](../starter/coding_ag
 ### Step B1: Review Pre-Filled Memory Bank Topics, Models, Few-Shots & TTL
 
 Key platform defaults and rules already wired into the pre-filled `MemoryBankManager.configure_memory_bank(...)` and `build_managed_semantic_memory_config(...)` helpers:
-- **Generation LLM Default:** **`gemini-3.5-flash`** (effective June 29, 2026; older instances default to `gemini-2.5-flash`).
+- **Generation LLM Default:** **`gemini-3.5-flash`** (effective June 29, 2026; legacy pre-June 2026 instances defaulted to `gemini-2.5-flash`, which retired Oct 20, 2026 — keep `generation_config.model` explicitly pinned to a supported global model).
 - **Embedding Model Default:** **`text-embedding-005`** (multilingual option: `gemini-embedding-2`, which ONLY accepts `global`, `us`, or `eu` in its model resource name — **NOT** regional paths like `asia-southeast1` or `us-central1`). **Critical:** The embedding model can **only be changed before storing the first memory**!
 - **Verified `agentplatform==2.10.0` SDK Config & Namespace Rules:**
   - Always use **`"granular_ttl_config"`** inside `ttl_config` (both in dict configs and `TtlConfig(granular_ttl_config=...)`). Passing `"granular_ttl"` raises Pydantic `ValidationError: extra_forbidden` in `google-cloud-agentplatform==2.10.0`.

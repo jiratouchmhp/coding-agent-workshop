@@ -1,18 +1,18 @@
 ---
 name: adk-coding-agent-build
 description: >-
-  Builds ADK Python 2.0+ coding agents with google/agents-cli. Use when
-  implementing Simple/Managed/Collaborative/Graph/Dynamic architectures,
+  Builds ADK Python 2.0+ coding agents with Gemini 4, agy headless CLI harness,
+  and google/agents-cli. Use when implementing Gemini 4 client_kwargs
+  (gemini-4-hydrogen/neon/argon, THINKING_LEVEL, google-genai>=2.34.0),
+  Simple/Managed/Collaborative/Graph/Dynamic/agy_harness architectures,
+  AgyHeadlessHarness (0/1/2/3 exit codes, AGY_ADC_AUTH, auto/local/sandbox),
   EnvironmentToolset (ReadFile/EditFile/WriteFile/Execute), LocalEnvironment,
-  BaseEnvironment (EnvironmentScope/Context/SkillToolset),
-  ExecuteBashTool/BashToolPolicy, LlmAgent/App/AdkApp, FunctionTool/McpToolset,
-  callbacks/BasePlugin/GlobalInstructionPlugin, state/artifacts/.env,
-  ManagedAgent, Service Registration (services.yaml/services.py), subagent mode
-  (chat/task/single_turn), Workflow/JoinNode/Event(route/output), RequestInput,
-  RetryConfig/NodeTimeoutError, ctx.run_node/rerun_on_resume, or agents-cli
-  run/lint/extensions/adk-recipes. Don't use for sandboxes
-  (agent-platform-sandbox-byoc), Runtime (agent-platform-runtime-and-state),
-  registries (agent-platform-governance-and-registries), evals
+  BaseEnvironment (EnvironmentScope/Context/SkillToolset), ExecuteBashTool,
+  LlmAgent/App/AdkApp, FunctionTool/McpToolset, callbacks/GlobalInstructionPlugin,
+  services.yaml/services.py, Workflow/JoinNode/Event, RequestInput, RetryConfig,
+  or ctx.run_node. Don't use for sandboxes (agent-platform-sandbox-byoc), Runtime
+  (agent-platform-runtime-and-state), registries
+  (agent-platform-governance-and-registries), evals
   (agent-platform-optimize-and-eval), GKE (agent-runtime-vs-gke-architecture),
   or google-agents-cli-{scaffold,adk-code,deploy,eval,publish}.
 ---
@@ -49,6 +49,9 @@ What are you building or configuring?
 ├── Bounded edit -> lint/test -> fix loops, dynamic list fan-out, or durable checkpointing
 │   └── ADK 2.0 Dynamic Workflow (`@node(rerun_on_resume=True)`, `await ctx.run_node(...)`, `asyncio.gather(..., use_sub_branch=True)`)
 │       [See references/graph-and-dynamic-workflows.md]
+├── Outer ADK Factory + Inner `agy` Headless CLI Harness (`AGENT_ARCHITECTURE=agy_harness`, exit codes 0/1/2/3, `AGY_ADC_AUTH=true`)
+│   └── `AgyHeadlessHarness` (`auto|local|sandbox`) + independent parallel `pytest`/`ruff` + `gemini-4-neon` reviewer
+│       [See references/agy-headless-cli-harness.md]
 └── Downstream lifecycle operations (hand off to specialized skills)
     ├── Generic project scaffolding / boilerplate -> `google-agents-cli-scaffold` / `google-agents-cli-adk-code`
     ├── Declarative Terraform, quotas, Managed Sessions, Memory Bank, Feedback -> `agent-platform-runtime-and-state`
@@ -69,7 +72,8 @@ What are you building or configuring?
 | Set `scope = EnvironmentScope.SESSION` + fixed `working_dir = Path("/workspace")` | Default `SHARED` or reading `ctx` inside `working_dir` | `working_dir` takes no `ctx`; `SESSION` scope lets concurrent sessions initialize isolated sandboxes in parallel. |
 | Pass `environment=shared_env` **OR** `code_executor=...` to `SkillToolset` | Passing both `environment=` and `code_executor=` | Passing both raises `ValueError`; `save_output_artifacts=True` works only with `code_executor`. |
 | Set explicit `BashToolPolicy(allowed_command_prefixes=(...), blocked_operators=(...))` | Using default `BashToolPolicy()` | Default `allowed_command_prefixes=("*",)` permits **every** command; POSIX-only with mandatory HITL approval. |
-| Set `App(name="<folder_basename>", root_agent=root_agent)` + explicit versioned model ID (`gemini-2.5-flash`) | Arbitrary `App.name` or `gemini-flash-latest` on regional endpoints | Name mismatch causes `"Session not found"`; `gemini-flash-latest` can 404 on regional endpoints like `asia-southeast1`. |
+| Set `App(name="<folder_basename>", root_agent=root_agent)` + Gemini 4 (`gemini-4-hydrogen`/`gemini-4-neon`) via `Gemini(client_kwargs={auth_key: True, "project": ..., "location": "global"})` + `ThinkingConfig(thinking_level="MEDIUM")` (`google-genai>=2.34.0`) | Using retired `gemini-2.5-flash` (Oct 20, 2026), `gemini-flash-latest`, `asia-southeast1` for Hydrogen/Neon, `THINKING_LEVEL=MINIMAL`, `thinking_budget`, `temperature`, or overriding `Gemini.api_client` | Hydrogen/Neon return HTTP 404 on `asia-southeast1` & 501 on `asia-southeast3` (use `gemini-4-argon` on `asia-southeast1` for regional residency); `MINIMAL`/`thinking_budget` return HTTP 400; overriding `api_client` breaks `@PerLoopCachedProperty`; `client_kwargs` with signature-checked `enterprise`/`vertexai` stays version-safe. |
+| Use `agy -p ... --output-format stream-json` with `AGY_ADC_AUTH=true` on Custom SA + retry ONLY exit code `3` (`AGENT_ERROR`) | Proxying personal developer `agy` OAuth in multi-tenant runtimes or retrying exit codes `1`/`2` | Enterprise ToS forbids personal OAuth relay; exit `1` is auth/CLI fault, exit `2` is usage error (never retry), exit `3` allows bounded retry / `gemini-4-neon` -> `gemini-4-hydrogen` fallback. |
 | Isolate `output_schema` in a formatter subagent/node for non-Gemini models; never set `mode` on root agent | Assuming `output_schema` + `tools=[...]` works reliably on every model, setting `mode` on root, or using `mode="task"` in Python v2.0.0 graphs | Python ADK supports `output_schema` + `tools` directly on Gemini on GCP, but other models fall back to an unreliable `set_model_response` tool; `task` mode must be a leaf agent and is disabled in Python v2.0.0 graph `Workflow`s. |
 | Use ADK 2.0 Workflow / @node and GOOGLE_GENAI_USE_ENTERPRISE=TRUE | Never generate deprecated SequentialAgent, ParallelAgent, or LoopAgent classes, and never use GOOGLE_GENAI_USE_VERTEXAI | ADK 2.0 standardizes orchestration on Workflow / @node and enterprise auth on GOOGLE_GENAI_USE_ENTERPRISE=TRUE. |
 | Emit **at most ONE** `Event(output=...)` per Python node; merge parallel leaves with `JoinNode` | Multiple `Event(output=...)` yields, silent `JoinNode` feeders, or >=2 terminal outputs | Multiple `Event(output=...)` raises a Python runtime error; >=2 terminal outputs raise `ValueError`; every `JoinNode` feeder must output. |
@@ -82,10 +86,12 @@ What are you building or configuring?
 
 ## Quick-Start Patterns
 
-### 1. Confined ADK Coding Agent (`LlmAgent` + `EnvironmentToolset` + `App`)
+### 1. Confined ADK Coding Agent (`Gemini 4` + `LlmAgent` + `EnvironmentToolset` + `App`)
 
 ```python
+import inspect, os
 from pathlib import Path
+from google import genai
 from google.adk.agents import LlmAgent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.apps import App, ResumabilityConfig
@@ -99,34 +105,28 @@ async def init_workspace_state(callback_context: CallbackContext) -> None:
 
 workspace_dir = Path("/tmp/coding_agent_workspace").resolve()
 workspace_dir.mkdir(parents=True, exist_ok=True)
+env_toolset = EnvironmentToolset(environment=LocalEnvironment(working_dir=workspace_dir), max_output_chars=12_000)
 
-env_toolset = EnvironmentToolset(
-    environment=LocalEnvironment(working_dir=workspace_dir),  # MUST be pathlib.Path!
-    max_output_chars=12_000,
+# Version-safe Gemini 4 client_kwargs (never override Gemini.api_client!); google-genai>=2.34.0
+auth_key = "enterprise" if "enterprise" in inspect.signature(genai.Client.__init__).parameters else "vertexai"
+gemini4 = Gemini(
+    model=os.environ.get("MODEL_NAME", "gemini-4-hydrogen"),  # Reasoning/review: gemini-4-neon; regional SG: gemini-4-argon
+    client_kwargs={auth_key: True, "project": os.environ["GOOGLE_CLOUD_PROJECT"], "location": os.environ.get("MODEL_LOCATION", "global")},
+    retry_options=types.HttpRetryOptions(initial_delay=1, attempts=3),
 )
-
 root_agent = LlmAgent(
     name="coding_agent",
-    model=Gemini(
-        model="gemini-2.5-flash",  # Explicit versioned model ID for regional endpoints
-        retry_options=types.HttpRetryOptions(initial_delay=1, attempts=2),
-    ),
+    model=gemini4,
     description="Coding agent that reads, edits, writes, and tests code inside its workspace.",
-    instruction="""You are a coding agent working in {repo_name}.
-1. Inspect files with ReadFile before editing.
-2. Prefer surgical EditFile updates over full-file rewrites.
-3. Verify changes with pytest/ruff via Execute; never fabricate test results.""",
+    instruction="Work in {repo_name}. Inspect with ReadFile, prefer surgical EditFile, verify via Execute.",
     tools=[env_toolset],
     before_agent_callback=init_workspace_state,
-    generate_content_config=types.GenerateContentConfig(temperature=0.2),
+    generate_content_config=types.GenerateContentConfig(
+        thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),  # Strictly LOW|MEDIUM|HIGH|XHIGH
+    ),
 )
-
 # App.name MUST match the agent directory basename (e.g., "coding_agent" or "app")
-app = App(
-    name="coding_agent",
-    root_agent=root_agent,
-    resumability_config=ResumabilityConfig(is_resumable=True),
-)
+app = App(name="coding_agent", root_agent=root_agent, resumability_config=ResumabilityConfig(is_resumable=True))
 ```
 
 ### 2. Custom `BaseEnvironment` ABC Contract (Per-Session Remote Sandbox)
@@ -188,8 +188,11 @@ agents-cli install && agents-cli lint
 agents-cli run "Write hello.py and verify it with python3" -v
 agents-cli playground
 
-# 4. Evaluate behavior (never assert LLM prose in pytest!) before promoting/deploying
+# 4. Evaluate behavior (never assert LLM prose in pytest!) & run agy headless harness dry-run/live
 agents-cli eval run
+# Install agy static Go CLI (zero Docker): curl -fsSL https://antigravity.google/cli/install.sh | bash
+AGY_ADC_AUTH=true GOOGLE_CLOUD_LOCATION=global agy -p "Fix failing test" \
+  --output-format stream-json --model gemini-4-hydrogen --effort medium --print-timeout 5m --sandbox
 # If Terraform-managed observability is needed, run infra BEFORE first deploy:
 # agents-cli infra single-project --apply && agents-cli deploy --no-wait
 ```
@@ -202,15 +205,16 @@ Load the specific reference file matching your task (all references are 1-hop fr
 
 | Reference File | Deep-Dive Contents |
 |---|---|
-| [references/adk-core-and-setup.md](references/adk-core-and-setup.md) | 5-namespace SDK divergence (`google.adk` / `vertexai` / `agentplatform` / `google.genai`), `.env` & auth modes (`GOOGLE_GENAI_USE_ENTERPRISE=TRUE` & `GEMINI_API_KEY`), ADK 2.0+ version milestones, `LlmAgent`/`App`/`AdkApp` (`agentplatform.frameworks`), Gemini regional retries & Interactions API, `FunctionTool`/`McpToolset`, exact callback signatures, `BasePlugin`, state prefixes, Artifacts, and the ADK 2.0 Native Design Contract. |
-| [references/agent-architectures-and-workflows.md](references/agent-architectures-and-workflows.md) | Single-agent evolution triggers, `ManagedAgent` (Python v2.4.0 Preview: Gemini API vs Agent Platform `global`-only, `RemoteMcpServer`, `mode="single_turn"`, remote state vs `interaction_id`/`environment_id`), `services.yaml` vs `services.py` (discovery & precedence), ADK 2.0 collaborative teams (`chat`/`task`/`single_turn`, `GlobalInstructionPlugin`, isolated branches), Python ADK 2.0 deterministic & dynamic routing/failover, and all 7 multi-agent patterns in native ADK 2.0. |
-| [references/graph-and-dynamic-workflows.md](references/graph-and-dynamic-workflows.md) | Complete ADK 2.0 Graph & Dynamic Workflow deep dive: `Workflow(edges=[...])`, conditional/multi-route `Event(route=...)` & `DEFAULT_ROUTE`, `JoinNode` fan-out/fan-in & single terminal output `ValueError`, bounded back-edge cycles, `Event(output/message/state)` & Python single-output / `{key}`-from-state rules vs TS/Go/Kotlin, `RequestInput` HITL vs `FunctionTool` confirmation, `RetryConfig` / `NodeTimeoutError` / `ctx.attempt_count`, and dynamic `@node(rerun_on_resume=True)` / `ctx.run_node` / `asyncio.gather(..., use_sub_branch=True)` / custom `run_id` rules. |
-| [references/coding-agent-toolsets.md](references/coding-agent-toolsets.md) | Source-verified `EnvironmentToolset` internals, `LocalEnvironment` `Path` bug & subprocess teardown, complete 9-member `BaseEnvironment` ABC contract (`EnvironmentScope`, `ExecutionResult`, `ctx` inspection), `SkillToolset` shared-environment rules, `ExecuteBashTool` + `BashToolPolicy` hardening (`RLIMIT_*`, whole-token matching, mandatory HITL), Pre-GA `ManagedAgent` contrast, and pytest verification harness. |
-| [references/agents-cli-lifecycle.md](references/agents-cli-lifecycle.md) | Complete `google/agents-cli` (`~= 1.15.0`) command & flag matrices (`setup`, `create`, `scaffold enhance/upgrade`, `run`, `playground`, `lint`, `eval`, `infra`, `deploy`, `publish`), `agents-cli-extension.yaml` (`v1alpha1`) schema & override rules, all 11 curated `google/adk-recipes` (`long-horizon-harness`), and the 7-skill `google-agents-cli-*` anti-shadowing map. |
-| [references/maintenance.md](references/maintenance.md) | Upstream seed URLs (`adk.dev/get-started/`, `github.com/google/agents-cli`), complete Tier-1/Tier-2 `.md`/`.md.txt`/raw GitHub refresh endpoints (including all active ADK 2.0 architecture & graph docs), verification date (`2026-11-19`), and section-by-section refresh checklist. |
+| [references/adk-core-and-setup.md](references/adk-core-and-setup.md) | 5-namespace SDK divergence (`google.adk` / `vertexai` / `agentplatform` / `google.genai>=2.34.0`), `.env` & auth modes (`GOOGLE_GENAI_USE_ENTERPRISE=TRUE`), Frontier Gemini 4 `client_kwargs` + `ThinkingConfig` factory, `LlmAgent`/`App`/`AdkApp`, `FunctionTool`/`McpToolset`, callbacks, `BasePlugin`, state prefixes, Artifacts, and the ADK 2.0 Native Design Contract. |
+| [references/agent-architectures-and-workflows.md](references/agent-architectures-and-workflows.md) | Single-agent evolution triggers, `ManagedAgent` (Python v2.4.0 Preview), `services.yaml` vs `services.py`, ADK 2.0 collaborative teams (`chat`/`task`/`single_turn`, `GlobalInstructionPlugin`), deterministic & dynamic routing/failover, and all 7 multi-agent patterns. |
+| [references/graph-and-dynamic-workflows.md](references/graph-and-dynamic-workflows.md) | Complete ADK 2.0 Graph & Dynamic Workflow deep dive: `Workflow(edges=[...])`, conditional/multi-route `Event(route=...)`, `JoinNode` fan-out/fan-in & single terminal output `ValueError`, bounded back-edge cycles, `RequestInput` HITL, `RetryConfig`/`NodeTimeoutError`, and dynamic `@node(rerun_on_resume=True)` / `ctx.run_node`. |
+| [references/coding-agent-toolsets.md](references/coding-agent-toolsets.md) | Source-verified `EnvironmentToolset`, `LocalEnvironment` `Path` bug, complete 9-member `BaseEnvironment` ABC contract (`EnvironmentScope`, `ExecutionResult`, `ctx`), `SkillToolset` shared-environment rules, `ExecuteBashTool` + `BashToolPolicy`, Pre-GA `ManagedAgent` contrast, and pytest verification harness. |
+| [references/agy-headless-cli-harness.md](references/agy-headless-cli-harness.md) | Outer ADK Factory + Inner `agy` Headless CLI Harness (`AGENT_ARCHITECTURE=agy_harness`): static Go install (`--dir /usr/local/bin`), verified headless flags, 4-tier `AgyExitCode` (`0/1/2/3`), `auto\|local\|sandbox` modes, 3-surface comparison (`agy` CLI vs `google-antigravity` SDK vs `ManagedAgent`/ADK), and Enterprise Auth/ToS boundary (`AGY_ADC_AUTH=true`). |
+| [references/agents-cli-lifecycle.md](references/agents-cli-lifecycle.md) | Complete `google/agents-cli` (`~= 1.15.0`) command & flag matrices, `agents-cli-extension.yaml` (`v1alpha1`), curated `google/adk-recipes`, and the 7-skill `google-agents-cli-*` anti-shadowing map. |
+| [references/maintenance.md](references/maintenance.md) | Upstream seed URLs (`adk.dev/get-started/`, `github.com/google/agents-cli`), complete refresh endpoints, verification date (`2026-11-23`), and section-by-section refresh checklist. |
 
 ---
 
 ## Maintenance
 
-Last verified against official ADK docs, `google/adk-python` source, and `google/agents-cli` v1.15.0 on **`2026-11-19`**. See [references/maintenance.md](references/maintenance.md) for all canonical upstream URLs, refresh endpoints, and update procedures.
+Last verified against official ADK docs, `google/adk-python` source, Frontier Gemini 4, `agy` headless CLI, and `google/agents-cli` v1.15.0 on **`2026-11-23`**. See [references/maintenance.md](references/maintenance.md) for refresh procedures.

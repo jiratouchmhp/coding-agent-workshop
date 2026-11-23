@@ -12,6 +12,8 @@ dependencies = [
     # dynamic workflows, and service registration (extras required for EnvironmentToolset,
     # GCPSkillRegistry, AgentRegistry, Auth Manager MCP, and GEPA eval/optimize).
     "google-adk[a2a,agent-identity,mcp,eval]>=2.0.0",
+    # Gemini 4 SDK floor for automatic continuation_token long decodes (up to 1M unified tokens).
+    "google-genai>=2.34.0",
     # Standalone Gemini Enterprise Agent Platform SDK (`agentplatform.Client` + ADK/eval integrations).
     "google-cloud-agentplatform[adk,evaluation]>=2.0.1",
     # Vertex AI / Agent Platform SDK (agent_engines and evaluation integrations).
@@ -52,6 +54,7 @@ dev = [
 [project.scripts]
 sandbox-lifecycle = "coding_agent.tools.sandbox_lifecycle:main"
 sandbox-execution = "coding_agent.tools.sandbox_execution:main"
+agy-harness = "coding_agent.tools.agy_headless_harness:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["coding_agent"]

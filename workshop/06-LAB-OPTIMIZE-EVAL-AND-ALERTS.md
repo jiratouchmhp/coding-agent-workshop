@@ -523,7 +523,7 @@ Automatic Loss Analysis classifies failures into two verified 13-pattern taxonom
 | Low `multi_turn_tool_use_quality` (`Incorrect Parameter Mapping`, `Omission of Required Tool Call`) | Rewrite tool docstrings & parameter schemas; set `tool_config` (`mode="ANY"`) if thinking mode skips required tool calls. |
 | Low `hallucination` (`Hallucination of Missing Information`) | Constrain instructions to cite only verified tool outputs; check whether sandbox tools truncate output (`max_output_chars`). |
 | Domain skill gap (`Constraint Violation`, missed OWASP check, missing `file:line` citation in `secure-code-review`) | Optimize `skills_to_register/secure-code-review/SKILL.md` (manually or via `GEPARootAgentOptimizer`), re-validate 16 ZIP checks, and hot-update **Skill Registry (`client.skills.update` with directory path)** or promote an immutable **Agent Registry `rev-2` revision** (`gcloud alpha agent-registry skills --location=global`) — **zero agent container rebuild required** (Section 6.4). |
-| Flaky / noisy judge scores | Pin agent `temperature=0` or enable multi-sample judge voting (`judge_model_sampling_count: 3`). **Never** lower thresholds or delete flaky cases. |
+| Flaky / noisy judge scores | Enable multi-sample judge voting (`judge_model_sampling_count: 3`) and pin an explicit `THINKING_LEVEL` (Gemini 4 ignores custom `temperature`/`top_p`/`top_k`; reserve `temperature=0` for legacy non-Gemini-4 models). **Never** lower thresholds or delete flaky cases. |
 
 ---
 
@@ -669,7 +669,7 @@ Now feed your **Failure Clusters** (Part 4) and **Feedback Service** negative en
 |---|---|---|---|
 | **`GEPARootAgentPromptOptimizer`** *(default for `adk optimize`)* | Root agent `instruction` ONLY | GEPA Pareto-frontier evolutionary reflection (default 10K thinking budget, `max_metric_calls=100`, `reflection_minibatch_size=3`) | Prompt-only failures with clear rubric criteria |
 | **`GEPARootAgentOptimizer`** | Root agent `instruction` **AND** `SkillToolset` skill instructions | GEPA Pareto-frontier reflection (`ThinkingLevel.HIGH`) | Coding agents whose failures span root instructions + loaded skills |
-| **`SimplePromptOptimizer`** | Root agent `instruction` ONLY (non-mutating) | 4-stage async loop: **Execute → Evaluate → Critique → Rewrite** (`gemini-2.5-flash`, `num_iterations`, `batch_size`) | Fast, predictable workshop/CI iteration |
+| **`SimplePromptOptimizer`** | Root agent `instruction` ONLY (non-mutating) | 4-stage async loop: **Execute → Evaluate → Critique → Rewrite** (`optimizer_model="gemini-4-hydrogen"` or `"gemini-4-neon"` on `MODEL_LOCATION=global` with `ThinkingLevel` — replacing ADK's legacy `gemini-2.5-flash` default retired Oct 20, 2026; `num_iterations`, `batch_size`) | Fast, predictable workshop/CI iteration |
 | **Example Store** *(Preview)* | Dynamic few-shot examples (no weights or code redeploy) | Cosine similarity retrieval (optional tool-name filter); max **50** stores/region/project | Rapidly fixing recurring tool-call formatting errors without redeploying |
 
 ### 6.2 Implement & Run `starter/eval/optimize_prompt.py` + `agents-cli eval optimize`

@@ -5,13 +5,14 @@
 # Usage:
 #   ./scripts/preflight_check.sh [--offline] [--env-file PATH]
 #
-# Validates local developer toolchain, Zero-Docker readiness, regional config
-# (Bangkok asia-southeast3 first — falling back to Singapore asia-southeast1
-# only for Agent Platform services not yet in Bangkok, global for Agent
-# Registry standalone skills & Eval, and us-central1 for Vertex AI Skill
-# Registry), and (when online) gcloud auth, gcloud alpha availability,
-# Application Default Credentials (ADC), production project guardrails, and
-# required enabled GCP APIs.
+# Validates local developer toolchain (including advisory Antigravity `agy` CLI),
+# Zero-Docker readiness, Gemini 4 model/location/thinking_level compatibility,
+# regional config (Bangkok asia-southeast3 first — falling back to Singapore
+# asia-southeast1 only for Agent Platform services not yet in Bangkok, global
+# for frontier Gemini 4 models, Agent Registry standalone skills & Eval, and
+# us-central1 for Vertex AI Skill Registry), and (when online) gcloud auth,
+# gcloud alpha availability, Application Default Credentials (ADC), production
+# project guardrails, and required enabled GCP APIs.
 # =============================================================================
 
 set -euo pipefail
@@ -176,6 +177,14 @@ else
   info "agents-cli not found on PATH (optional for Labs 1-6; install anytime with: uvx google-agents-cli setup)"
 fi
 
+if command -v agy >/dev/null 2>&1; then
+  AGY_VER="$(agy --version 2>/dev/null | head -n 1 || echo "agy")"
+  pass "Antigravity CLI (agy) detected (${AGY_VER}) — ready for local headless harness mode"
+else
+  info "Antigravity CLI (agy) not found on PATH (optional locally — 'make test-agy-harness' --dry-run and Bangkok Cloud Build BYOC images work without installing agy locally and without Docker)."
+  info "  To install agy locally for headless mode: curl -fsSL https://antigravity.google/cli/install.sh | bash"
+fi
+
 # -----------------------------------------------------------------------------
 # 2. Environment File (.env) & Regional Sanity Checks
 # -----------------------------------------------------------------------------
@@ -221,6 +230,10 @@ AGENT_REG_LOC="${AGENT_REGISTRY_LOCATION:-${PRIMARY_REG}}"
 AGENT_REG_SKILLS_LOC="${AGENT_REGISTRY_SKILLS_LOCATION:-global}"
 SKILL_REG_LOC="${SKILL_REGISTRY_LOCATION:-us-central1}"
 EVAL_LOC="${EVAL_LOCATION:-global}"
+MODEL_VAL="${MODEL_NAME:-gemini-4-hydrogen}"
+REASONING_MODEL_VAL="${REASONING_MODEL_NAME:-gemini-4-neon}"
+MODEL_LOC="${MODEL_LOCATION:-global}"
+THINK_LVL="${THINKING_LEVEL:-MEDIUM}"
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-}"
 
 # Bangkok-first default region check
@@ -244,11 +257,73 @@ elif [[ "${AGENT_PLATFORM_LOC}" == "asia-southeast3" ]]; then
 elif [[ "${AGENT_PLATFORM_LOC}" == "asia-southeast2" || "${AGENT_PLATFORM_LOC}" == "australia-southeast2" || "${AGENT_PLATFORM_LOC}" == "northamerica-northeast2" ]]; then
   fail "GOOGLE_CLOUD_LOCATION=${AGENT_PLATFORM_LOC} does NOT support Memory Bank (Lab 3). Fall back to asia-southeast1 (Singapore), us-central1, or europe-west4."
 elif [[ "${AGENT_PLATFORM_LOC}" == "global" ]]; then
-  fail "GOOGLE_CLOUD_LOCATION=global does NOT support Agent Runtime deployment or CMEK. Set GOOGLE_CLOUD_LOCATION=asia-southeast1 (and keep EVAL_LOCATION=global)."
+  fail "GOOGLE_CLOUD_LOCATION=global does NOT support Agent Runtime deployment or CMEK. Set GOOGLE_CLOUD_LOCATION=asia-southeast1 (and keep MODEL_LOCATION=global and EVAL_LOCATION=global)."
 elif [[ "${AGENT_PLATFORM_LOC}" == "asia-southeast1" ]]; then
-  pass "GOOGLE_CLOUD_LOCATION=${AGENT_PLATFORM_LOC} (Singapore fallback for services not yet in Bangkok: Agent Runtime, Managed Sandboxes, Sessions, Memory Bank, Agent Gateway, Gemini 2.5 Flash)"
+  pass "GOOGLE_CLOUD_LOCATION=${AGENT_PLATFORM_LOC} (Singapore fallback for Agent Platform services not yet in Bangkok: Agent Runtime, Managed Sandboxes, Sessions, Memory Bank, Agent Gateway)"
 else
   pass "GOOGLE_CLOUD_LOCATION=${AGENT_PLATFORM_LOC} (Agent Platform regional endpoint)"
+fi
+
+# Frontier Gemini 4 model, endpoint location, and thinking_level checks
+validate_model_location_pair() {
+  local var_name="$1"
+  local model_id="$2"
+  local model_loc="$3"
+
+  case "${model_id}" in
+    gemini-2.5-flash|gemini-2.5-flash-*)
+      fail "${var_name}=${model_id} uses retired Gemini 2.5 Flash (retired Oct 20, 2026). Upgrade to MODEL_NAME=gemini-4-hydrogen / REASONING_MODEL_NAME=gemini-4-neon with MODEL_LOCATION=global (or gemini-4-argon with MODEL_LOCATION=asia-southeast1)."
+      ;;
+    gemini-4-hydrogen|gemini-4-neon)
+      if [[ "${model_loc}" == "global" ]]; then
+        pass "${var_name}=${model_id} paired with MODEL_LOCATION=global (verified HTTP 200 frontier Gemini 4 endpoint)"
+      elif [[ "${model_loc}" == "asia-southeast1" ]]; then
+        fail "${var_name}=${model_id} returns HTTP 404 on MODEL_LOCATION=asia-southeast1. Set MODEL_LOCATION=global, or switch to gemini-4-argon for strict asia-southeast1 regional residency."
+      elif [[ "${model_loc}" == "asia-southeast3" ]]; then
+        fail "${var_name}=${model_id} returns HTTP 501 on MODEL_LOCATION=asia-southeast3. Set MODEL_LOCATION=global, or switch to gemini-4-argon in asia-southeast1."
+      else
+        warn "${var_name}=${model_id} paired with MODEL_LOCATION=${model_loc} — frontier models gemini-4-hydrogen and gemini-4-neon require MODEL_LOCATION=global."
+      fi
+      ;;
+    gemini-4-argon)
+      if [[ "${model_loc}" == "asia-southeast1" ]]; then
+        pass "${var_name}=${model_id} paired with MODEL_LOCATION=asia-southeast1 (verified HTTP 200 — strict Singapore regional residency)"
+      elif [[ "${model_loc}" == "global" ]]; then
+        pass "${var_name}=${model_id} paired with MODEL_LOCATION=global (verified HTTP 200)"
+      elif [[ "${model_loc}" == "asia-southeast3" ]]; then
+        fail "${var_name}=${model_id} is unsupported on MODEL_LOCATION=asia-southeast3. Set MODEL_LOCATION=asia-southeast1 (regional residency) or MODEL_LOCATION=global."
+      else
+        warn "${var_name}=${model_id} paired with MODEL_LOCATION=${model_loc} (verified endpoints: asia-southeast1, global)"
+      fi
+      ;;
+    "")
+      fail "${var_name} is unset. Set MODEL_NAME=gemini-4-hydrogen and REASONING_MODEL_NAME=gemini-4-neon (with MODEL_LOCATION=global)."
+      ;;
+    *)
+      info "${var_name}=${model_id} paired with MODEL_LOCATION=${model_loc} (workshop defaults: gemini-4-hydrogen / gemini-4-neon on global)"
+      ;;
+  esac
+}
+
+validate_model_location_pair "MODEL_NAME" "${MODEL_VAL}" "${MODEL_LOC}"
+validate_model_location_pair "REASONING_MODEL_NAME" "${REASONING_MODEL_VAL}" "${MODEL_LOC}"
+
+if [[ "${MODEL_VAL}" == gemini-4-* || "${REASONING_MODEL_VAL}" == gemini-4-* ]]; then
+  THINK_LVL_UPPER="$(printf '%s' "${THINK_LVL}" | tr '[:lower:]' '[:upper:]')"
+  case "${THINK_LVL_UPPER}" in
+    LOW|MEDIUM|HIGH|XHIGH)
+      pass "THINKING_LEVEL=${THINK_LVL_UPPER} (valid Gemini 4 thinking level: LOW | MEDIUM | HIGH | XHIGH)"
+      ;;
+    MINIMAL)
+      fail "THINKING_LEVEL=MINIMAL returns HTTP 400 on Gemini 4 models. Set THINKING_LEVEL to LOW, MEDIUM, HIGH, or XHIGH (default: MEDIUM)."
+      ;;
+    *)
+      fail "THINKING_LEVEL=${THINK_LVL} is invalid on Gemini 4 models (returns HTTP 400). Valid values are strictly: LOW, MEDIUM, HIGH, XHIGH."
+      ;;
+  esac
+  if [[ -n "${THINKING_BUDGET:-}" ]]; then
+    warn "THINKING_BUDGET is set, but passing thinking_budget returns HTTP 400 on Gemini 4 models. Unset THINKING_BUDGET and use THINKING_LEVEL instead."
+  fi
 fi
 
 # Skill Registry location check (strictly 3 preview regions)

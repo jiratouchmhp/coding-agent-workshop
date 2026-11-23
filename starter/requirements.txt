@@ -2,8 +2,10 @@
 # Mirrors runtime dependencies in `starter/pyproject.toml` so both Option 1 (`container_spec`
 # via `Dockerfile`) and Option 2 (`source_code_spec` + `image_spec {}`) install identically.
 
-# ADK Python 2.0+ for simple, collaborative, graph, and dynamic workflows (with eval/GEPA extra).
+# ADK Python 2.0+ for simple, collaborative, graph, dynamic, and agy_harness workflows (with eval/GEPA extra).
 google-adk[a2a,agent-identity,mcp,eval]>=2.0.0
+# Gemini 4 SDK floor for automatic continuation_token long decodes (up to 1M unified tokens).
+google-genai>=2.34.0
 google-cloud-agentplatform[adk,evaluation]>=2.0.1
 google-cloud-aiplatform[agent_engines,evaluation]>=1.154.0
 google-cloud-logging>=3.11.0

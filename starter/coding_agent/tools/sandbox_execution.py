@@ -132,13 +132,44 @@ def _normalize_command_response(raw: Any, elapsed_ms: int) -> CommandExecutionOu
     if isinstance(raw, dict):
         data = raw
     else:
+        status_code = getattr(raw, "status_code", None)
         body = getattr(raw, "body", None)
+        if body is None:
+            body = getattr(raw, "text", None)
         if isinstance(body, (bytes, bytearray)):
-            data = json.loads(body.decode("utf-8"))
+            body_text = body.decode("utf-8", errors="replace")
         elif isinstance(body, str):
-            data = json.loads(body)
-        elif isinstance(body, dict):
+            body_text = body
+        else:
+            body_text = None
+
+        if isinstance(status_code, int) and status_code >= 400:
+            preview = (body_text or repr(raw))[:400]
+            raise RuntimeError(
+                f"Sandbox runner returned HTTP {status_code}: {preview}"
+            )
+
+        if isinstance(body, dict):
             data = body
+        elif body_text is not None:
+            stripped = body_text.strip()
+            if not stripped:
+                raise RuntimeError(
+                    f"Sandbox runner returned an empty response body "
+                    f"(status_code={status_code!r}, raw={raw!r}). "
+                    "Verify the BYOC sandbox access token (use generate_access_token with "
+                    "service_account_email) and confirm port 8080 /exec is listening."
+                )
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"Sandbox runner returned non-JSON body (status_code={status_code!r}): "
+                    f"{stripped[:400]!r}"
+                ) from exc
+            if not isinstance(parsed, dict):
+                raise RuntimeError(f"Expected JSON object from sandbox runner, got {type(parsed).__name__}")
+            data = parsed
         else:
             data = {
                 "stdout": getattr(raw, "stdout", ""),
@@ -236,6 +267,7 @@ def execute_byoc_command(
     command: str,
     cwd: str = "/workspace",
     timeout: int | float = 60,
+    env: dict[str, str] | None = None,
     client: Any | None = None,
     sandbox_name: str | None = None,
     service_account_email: str | None = None,
@@ -253,21 +285,26 @@ def execute_byoc_command(
        mints a short-lived token via ``generate_sandbox_access_token()`` (if not passed)
        and invokes ``sandboxes.send_command(http_method="POST", path="exec",
        access_token=..., request_dict=..., sandbox_environment=...)``.
+
+    Optional ``env`` forwards an allowlisted per-exec ephemeral env dict to the
+    sandbox runner's child process (never logged or persisted to disk).
     """
     # TODO(lab-2): Implement BOTH transports cleanly:
-    # 1. If ``runner_base_url`` is set: POST JSON ``{"command": command, "cwd": cwd,
-    #    "timeout": timeout}`` to ``f"{runner_base_url.rstrip('/')}/exec"`` via ``httpx.Client``,
-    #    attaching ``Authorization: Bearer <token>`` when ``access_token`` or ``use_iam_bearer``
+    # 1. Build ``payload = {"command": command, "cwd": cwd, "timeout": max(1, int(timeout))}``
+    #    and attach ``payload["env"] = dict(env)`` when ``env`` is provided.
+    # 2. If ``runner_base_url`` is set: POST JSON ``payload`` to
+    #    ``f"{runner_base_url.rstrip('/')}/exec"`` via ``httpx.Client``, attaching
+    #    ``Authorization: Bearer <token>`` when ``access_token`` or ``use_iam_bearer``
     #    is provided, raise_for_status(), and return ``_normalize_command_response(resp.json(), elapsed_ms)``.
-    # 2. Otherwise require ``client`` and ``sandbox_name``: fetch ``sandbox_env = sandboxes_ns.get(name=sandbox_name)``,
+    # 3. Otherwise require ``client`` and ``sandbox_name``: fetch ``sandbox_env = sandboxes_ns.get(name=sandbox_name)``,
     #    mint ``token = access_token or generate_sandbox_access_token(client, service_account_email)``,
     #    invoke ``sandboxes_ns.send_command(http_method="POST", path="exec", access_token=token,
-    #    request_dict={"command": command, "cwd": cwd, "timeout": int(timeout)},
-    #    sandbox_environment=sandbox_env)``, and normalize into ``CommandExecutionOutput``.
+    #    request_dict=payload, sandbox_environment=sandbox_env)``, and normalize into ``CommandExecutionOutput``.
     _ = (
         command,
         cwd,
         timeout,
+        env,
         client,
         sandbox_name,
         service_account_email,
@@ -533,6 +570,103 @@ class AgentPlatformSandboxEnvironment(BaseEnvironment):
         # stderr=out.stderr, timed_out=out.timed_out)``.
         _ = (command, timeout, ctx)
         raise NotImplementedError("Complete TODO(lab-2): AgentPlatformSandboxEnvironment.execute()")
+
+    async def execute_with_env(
+        self,
+        command: str,
+        *,
+        env: dict[str, str] | None = None,
+        timeout: float | None = None,
+        ctx: Context | None = None,
+    ) -> ExecutionResult:
+        """Execute a command with optional allowlisted ephemeral ``env`` inside a BYOC sandbox."""
+        # Pre-filled boilerplate helper (already working once execute_byoc_command is implemented)
+        if not env:
+            return await self.execute(command, timeout=timeout, ctx=ctx)
+
+        if self._mode != "byoc" and not self._runner_base_url:
+            raise ValueError(
+                "Per-exec ephemeral env injection requires SANDBOX_MODE=byoc (custom /exec "
+                "runner); Managed Shell sandboxes do not accept /exec env payloads."
+            )
+
+        await self.initialize(ctx=ctx)
+        cwd_str = str(self._working_dir)
+        sandbox_name = self._get_active_sandbox_name(ctx)
+        client = None if self._runner_base_url else self._get_client()
+        out = await asyncio.to_thread(
+            execute_byoc_command,
+            command=command,
+            cwd=cwd_str,
+            timeout=timeout if timeout is not None else 60,
+            env=env,
+            client=client,
+            sandbox_name=sandbox_name,
+            service_account_email=self._service_account_email,
+            runner_base_url=self._runner_base_url,
+        )
+        return ExecutionResult(
+            exit_code=out.returncode,
+            stdout=out.stdout,
+            stderr=out.stderr,
+            timed_out=out.timed_out,
+        )
+
+    async def check_byoc_health(self, *, ctx: Context | None = None) -> dict[str, Any] | None:
+        """Query the BYOC runner's ``GET /health`` metadata (including ``agy_cli_available``)."""
+        # Pre-filled boilerplate helper
+        if self._mode != "byoc" and not self._runner_base_url:
+            return None
+
+        if self._runner_base_url:
+            import httpx
+
+            endpoint = f"{self._runner_base_url.rstrip('/')}/health"
+
+            def _fetch_direct() -> dict[str, Any]:
+                with httpx.Client(timeout=5.0) as http_client:
+                    resp = http_client.get(endpoint)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    return data if isinstance(data, dict) else {}
+
+            try:
+                return await asyncio.to_thread(_fetch_direct)
+            except Exception as exc:
+                logger.debug("Direct BYOC /health probe failed (%s).", exc)
+                return None
+
+        sandbox_name = self._get_active_sandbox_name(ctx)
+        if not sandbox_name:
+            return None
+
+        def _fetch_proxied() -> dict[str, Any]:
+            client = self._get_client()
+            sandboxes_ns = get_sandboxes_namespace(client)
+            sandbox_env = sandboxes_ns.get(name=sandbox_name)
+            token = (
+                generate_sandbox_access_token(client, self._service_account_email)
+                if self._service_account_email
+                else fetch_iam_bearer_token()
+            )
+            raw = sandboxes_ns.send_command(
+                http_method="GET",
+                path="health",
+                access_token=token,
+                sandbox_environment=sandbox_env,
+            )
+            body = getattr(raw, "body", raw)
+            if isinstance(body, (bytes, bytearray)):
+                return json.loads(body.decode("utf-8"))
+            if isinstance(body, str):
+                return json.loads(body)
+            return dict(body) if isinstance(body, dict) else {}
+
+        try:
+            return await asyncio.to_thread(_fetch_proxied)
+        except Exception as exc:
+            logger.debug("Managed BYOC /health probe failed (%s).", exc)
+            return None
 
     @override
     async def read_file(self, path: Path, *, ctx: Context | None = None) -> bytes:

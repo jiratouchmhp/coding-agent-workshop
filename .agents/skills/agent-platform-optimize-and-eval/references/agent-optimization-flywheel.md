@@ -21,7 +21,7 @@ Production reference for closing the **Quality Flywheel** on Gemini Enterprise A
 |---|---|---|---|---|
 | **`GEPARootAgentPromptOptimizer`** (`gepa_root_agent_prompt_optimizer`) | Experimental *(emits warning; default for `adk optimize`)* | **Root agent instructions ONLY** *(does NOT optimize sub-agents, tools, or skills)* | GEPA Pareto-frontier evolutionary reflection; default **10K token thinking budget** | `optimizer_model`, `model_configuration`, `max_metric_calls` (`100`), `reflection_minibatch_size` (`3`), `run_dir` (warm starts) |
 | **`GEPARootAgentOptimizer`** (`gepa_root_agent_optimizer`) | Experimental *(emits warning)* | **Root agent instructions AND `SkillToolset` skill instructions** *(NOT sub-agents or tools)* | GEPA Pareto-frontier reflection; default **`ThinkingLevel` `HIGH`** | `optimizer_model`, `model_configuration`, `max_metric_calls` (`100`), `reflection_minibatch_size` (`3`), `run_dir` (warm starts) |
-| **`SimplePromptOptimizer`** (`simple_prompt_optimizer`) | Built-in | **Root agent instructions ONLY** *(single-prompt sequential refinement; does NOT mutate initial agent)* | 4-stage async loop: **Execute -> Evaluate -> Critique -> Rewrite**; default `gemini-2.5-flash` + **10K token thinking budget** | `num_iterations` (`10`), `batch_size` (`5`), `optimizer_model` (`"gemini-2.5-flash"`), `model_configuration` (`GenerateContentConfig`) |
+| **`SimplePromptOptimizer`** (`simple_prompt_optimizer`) | Built-in | **Root agent instructions ONLY** *(single-prompt sequential refinement; does NOT mutate initial agent)* | 4-stage async loop: **Execute -> Evaluate -> Critique -> Rewrite**; override `optimizer_model="gemini-4-hydrogen"` (or `"gemini-4-neon"`) on `global` with `ThinkingLevel` (`LOW\|MEDIUM\|HIGH\|XHIGH`) — replacing legacy `gemini-2.5-flash` (retired Oct 20, 2026) | `num_iterations` (`10`), `batch_size` (`5`), `optimizer_model` (`"gemini-4-hydrogen"`), `model_configuration` (`GenerateContentConfig`) |
 
 ---
 
@@ -153,7 +153,7 @@ optimizer = SimplePromptOptimizer(
     config=SimplePromptOptimizerConfig(
         num_iterations=5,
         batch_size=10,
-        optimizer_model="gemini-2.5-flash",
+        optimizer_model="gemini-4-hydrogen",  # Route via MODEL_LOCATION=global (or gemini-4-neon for deeper critiques)
     )
 )
 # Non-mutating: initial agent object is unchanged; highest-scoring variant is returned

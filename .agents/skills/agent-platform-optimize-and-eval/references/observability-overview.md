@@ -193,7 +193,7 @@ FROM `PROJECT_ID.LINKED_DATASET_NAME._AllLogs`
 |> LIMIT 10;
 ```
 
-You can chain BigQuery ML `AI.GENERATE(...)` (e.g., `gemini-2.5-flash-lite`) over joined rows with `OBJ.MAKE_REF(part.uri, ...)` to summarize or classify multimodal attachments directly in SQL.
+You can chain BigQuery ML `AI.GENERATE(...)` (e.g., `gemini-4-hydrogen` on `global` or `gemini-4-argon` regionally) over joined rows with `OBJ.MAKE_REF(part.uri, ...)` to summarize or classify multimodal attachments directly in SQL.
 
 ---
 

@@ -151,5 +151,5 @@ Read only the specific reference file needed for your task (all links are 1-hop 
 
 ## Maintenance
 
-- **Last Verified:** `2026-11-19`
+- **Last Verified:** `2026-11-23`
 - **Refresh & Provenance Playbook:** See [Maintenance & Upstream Provenance](references/maintenance.md) for all canonical URLs, `.md.txt` refresh endpoints, and validation commands.

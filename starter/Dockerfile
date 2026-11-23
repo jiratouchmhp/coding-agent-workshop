@@ -26,13 +26,27 @@ LABEL org.opencontainers.image.title="gemini-coding-agent-runtime-starter" \
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
+    AGY_CLI_DISABLE_AUTO_UPDATE=true \
     PORT=8080
 
-# Install CA certificates for HTTPS/TLS and optional Agent Gateway root CA trust (strictly NO sudo).
+# Install CA certificates and curl for HTTPS/TLS, optional Agent Gateway root CA trust,
+# and opt-in Antigravity (`agy`) headless CLI installation (strictly NO sudo).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Opt-in native Go Antigravity (`agy`) headless CLI binary baked into /usr/local/bin.
+# Inside Agent Runtime, `agy` uses the dedicated Custom SA ADC (`AGY_ADC_AUTH=true`)
+# with `GOOGLE_CLOUD_LOCATION=global` and auto-updates disabled.
+ARG INSTALL_AGY_CLI=true
+RUN if [ "$INSTALL_AGY_CLI" = "true" ]; then \
+      curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy_install.sh \
+      && bash /tmp/agy_install.sh --dir /usr/local/bin \
+      && rm -f /tmp/agy_install.sh \
+      && chmod 0755 /usr/local/bin/agy; \
+    fi
 
 # Optional Lab 7 Agent Gateway BYOC CA Trust pattern (scale/runtime/agent-gateway-runtime-deploy):
 # Pass `agents-cli deploy --build-args AGENT_GATEWAY_ROOT_CERTIFICATES="$(gcloud network-services agent-gateways describe ...)"` (plural)

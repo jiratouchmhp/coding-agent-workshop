@@ -28,8 +28,13 @@ client = agentplatform.Client(
 parent_engine_name = client.runtimes.create().api_resource.name
 
 # Option 1: Managed Code Execution sandbox (<1s, 14d rolling TTL, zero network)
+# Frontier Gemini 4 Hydrogen on global (or gemini-4-argon on asia-southeast1 for strict regional residency)
+import inspect
+from google import genai
+from google.adk.models import Gemini
+auth_key = "enterprise" if "enterprise" in inspect.signature(genai.Client.__init__).parameters else "vertexai"
 root_agent = Agent(
-    model="gemini-2.5-flash",
+    model=Gemini(model="gemini-4-hydrogen", client_kwargs={auth_key: True, "project": "PROJECT_ID", "location": "global"}),
     name="gke_orchestrator_managed_sandbox",
     instruction="Use the code executor to analyze data. Never run pip install.",
     code_executor=AgentEngineSandboxCodeExecutor(

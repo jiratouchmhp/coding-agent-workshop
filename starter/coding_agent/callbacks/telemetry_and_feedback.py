@@ -314,7 +314,8 @@ def after_tool_callback(
 ) -> dict[str, Any] | None:
     """Emit OTel tool attributes and parent-runtime structured Cloud Logs for sandbox output."""
     # TODO(lab-3):
-    # 1. Pop start timestamp from ``tool_context.state`` and compute ``duration_ms``.
+    # 1. Read start timestamp from ``tool_context.state`` via ``state.get(key)`` (clear with
+    #    ``state[key] = None`` — ADK 2.0 ``State`` does not implement ``dict.pop()``) and compute ``duration_ms``.
     # 2. Extract ``stdout``, ``stderr``, ``exit_code``, ``timed_out`` via ``_extract_tool_execution_fields``.
     # 3. Set OTel attributes (``coding_agent.tool.name``, ``coding_agent.tool.duration_ms``,
     #    ``coding_agent.sandbox.exit_code``) on ``trace.get_current_span()`` if recording.

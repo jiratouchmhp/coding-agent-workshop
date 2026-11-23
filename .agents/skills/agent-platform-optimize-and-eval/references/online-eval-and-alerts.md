@@ -188,7 +188,7 @@ Automatic Loss Analysis classifies rubric failures into concrete, actionable roo
 | `final_response_quality` low | Address the lowest-passing adaptive rubric criterion (completeness, clarity, formatting). |
 | `hallucination` low | Ground instructions strictly in tool output; verify tools return all claimed fields. |
 | `safety` violated | Add explicit policy guardrails to system instructions and enable inline Model Armor filtering. |
-| Flaky/noisy scores | Set `temperature=0` or multi-sample judge (`judge_model_sampling_count: 3`) — **never** lower thresholds or drop flaky cases. |
+| Flaky/noisy scores | Enable multi-sample judge voting (`judge_model_sampling_count: 3`) and pin an explicit `THINKING_LEVEL` (Gemini 4 ignores custom `temperature`/`top_p`/`top_k`; reserve `temperature=0` for legacy non-Gemini-4 models) — **never** lower thresholds or drop flaky cases. |
 
 ---
 

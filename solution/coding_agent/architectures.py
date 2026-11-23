@@ -49,6 +49,11 @@ from google.adk.workflow import JoinNode, NodeTimeoutError, RetryConfig, node
 from pydantic import BaseModel, Field
 
 from coding_agent.config import Settings, get_settings
+from coding_agent.models import (
+    ModelRole,
+    build_gemini4_generate_config,
+    build_gemini_model,
+)
 
 __all__ = [
     "ApprovalDecision",
@@ -56,6 +61,8 @@ __all__ = [
     "CodeReviewReport",
     "Context",
     "GLOBAL_ENGINEERING_GUARDRAILS",
+    "SpecPlan",
+    "build_agy_harness_workflow",
     "build_collaborative_coding_team",
     "build_dynamic_coding_workflow",
     "build_global_instruction_plugin",
@@ -105,15 +112,43 @@ class CodeReviewReport(BaseModel):
     )
 
 
-def _build_gemini_model(settings: Settings) -> Any:
-    """Build a regional-safe versioned Gemini model with HTTP retries."""
-    from google.adk.models import Gemini
-    from google.genai import types
+class SpecPlan(BaseModel):
+    """Structured implementation specification emitted by ``spec_planner`` (``gemini-4-neon``)."""
 
-    return Gemini(
-        model=settings.model_name,
-        retry_options=types.HttpRetryOptions(initial_delay=1, attempts=2),
+    summary: str = Field(description="Concise engineering plan for the requested change.")
+    target_files: list[str] = Field(
+        default_factory=list,
+        description="Concrete workspace file paths to inspect, modify, or create.",
     )
+    acceptance_criteria: list[str] = Field(
+        default_factory=list,
+        description="Verifiable functional, lint, and unit-test acceptance criteria.",
+    )
+    implementation_prompt: str = Field(
+        description="Actionable implementation brief passed to the coding harness.",
+    )
+
+
+def _build_gemini_model(settings: Settings, *, role: ModelRole = "coding") -> Any:
+    """Build a Gemini 4 ADK model routed to ``settings.model_location`` with HTTP retries."""
+    return build_gemini_model(settings, role=role)
+
+
+def _build_generate_config(settings: Settings) -> Any:
+    """Build Gemini 4 ``GenerateContentConfig`` using ``ThinkingConfig(thinking_level=...)``."""
+    return build_gemini4_generate_config(settings)
+
+
+def _extract_sandbox_environment(tools: Sequence[Any]) -> Any | None:
+    """Return an attached remote ``AgentPlatformSandboxEnvironment`` from ``tools``, if present."""
+    for tool in tools:
+        env = getattr(tool, "_environment", None) or getattr(tool, "environment", None)
+        if env is not None and (
+            hasattr(env, "execute_with_env")
+            or type(env).__name__ == "AgentPlatformSandboxEnvironment"
+        ):
+            return env
+    return None
 
 
 def _attach_optional_callbacks(
@@ -186,8 +221,11 @@ async def _run_workspace_check(
     command: list[str],
     allow_exit_codes: frozenset[int] = frozenset({0}),
     empty_exit_code_message: str = "",
+    sandbox_env: Any | None = None,
+    remote_command: str | None = None,
+    ctx: Context | None = None,
 ) -> CheckOutcome:
-    """Run a deterministic verification CLI inside the local workspace.
+    """Run a deterministic verification CLI inside the local or remote Managed Sandbox workspace.
 
     IMPORTANT (ADK 2.0 Retry & HITL semantics):
     - Never swallow ``Exception`` or ``BaseException``. The ``except BaseException``
@@ -198,6 +236,33 @@ async def _run_workspace_check(
       ADK's retry/HITL runtime.
     """
     if settings.sandbox_mode != "local":
+        if sandbox_env is not None and callable(getattr(sandbox_env, "execute", None)):
+            cmd_str = remote_command or " ".join(command)
+            exec_res = await sandbox_env.execute(cmd_str, timeout=30.0, ctx=ctx)
+            exit_code = int(getattr(exec_res, "exit_code", 1))
+            combined = (
+                f"{getattr(exec_res, 'stdout', '') or ''}\n"
+                f"{getattr(exec_res, 'stderr', '') or ''}"
+            ).strip()
+            max_chars = min(settings.max_output_chars, 4_000)
+            if len(combined) > max_chars:
+                combined = combined[:max_chars] + "\n...[truncated]..."
+            if exit_code in allow_exit_codes:
+                summary = combined or empty_exit_code_message or f"{check_name} passed."
+                if exit_code != 0 and empty_exit_code_message:
+                    summary = f"{empty_exit_code_message}\n{combined}".strip()
+                return CheckOutcome(
+                    check_name=check_name,
+                    passed=True,
+                    exit_code=0,
+                    summary=summary,
+                )
+            return CheckOutcome(
+                check_name=check_name,
+                passed=False,
+                exit_code=exit_code,
+                summary=combined or f"{check_name} failed in sandbox with exit code {exit_code}.",
+            )
         return CheckOutcome(
             check_name=check_name,
             passed=True,
@@ -393,12 +458,10 @@ def build_collaborative_coding_team(
         NOTE: ``mode="task"`` agents must be leaf agents and are disabled inside
         ADK Python v2.0.0 graph-based ``Workflow`` objects.
     """
-    from google.genai import types
-
     implementer_kwargs: dict[str, Any] = {
         "name": "code_implementer",
         "mode": "single_turn",  # ADK 2.0: subagent only; no user interaction, automatic return
-        "model": _build_gemini_model(settings),
+        "model": _build_gemini_model(settings, role="coding"),
         "description": (
             "Reads, edits, writes, and tests code inside the confined workspace "
             "using EnvironmentToolset and coding tools."
@@ -409,7 +472,7 @@ def build_collaborative_coding_team(
             "running pytest and ruff with Execute. Report exact modified files and test output."
         ),
         "tools": list(tools),
-        "generate_content_config": types.GenerateContentConfig(temperature=0.2),
+        "generate_content_config": _build_generate_config(settings),
     }
     if code_executor is not None:
         implementer_kwargs["code_executor"] = code_executor
@@ -424,7 +487,7 @@ def build_collaborative_coding_team(
     code_reviewer = LlmAgent(
         name="code_reviewer",
         mode="single_turn",  # Isolated session branch; parallel-capable; auto-returns result
-        model=_build_gemini_model(settings),
+        model=_build_gemini_model(settings, role="reasoning"),
         description=(
             "Reviews implemented code changes and verification output for correctness, "
             "edge cases, test coverage, and security regressions."
@@ -436,7 +499,7 @@ def build_collaborative_coding_team(
             "Return a concise structured CodeReviewReport."
         ),
         output_schema=CodeReviewReport,
-        generate_content_config=types.GenerateContentConfig(temperature=0.1),
+        generate_content_config=_build_generate_config(settings),
     )
 
     # ADK 2.0 constraint: `mode="task"` agents MUST be leaf agents (cannot declare `sub_agents`)
@@ -444,7 +507,7 @@ def build_collaborative_coding_team(
     requirements_clarifier = LlmAgent(
         name="requirements_clarifier",
         mode="task",  # Can ask clarifying questions; returns to coordinator via `finish_task`
-        model=_build_gemini_model(settings),
+        model=_build_gemini_model(settings, role="coding"),
         description=(
             "Clarifies ambiguous engineering requirements, acceptance criteria, or "
             "target file constraints with the user before implementation begins."
@@ -455,13 +518,13 @@ def build_collaborative_coding_team(
             "(for example, conflicting API contracts or unspecified target files). Once "
             "requirements are clear, call `finish_task` with a crisp specification summary."
         ),
-        generate_content_config=types.GenerateContentConfig(temperature=0.2),
+        generate_content_config=_build_generate_config(settings),
     )
 
     # CRITICAL (ADK 2.0): NEVER configure `mode` on the root coordinator agent.
     coordinator_kwargs: dict[str, Any] = {
         "name": "coding_agent",
-        "model": _build_gemini_model(settings),
+        "model": _build_gemini_model(settings, role="coding"),
         "description": (
             "ADK 2.0 Collaborative Coding Coordinator delegating to code_implementer, "
             "code_reviewer, and requirements_clarifier subagents."
@@ -476,7 +539,7 @@ def build_collaborative_coding_team(
             "before returning a concise final summary to the user."
         ),
         "sub_agents": [code_implementer, code_reviewer, requirements_clarifier],
-        "generate_content_config": types.GenerateContentConfig(temperature=0.2),
+        "generate_content_config": _build_generate_config(settings),
     }
     _attach_optional_callbacks(
         coordinator_kwargs,
@@ -523,11 +586,9 @@ def build_graph_coding_workflow(
       ``Event(message=..., output=..., state={"fix_attempts": 0, "latest_findings": ""})``
       (single terminal output rule + per-turn state reset for multi-turn sessions).
     """
-    from google.genai import types
-
     coder_kwargs: dict[str, Any] = {
         "name": "coder_agent",
-        "model": _build_gemini_model(settings),
+        "model": _build_gemini_model(settings, role="coding"),
         "description": (
             "Implements or repairs code in the workspace based on the user request "
             "or structured pytest/ruff verification findings."
@@ -539,7 +600,7 @@ def build_graph_coding_workflow(
             "pytest or ruff failures from a previous attempt, fix every reported failure."
         ),
         "tools": list(tools),
-        "generate_content_config": types.GenerateContentConfig(temperature=0.2),
+        "generate_content_config": _build_generate_config(settings),
     }
     if code_executor is not None:
         coder_kwargs["code_executor"] = code_executor
@@ -724,11 +785,9 @@ def build_dynamic_coding_workflow(
        relying on ADK 2.0 automatic checkpointing to skip already-completed child
        runs upon resume.
     """
-    from google.genai import types
-
     coder_kwargs: dict[str, Any] = {
         "name": "coder_agent",
-        "model": _build_gemini_model(settings),
+        "model": _build_gemini_model(settings, role="coding"),
         "description": "Generates and edits workspace code for the user request.",
         "instruction": (
             "You are the Coding Generator agent. Inspect existing workspace files, "
@@ -736,7 +795,7 @@ def build_dynamic_coding_workflow(
             "the modified files."
         ),
         "tools": list(tools),
-        "generate_content_config": types.GenerateContentConfig(temperature=0.2),
+        "generate_content_config": _build_generate_config(settings),
     }
     if code_executor is not None:
         coder_kwargs["code_executor"] = code_executor
@@ -750,7 +809,7 @@ def build_dynamic_coding_workflow(
 
     fixer_kwargs: dict[str, Any] = {
         "name": "fixer_agent",
-        "model": _build_gemini_model(settings),
+        "model": _build_gemini_model(settings, role="coding"),
         "description": "Refactors workspace code based on pytest and ruff findings.",
         "instruction": (
             "Refactor the current workspace implementation to fix all verification findings.\n\n"
@@ -759,7 +818,7 @@ def build_dynamic_coding_workflow(
             "Apply minimal surgical edits with your tools and summarize the fixes."
         ),
         "tools": list(tools),
-        "generate_content_config": types.GenerateContentConfig(temperature=0.2),
+        "generate_content_config": _build_generate_config(settings),
     }
     if code_executor is not None:
         fixer_kwargs["code_executor"] = code_executor
@@ -896,6 +955,421 @@ def build_dynamic_coding_workflow(
             "iterations, and automatic HITL checkpointing."
         ),
         edges=[("START", dynamic_coding_workflow)],
+    )
+
+
+def _format_spec_brief(spec_output: Any, fallback_prompt: str) -> str:
+    """Render a ``SpecPlan`` (or raw string/mapping) into a concrete implementation brief."""
+    if isinstance(spec_output, SpecPlan):
+        targets = "\n".join(f"- {f}" for f in spec_output.target_files) or "- (inspect workspace)"
+        criteria = "\n".join(f"- {c}" for c in spec_output.acceptance_criteria) or "- All pytest and ruff checks pass"
+        return (
+            f"Implementation Brief:\n{spec_output.implementation_prompt}\n\n"
+            f"Summary:\n{spec_output.summary}\n\n"
+            f"Target Files:\n{targets}\n\n"
+            f"Acceptance Criteria:\n{criteria}"
+        )
+    if isinstance(spec_output, Mapping):
+        impl_prompt = str(spec_output.get("implementation_prompt") or fallback_prompt).strip()
+        summary = str(spec_output.get("summary") or "").strip()
+        target_files = spec_output.get("target_files") or []
+        acceptance = spec_output.get("acceptance_criteria") or []
+        targets = "\n".join(f"- {f}" for f in target_files) or "- (inspect workspace)"
+        criteria = "\n".join(f"- {c}" for c in acceptance) or "- All pytest and ruff checks pass"
+        return (
+            f"Implementation Brief:\n{impl_prompt}\n\n"
+            f"Summary:\n{summary}\n\n"
+            f"Target Files:\n{targets}\n\n"
+            f"Acceptance Criteria:\n{criteria}"
+        )
+    text = str(spec_output or "").strip()
+    return text or fallback_prompt
+
+
+def _format_review_section(review_output: Any) -> str:
+    """Format an independent ``CodeReviewReport`` into a markdown report section."""
+    if isinstance(review_output, CodeReviewReport):
+        verdict = "APPROVED" if review_output.approved else "CHANGES REQUESTED"
+        issues = "\n".join(f"- {item}" for item in review_output.issues)
+        body = f"- Verdict: **{verdict}**\n- Summary: {review_output.summary}"
+        if issues:
+            body += f"\n- Issues:\n{issues}"
+        return body
+    if isinstance(review_output, Mapping):
+        verdict = "APPROVED" if _coerce_bool(review_output.get("approved", False)) else "CHANGES REQUESTED"
+        summary = str(review_output.get("summary", "")).strip()
+        issues_list = review_output.get("issues") or []
+        body = f"- Verdict: **{verdict}**\n- Summary: {summary}"
+        if issues_list:
+            body += "\n- Issues:\n" + "\n".join(f"- {item}" for item in issues_list)
+        return body
+    return str(review_output or "").strip()
+
+
+def build_agy_harness_workflow(
+    settings: Settings,
+    tools: Sequence[Any],
+    callbacks: Mapping[str, Any] | None = None,
+    code_executor: Any | None = None,
+) -> Any:
+    """Build the 5th ADK 2.0 architecture: outer ADK workflow + Antigravity (``agy``) harness.
+
+    5-stage enterprise workflow (``AGENT_ARCHITECTURE=agy_harness``):
+    1. ``spec_planner`` (``gemini-4-neon`` on ``global``) produces concrete file targets
+       and verifiable acceptance criteria (``SpecPlan``).
+    2. ``run_agy_harness_node`` delegates code edits to ``AgyHeadlessHarness`` (auto-selecting
+       BYOC Managed Sandbox vs local/Agent Runtime ``agy``, capturing ``conversation_id``,
+       recording OTel trace/token attributes, and retrying/falling back ``gemini-4-neon`` ->
+       ``gemini-4-hydrogen`` on exit code 3; gracefully falling back to native ADK 2.0
+       ``fallback_coder_agent`` if ``agy`` is unavailable or sandbox is air-gapped).
+    3. Independent deterministic verification gates (``pytest`` + ``ruff`` via
+       ``asyncio.gather(..., use_sub_branch=True)``) — never trusting the coding harness
+       to grade itself.
+    4. Bounded fix loop (``settings.max_fix_rounds``) feeding exact failures back via
+       ``--conversation <conversation_id>`` (or into ``fallback_coder_agent``).
+    5. Independent ``code_reviewer`` (``gemini-4-neon`` on ``global``) + optional
+       ``RequestInput`` HITL approval gate (``ApprovalDecision``).
+    """
+    from coding_agent.tools.agy_headless_harness import AgyExitCode, AgyHeadlessHarness
+
+    sandbox_env = _extract_sandbox_environment(tools)
+    harness = AgyHeadlessHarness(settings=settings, sandbox_env=sandbox_env)
+
+    spec_planner = LlmAgent(
+        name="spec_planner",
+        model=_build_gemini_model(settings, role="reasoning"),
+        description=(
+            "Frontier Gemini 4 Neon planner that converts engineering requests into "
+            "concrete file targets, acceptance criteria, and a crisp implementation brief."
+        ),
+        instruction=(
+            "You are the Principal Engineering Planner. Given the user's coding request, "
+            "produce a structured SpecPlan identifying concrete target workspace files, "
+            "verifiable acceptance criteria (including unit tests and ruff linting), and "
+            "a clear implementation brief for the coding harness."
+        ),
+        output_schema=SpecPlan,
+        generate_content_config=_build_generate_config(settings),
+    )
+
+    fallback_coder_kwargs: dict[str, Any] = {
+        "name": "fallback_coder_agent",
+        "model": _build_gemini_model(settings, role="coding"),
+        "description": (
+            "Native ADK 2.0 coding fallback agent used automatically when the `agy` CLI "
+            "is unavailable locally or inside an air-gapped Managed Sandbox."
+        ),
+        "instruction": (
+            "You are the native ADK 2.0 fallback Coding Agent. Inspect workspace files "
+            "with ReadFile, apply minimal surgical edits with EditFile/WriteFile, and "
+            "summarize the exact modified files."
+        ),
+        "tools": list(tools),
+        "generate_content_config": _build_generate_config(settings),
+    }
+    if code_executor is not None:
+        fallback_coder_kwargs["code_executor"] = code_executor
+    _attach_optional_callbacks(
+        fallback_coder_kwargs,
+        callbacks,
+        include_tool_callbacks=True,
+        include_agent_callbacks=False,
+    )
+    fallback_coder_agent = LlmAgent(**fallback_coder_kwargs)
+
+    code_reviewer = LlmAgent(
+        name="code_reviewer",
+        model=_build_gemini_model(settings, role="reasoning"),
+        description=(
+            "Independent Gemini 4 Neon reviewer auditing implementation summaries and "
+            "deterministic pytest/ruff outputs for correctness, edge cases, and security."
+        ),
+        instruction=(
+            "You are the Independent Code Reviewer. Evaluate the specification, coding "
+            "harness summary, and independent pytest/ruff verification results. Return "
+            "a concise, objective CodeReviewReport."
+        ),
+        output_schema=CodeReviewReport,
+        generate_content_config=_build_generate_config(settings),
+    )
+
+    check_retry_config = RetryConfig(
+        max_attempts=3,
+        initial_delay=1.0,
+        exceptions=[TimeoutError, NodeTimeoutError],
+    )
+
+    @node(name="run_agy_harness_node")
+    async def run_agy_harness_node(ctx: Context, node_input: Any) -> dict[str, Any]:
+        """Delegate coding implementation to ``AgyHeadlessHarness`` with exit-code-3 retry."""
+        payload = node_input if isinstance(node_input, Mapping) else {"prompt": str(node_input)}
+        prompt = str(payload.get("prompt", "")).strip()
+        conv_id = payload.get("conversation_id")
+        result = await harness.run_with_retry_and_fallback(
+            prompt=prompt,
+            conversation_id=str(conv_id) if conv_id else None,
+            max_retries=1,
+            ctx=ctx,
+        )
+        return result.to_dict()
+
+    @node(
+        name="run_pytest_node",
+        retry_config=check_retry_config,
+        timeout=30.0,
+    )
+    async def run_pytest_node(ctx: Context, node_input: Any = None) -> CheckOutcome:
+        """Independent deterministic pytest gate (never trusting the coding harness)."""
+        del node_input
+        return await _run_workspace_check(
+            settings,
+            check_name="pytest",
+            command=_pytest_command(),
+            allow_exit_codes=frozenset({0, 5}),
+            empty_exit_code_message="No pytest tests collected in workspace.",
+            sandbox_env=sandbox_env,
+            remote_command="python3 -m pytest -q",
+            ctx=ctx,
+        )
+
+    @node(
+        name="run_ruff_node",
+        retry_config=check_retry_config,
+        timeout=30.0,
+    )
+    async def run_ruff_node(ctx: Context, node_input: Any = None) -> CheckOutcome:
+        """Independent deterministic ruff lint gate (never trusting the coding harness)."""
+        del node_input
+        return await _run_workspace_check(
+            settings,
+            check_name="ruff",
+            command=_ruff_command(),
+            allow_exit_codes=frozenset({0}),
+            empty_exit_code_message="ruff check passed with zero violations.",
+            sandbox_env=sandbox_env,
+            remote_command="ruff check .",
+            ctx=ctx,
+        )
+
+    @node(name="request_human_approval", rerun_on_resume=False)
+    async def request_human_approval(ctx: Context, node_input: Any):
+        """Leaf HITL node pausing for structured ApprovalDecision."""
+        del ctx
+        yield RequestInput(
+            message=(
+                "Antigravity coding harness workflow completed independent verification "
+                "and Gemini 4 Neon review. Submit an ApprovalDecision (`approved`: bool, "
+                "`reviewer_notes`: str) to finalize."
+            ),
+            payload=node_input,
+            response_schema=ApprovalDecision,
+        )
+
+    def _extract_agy_exit_code(result: Any) -> int:
+        if not isinstance(result, Mapping):
+            return int(AgyExitCode.FAILURE)
+        raw = result.get("exit_code", int(AgyExitCode.FAILURE))
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return int(AgyExitCode.FAILURE)
+
+    def _format_agy_failure(result: Any, *, exit_code: int, stage: str) -> str:
+        if isinstance(result, Mapping):
+            status_label = str(result.get("status") or "failure").strip()
+            detail = str(
+                result.get("agy_error") or result.get("stderr") or "Unknown agy error"
+            ).strip()
+            hint = str(result.get("actionable_hint") or "").strip()
+            lines = [
+                f"[agy_harness exit={exit_code} status={status_label} stage={stage}]",
+                detail,
+            ]
+            if hint:
+                lines.append(f"Hint: {hint}")
+            return "\n".join(lines)
+        return f"[agy_harness exit={exit_code} stage={stage}]\n{result}"
+
+    def _combine_findings(harness_failure: str, check_findings: str) -> str:
+        parts = [part for part in (harness_failure.strip(), check_findings.strip()) if part]
+        return "\n\n".join(parts)
+
+    @node(name="agy_harness_workflow", rerun_on_resume=True)
+    async def agy_harness_workflow(ctx: Context, node_input: str):
+        """ADK 2.0 orchestrator combining Gemini 4 Neon planning/review + ``agy`` harness."""
+        spec_plan = await ctx.run_node(spec_planner, node_input)
+        implementation_brief = _format_spec_brief(spec_plan, node_input)
+
+        agy_result = await ctx.run_node(
+            run_agy_harness_node,
+            {"prompt": implementation_brief, "conversation_id": None},
+        )
+        conversation_id = (
+            agy_result.get("conversation_id") if isinstance(agy_result, Mapping) else None
+        )
+        using_native_fallback = (
+            isinstance(agy_result, Mapping) and agy_result.get("status") == "unavailable"
+        )
+        harness_backend = str(
+            agy_result.get("execution_mode", "fallback")
+            if isinstance(agy_result, Mapping)
+            else "fallback"
+        )
+        agy_failure_finding = ""
+        agy_fail_fast = False
+
+        if using_native_fallback:
+            logger.info(
+                "agy CLI unavailable (%s); falling back to native ADK 2.0 LlmAgent + EnvironmentToolset.",
+                agy_result.get("actionable_hint", ""),
+            )
+            harness_backend = "adk_native_fallback"
+            code_summary = str(await ctx.run_node(fallback_coder_agent, implementation_brief))
+        else:
+            agy_exit_code = _extract_agy_exit_code(agy_result)
+            if agy_exit_code == int(AgyExitCode.SUCCESS):
+                code_summary = str(agy_result.get("response_text") or "").strip()
+            else:
+                # Exit codes 1 (FAILURE) and 2 (UNSUPPORTED_COMMAND) must fail fast and NEVER
+                # re-invoke `agy` in the fix loop; exhausted exit code 3 (AGENT_ERROR, after
+                # run_agy_harness_node already ran bounded retry + model fallback) likewise
+                # stops cleanly and surfaces the failure in findings so the final report never
+                # claims PASSED.
+                agy_failure_finding = _format_agy_failure(
+                    agy_result,
+                    exit_code=agy_exit_code,
+                    stage="initial",
+                )
+                code_summary = agy_failure_finding
+                agy_fail_fast = True
+
+        pytest_res, ruff_res = await asyncio.gather(
+            ctx.run_node(run_pytest_node, code_summary, use_sub_branch=True),
+            ctx.run_node(run_ruff_node, code_summary, use_sub_branch=True),
+        )
+        check_findings = _format_check_findings(pytest_res, ruff_res)
+        latest_findings = _combine_findings(agy_failure_finding, check_findings)
+        attempts_used = 0
+
+        if not agy_fail_fast:
+            for attempt in range(settings.max_fix_rounds):
+                if not check_findings:
+                    break
+                attempts_used = attempt + 1
+                fix_prompt = (
+                    f"Independent verification failed on fix round {attempts_used}/{settings.max_fix_rounds}.\n"
+                    f"Fix every pytest/ruff issue below without regressing existing tests:\n\n"
+                    f"{check_findings}"
+                )
+                yield Event(
+                    state={
+                        "agy_conversation_id": conversation_id or "",
+                        "fix_attempts": attempts_used,
+                        "latest_findings": latest_findings,
+                    }
+                )
+                if using_native_fallback:
+                    code_summary = str(await ctx.run_node(fallback_coder_agent, fix_prompt))
+                else:
+                    agy_result = await ctx.run_node(
+                        run_agy_harness_node,
+                        {"prompt": fix_prompt, "conversation_id": conversation_id},
+                    )
+                    if isinstance(agy_result, Mapping):
+                        conversation_id = agy_result.get("conversation_id") or conversation_id
+                        if agy_result.get("status") == "unavailable":
+                            using_native_fallback = True
+                            harness_backend = "adk_native_fallback"
+                            agy_failure_finding = ""
+                            code_summary = str(await ctx.run_node(fallback_coder_agent, fix_prompt))
+                        else:
+                            fix_exit_code = _extract_agy_exit_code(agy_result)
+                            if fix_exit_code == int(AgyExitCode.SUCCESS):
+                                agy_failure_finding = ""
+                                code_summary = str(
+                                    agy_result.get("response_text") or code_summary
+                                ).strip()
+                            else:
+                                agy_failure_finding = _format_agy_failure(
+                                    agy_result,
+                                    exit_code=fix_exit_code,
+                                    stage=f"fix_round_{attempts_used}",
+                                )
+                                code_summary = agy_failure_finding
+                                agy_fail_fast = True
+                    else:
+                        agy_failure_finding = _format_agy_failure(
+                            agy_result,
+                            exit_code=int(AgyExitCode.FAILURE),
+                            stage=f"fix_round_{attempts_used}",
+                        )
+                        code_summary = agy_failure_finding
+                        agy_fail_fast = True
+
+                pytest_res, ruff_res = await asyncio.gather(
+                    ctx.run_node(run_pytest_node, code_summary, use_sub_branch=True),
+                    ctx.run_node(run_ruff_node, code_summary, use_sub_branch=True),
+                )
+                check_findings = _format_check_findings(pytest_res, ruff_res)
+                latest_findings = _combine_findings(agy_failure_finding, check_findings)
+                if agy_fail_fast:
+                    break
+
+        review_input = (
+            f"Specification:\n{implementation_brief}\n\n"
+            f"Execution Backend: {harness_backend}\n"
+            f"Conversation ID: {conversation_id or 'n/a'}\n"
+            f"Fix Rounds Used: {attempts_used}\n\n"
+            f"Implementation Summary:\n{code_summary}\n\n"
+            f"Independent Deterministic Verification & Harness Status:\n"
+            f"{latest_findings or 'All deterministic checks (pytest + ruff) passed cleanly.'}"
+        )
+        review_report = await ctx.run_node(code_reviewer, review_input)
+        review_section = _format_review_section(review_report)
+
+        approval_note = ""
+        if settings.enable_hitl_approval:
+            decision = await ctx.run_node(
+                request_human_approval,
+                {
+                    "backend": harness_backend,
+                    "conversation_id": conversation_id,
+                    "code_summary": code_summary,
+                    "findings": latest_findings or "All checks (pytest + ruff) passed cleanly.",
+                    "review": review_section,
+                    "fix_attempts": attempts_used,
+                },
+            )
+            approval_note = _format_approval_note(decision)
+
+        base_report = _build_final_report(
+            code_summary=f"[backend={harness_backend}, conversation_id={conversation_id or 'n/a'}]\n{code_summary}",
+            findings=latest_findings,
+            fix_attempts=attempts_used,
+            approval_note=approval_note,
+        )
+        final_report = f"{base_report}\n\n### Independent Gemini 4 Neon Review\n{review_section}"
+
+        await _invoke_optional_after_agent_callback(callbacks, ctx)
+        yield Event(
+            message=final_report,
+            output=final_report,
+            state={
+                "agy_conversation_id": "",
+                "fix_attempts": 0,
+                "latest_findings": "",
+            },
+        )
+
+    return Workflow(
+        name="coding_agent",
+        description=(
+            "ADK 2.0 hybrid coding workflow pairing Gemini 4 Neon spec/review with "
+            "Antigravity (`agy`) headless coding harness (auto sandbox/local/native fallback), "
+            "independent parallel pytest/ruff verification, bounded --conversation fix loops, "
+            "and optional RequestInput HITL approval."
+        ),
+        edges=[("START", agy_harness_workflow)],
     )
 
 

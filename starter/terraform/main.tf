@@ -240,14 +240,44 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
         value = var.model_name
       }
 
+      env {
+        name  = "REASONING_MODEL_NAME"
+        value = var.reasoning_model_name
+      }
+
+      env {
+        name  = "MODEL_LOCATION"
+        value = var.model_location
+      }
+
+      env {
+        name  = "THINKING_LEVEL"
+        value = upper(var.thinking_level)
+      }
+
+      env {
+        name  = "AGY_EXECUTION_MODE"
+        value = var.agy_execution_mode
+      }
+
+      env {
+        name  = "AGY_ADC_AUTH"
+        value = "true"
+      }
+
+      env {
+        name  = "AGY_CLI_DISABLE_AUTO_UPDATE"
+        value = "true"
+      }
+
       # Optional ADK 2.0 architecture overrides (Lab 1 Part B / Lab 5 portability).
       # Defaults to `AGENT_ARCHITECTURE=simple` (Labs 2-8 compatible) when omitted;
       # uncomment to switch the deployed Agent Runtime to `collaborative`, `graph`,
-      # or `dynamic` with zero changes to Dockerfile, main.py, or the HTTP contract:
+      # `dynamic`, or `agy_harness` with zero changes to Dockerfile, main.py, or the HTTP contract:
       #
       # env {
       #   name  = "AGENT_ARCHITECTURE"
-      #   value = "simple" # simple | collaborative | graph | dynamic
+      #   value = "simple" # simple | collaborative | graph | dynamic | agy_harness
       # }
       #
       # env {

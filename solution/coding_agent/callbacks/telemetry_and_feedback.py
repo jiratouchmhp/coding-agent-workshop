@@ -330,7 +330,10 @@ def after_tool_callback(
     del args
     tool_name = str(getattr(tool, "name", None) or getattr(tool, "__name__", "tool"))
     state = getattr(tool_context, "state", None)
-    start_ts = state.pop(f"_tool_start_ts:{tool_name}", None) if state is not None else None
+    start_key = f"_tool_start_ts:{tool_name}"
+    start_ts = state.get(start_key, None) if state is not None else None
+    if state is not None and start_ts is not None:
+        state[start_key] = None
     duration_ms = int((time.monotonic() - start_ts) * 1000) if start_ts is not None else -1
 
     fields = _extract_tool_execution_fields(tool_response)

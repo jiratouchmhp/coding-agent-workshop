@@ -35,7 +35,8 @@ gcloud auth application-default login
 export GOOGLE_CLOUD_PROJECT="GOVERNANCE_PROJECT_ID"
 export AGENT_REGISTRY_LOCATION="asia-southeast3"         # Bangkok default (A2A/MCP discovery)
 export AGENT_REGISTRY_SKILLS_LOCATION="global"           # Standalone skills (`gcloud alpha agent-registry skills`; asia-southeast3 currently times out)
-export GOOGLE_CLOUD_LOCATION="asia-southeast1"           # Singapore fallback (Agent Runtime, Agent Gateway & Gemini 2.5 Flash — not yet in Bangkok)
+export GOOGLE_CLOUD_LOCATION="asia-southeast1"           # Singapore fallback (Agent Runtime & Agent Gateway — not yet in Bangkok)
+export MODEL_LOCATION="global"                           # Frontier Gemini 4 Hydrogen/Neon (or asia-southeast1 with gemini-4-argon)
 export SKILL_REGISTRY_LOCATION="us-central1"             # Vertex AI Skill Registry Preview (3 regions only: us-central1, europe-west4, us-east5)
 ```
 
@@ -194,8 +195,13 @@ remote_agent = registry.get_remote_a2a_agent(
     httpx_client=httpx.AsyncClient(auth=GoogleApiAuth(project_id), timeout=httpx.Timeout(60.0)),
 )
 
+import inspect
+from google import genai
+from google.adk.models import Gemini
+
+auth_key = "enterprise" if "enterprise" in inspect.signature(genai.Client.__init__).parameters else "vertexai"
 root_agent = LlmAgent(
-    model="gemini-2.5-flash",
+    model=Gemini(model="gemini-4-hydrogen", client_kwargs={auth_key: True, "project": project_id, "location": "global"}),
     name="governed_coding_agent",
     instruction="Discover skills with search_skills, load with load_skill, and delegate via subagents.",
     tools=[skill_toolset, mcp_toolset],
@@ -231,10 +237,10 @@ Load **only** the specific reference file needed for your current task:
 | [references/agent-registry-and-discovery.md](references/agent-registry-and-discovery.md) | Management boundaries & cross-project scoping, 4 identifier layers, manual A2A/REST/MCP `Service` registration (`gcloud` & Terraform), standalone skills (`private-`, revisions, 5 lifecycle states), LLM security scanning, `Finding` triage, custom Org Policy YAML, keyword/semantic search, Auth Manager Bindings, and exact quotas/limits |
 | [references/adk-consuming-registries.md](references/adk-consuming-registries.md) | `google-adk[a2a,agent-identity,mcp]` extras, `SkillToolset` 6 tools & lifecycle modes, `GCPSkillRegistry` source-verified behavior (`AGENT_REGISTRY_ENDPOINT`, 302 GCS hook, sandbox egress caveat), `AgentRegistry` API, all 3 auth patterns (`httpx.Auth` OAuth vs OIDC, Auth Manager 2LO/3LO, `header_provider`), `.clone()`, non-ADK A2A v1.0, and Go client |
 | [references/semantic-governance-and-identity.md](references/semantic-governance-and-identity.md) | SPIFFE Agent Identity & 3-Identity Delegation, Semantic Governance engine provisioning & `AuthzPolicy` CEL (non-streaming, gRPC exclusion), skill lifecycle NLC examples & limits, 14-code error catalog, Agent Gateway & VPC-SC, IAM UAPs & CEL, `iamEnforcementMode` validator trap, Model Armor limits, cross-control dry-run audits, Topology & Security Findings |
-| [references/maintenance.md](references/maintenance.md) | Canonical upstream URL manifest (seed + all 50 verified sub-links & ADK source files), `.md.txt`/`.md` refresh endpoints, verification date (`2026-11-19`), and section-by-section update checklist |
+| [references/maintenance.md](references/maintenance.md) | Canonical upstream URL manifest (seed + all 50 verified sub-links & ADK source files), `.md.txt`/`.md` refresh endpoints, verification date (`2026-11-23`), and section-by-section update checklist |
 
 ---
 
 ## Maintenance
 
-Verified on `2026-11-19` against Google Cloud Docs, ADK Docs, and live `google/adk-python` source. See [references/maintenance.md](references/maintenance.md) for the complete upstream manifest and refresh checklist.
+Verified on `2026-11-23` against Google Cloud Docs, ADK Docs, and live `google/adk-python` source. See [references/maintenance.md](references/maintenance.md) for the complete upstream manifest and refresh checklist.

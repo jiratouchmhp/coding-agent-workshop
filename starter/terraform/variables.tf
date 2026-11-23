@@ -58,8 +58,42 @@ variable "sandbox_mode" {
 
 variable "model_name" {
   type        = string
-  default     = "gemini-2.5-flash"
-  description = "Explicit versioned Gemini model ID (avoid gemini-flash-latest on regional endpoints)"
+  default     = "gemini-4-hydrogen"
+  description = "Default Frontier Gemini 4 coding & fast tool-calling model ID (use gemini-4-argon with model_location = \"asia-southeast1\" for strict regional residency)"
+}
+
+variable "reasoning_model_name" {
+  type        = string
+  default     = "gemini-4-neon"
+  description = "Frontier Gemini 4 deep reasoning, architecture & review model ID (injected as REASONING_MODEL_NAME)"
+}
+
+variable "model_location" {
+  type        = string
+  default     = "global"
+  description = "Vertex AI / Gemini Enterprise inference location injected as MODEL_LOCATION (gemini-4-hydrogen and gemini-4-neon require global; Agent Runtime stays in var.location = asia-southeast1)"
+}
+
+variable "thinking_level" {
+  type        = string
+  default     = "MEDIUM"
+  description = "Gemini 4 ThinkingConfig thinking_level injected as THINKING_LEVEL (strictly LOW, MEDIUM, HIGH, or XHIGH; MINIMAL returns HTTP 400)"
+
+  validation {
+    condition     = contains(["LOW", "MEDIUM", "HIGH", "XHIGH"], upper(var.thinking_level))
+    error_message = "thinking_level must be one of: LOW, MEDIUM, HIGH, XHIGH (Gemini 4 rejects MINIMAL with HTTP 400)."
+  }
+}
+
+variable "agy_execution_mode" {
+  type        = string
+  default     = "auto"
+  description = "Antigravity (agy) headless harness execution mode injected as AGY_EXECUTION_MODE (auto, local, or sandbox)"
+
+  validation {
+    condition     = contains(["auto", "local", "sandbox"], var.agy_execution_mode)
+    error_message = "agy_execution_mode must be one of: auto, local, sandbox."
+  }
 }
 
 variable "api_key_value" {

@@ -12,11 +12,11 @@ Over the course of this hands-on workshop, you evolve a single ADK Coding Agent 
 
 | Pillar | Hands-On Labs | Key Platform Capabilities |
 |---|---|---|
-| **1. Build** | [Lab 1: Setup & Build ADK Agent](workshop/01-LAB-SETUP-AND-BUILD-ADK.md) | `google/agents-cli`, Google ADK 2.0 architectures (Simple `LlmAgent` → Collaborative Team → Graph `Workflow` → Dynamic `@node`), `EnvironmentToolset(LocalEnvironment)`, `ManagedAgent` trade-offs, Service Registration (`services.yaml`/`services.py`), Antigravity `.agents/skills/` |
-| **2. Scale** | [Lab 2: Custom Sandbox (BYOC), Lifecycle & Execution](workshop/02-LAB-CUSTOM-SANDBOX-BYOC.md) | Standalone Agent Platform instance (`client.runtimes.create()`), Non-root Debian BYOC container, `SandboxEnvironmentTemplate`, Sandbox CRUD/Pause/Resume/Snapshot, Shell `execute_bash()`, Code Execution (`AgentEngineSandboxCodeExecutor`), custom `BaseEnvironment`, PSC-I/NGFW egress |
+| **1. Build** | [Lab 1: Setup & Build ADK Agent](workshop/01-LAB-SETUP-AND-BUILD-ADK.md) | Frontier **Gemini 4 Hydrogen (`gemini-4-hydrogen`) & Neon (`gemini-4-neon`)** on `MODEL_LOCATION=global` (`google-genai>=2.34.0`), `google/agents-cli`, **5** Google ADK 2.0 architectures (Simple `LlmAgent` → Collaborative Team → Graph `Workflow` → Dynamic `@node` → **`agy` Headless CLI Harness**), `EnvironmentToolset(LocalEnvironment)`, `ManagedAgent` trade-offs, Service Registration (`services.yaml`/`services.py`), Antigravity `.agents/skills/` |
+| **2. Scale** | [Lab 2: Custom Sandbox (BYOC), Lifecycle & Execution](workshop/02-LAB-CUSTOM-SANDBOX-BYOC.md) | Standalone Agent Platform instance (`client.runtimes.create()`), Non-root Debian BYOC container with baked `/usr/local/bin/agy` (`ARG INSTALL_AGY_CLI=true`), `/health` `agy_cli_available` & allowlisted `/exec` `env` (never written to disk), `SandboxEnvironmentTemplate`, Sandbox CRUD/Pause/Resume/Snapshot, Shell `execute_bash()`, Code Execution (`AgentEngineSandboxCodeExecutor`), custom `BaseEnvironment`, PSC-I/NGFW egress |
 | **2. Scale** | [Lab 3: Managed Sessions, Memory Bank, Telemetry & Feedback](workshop/03-LAB-SESSIONS-MEMORY-FEEDBACK.md) | Reuses Lab 2 standalone instance: `VertexAiSessionService` & Sessions API, `VertexAiMemoryBankService` (topics, TTL, similarity retrieval), Feedback Service, GenAI OTel Tracing, parent sandbox `stdout`/`stderr` Cloud Logging & PromQL Monitoring |
 | **3. Extend** | [Lab 4: Skill Registry & Agent Registry Discovery](workshop/04-LAB-SKILLS-AND-AGENT-REGISTRY.md) | Skill Registry 16-check ZIP/`SKILL.md` packaging, Vertex AI Skill Registry upload, `GCPSkillRegistry` + `SkillToolset`, `AgentRegistry` (`google-adk[a2a,agent-identity,mcp]`) wired into `coding_agent` before deployment |
-| **2. Scale** | [Lab 5: Deploy Complete Agent ONCE (CLI & Terraform)](workshop/05-LAB-DEPLOY-RUNTIME-TERRAFORM.md) | Build & deploy the 100% feature-complete Labs 1–4 agent **once** via `agents-cli deploy` & declarative `google_vertex_ai_reasoning_engine` (`container_spec` & `source_code_spec`), Custom SA + `roles/aiplatform.memoryUser`, dual service-agent IAM `depends_on`, unified vs. decoupled `REASONING_ENGINE_NAME`, revisions, traffic splitting, emergency stop |
+| **2. Scale** | [Lab 5: Deploy Complete Agent ONCE (CLI & Terraform)](workshop/05-LAB-DEPLOY-RUNTIME-TERRAFORM.md) | Build & deploy the 100% feature-complete Labs 1–4 agent **once** (with baked `/usr/local/bin/agy`, `AGY_ADC_AUTH=true` via Custom SA, and Gemini 4 Terraform vars) via `agents-cli deploy` & declarative `google_vertex_ai_reasoning_engine` (`container_spec` & `source_code_spec`), Custom SA + `roles/aiplatform.memoryUser`, dual service-agent IAM `depends_on`, unified vs. decoupled `REASONING_ENGINE_NAME`, revisions, traffic splitting, emergency stop |
 | **4. Optimize** | [Lab 6: Observability, Evaluation, Alerts & Optimize](workshop/06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md) | Offline Eval (traces vs. sessions), 2-Step Simulated User Eval, Failure Clustering (`vertexai.evals`), Online Evaluation Monitors, Cloud Monitoring Quality Alerts (`monitoring_v3`), Dual-Track Optimization Flywheel: Root Prompt Canary (`agents-cli eval optimize` + `trafficSplitManual`) **and** Zero-Redeploy Skill Updates (`GEPARootAgentOptimizer` → Skill Registry `client.skills.update` / Agent Registry `rev-2` revision rollout & `rev-1` rollback) |
 | **3. Govern (Optional)** | [Lab 7 (Optional / Skippable): Enterprise Security & Governance Hardening](workshop/07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md) | Agent Registry `ENABLED_BLOCKING` LLM scanning & lifecycle, Semantic Governance Policies (NLC) & Model Armor, SPIFFE `AGENT_IDENTITY` + Agent Gateway Terraform upgrade path, Multi-Tenant Session/Memory IAM Conditions, Memory Poisoning audit, CMEK/VPC-SC, WORM Audit Buckets + SIEM Pub/Sub + 3-Layer Agent Anomaly Detection → SCC *(skipping Lab 7 leaves Labs 1–6 100% green!)* |
 | **Architecture** | [Lab 8: Agent Runtime vs. Self-Hosted GKE](workshop/08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) | 14-Dimension Limitations & Trade-Off Matrix comparing Agent Runtime + Managed Sandbox vs. Self-Hosted GKE + `kubernetes-sigs/agent-sandbox` + GKE Agent Substrate |
@@ -30,8 +30,8 @@ The workshop follows a **Build → Isolate → Persist → Extend → Deploy ONC
 ```mermaid
 flowchart LR
     subgraph BUILD["1. BUILD PILLAR (Lab 1)"]
-        DEV["Developer IDE + Antigravity<br/>.agents/skills/* + agents-cli"]
-        ADK["ADK 2.0 Coding Agent (Python)<br/>Simple -> Collaborative -> Graph -> Dynamic<br/>+ EnvironmentToolset & services.yaml/py"]
+        DEV["Developer IDE + Antigravity<br/>.agents/skills/* + agents-cli + agy CLI"]
+        ADK["ADK 2.0 Coding Agent (Python)<br/>Gemini 4 Hydrogen/Neon (global)<br/>Simple -> Collaborative -> Graph -> Dynamic -> agy_harness<br/>+ EnvironmentToolset & services.yaml/py"]
         LOCAL["LocalEnvironment<br/>Lab 1 Laptop Workspace"]
         DEV --> ADK
         ADK --> LOCAL
@@ -39,7 +39,7 @@ flowchart LR
 
     subgraph STATE_SBX["2. ISOLATE & STATE (Labs 2-3)"]
         SA_INST["Standalone Agent Platform Instance<br/>client.runtimes.create() (Labs 2-3)"]
-        SBX["Managed BYOC / Shell / Code Sandbox<br/>gVisor Container - Zero Ambient Creds (Lab 2)"]
+        SBX["Managed BYOC / Shell / Code Sandbox<br/>gVisor + /usr/local/bin/agy - Zero Ambient Creds (Lab 2)"]
         SESS["Managed Sessions (Lab 3)<br/>VertexAiSessionService"]
         MEM["Memory Bank (Lab 3)<br/>VertexAiMemoryBankService"]
         FB["Feedback & Telemetry (Lab 3)<br/>OTel, Parent Sandbox Logs, Thumbs"]
@@ -61,7 +61,7 @@ flowchart LR
     subgraph DEPLOY["4. DEPLOY ONCE TO RUNTIME (Lab 5)"]
         AR_IMG["Artifact Registry<br/>Complete Agent Image + BYOC Sandbox Image"]
         TF["Terraform IaC / agents-cli deploy<br/>google_vertex_ai_reasoning_engine + Custom SA"]
-        RT["Agent Runtime (ReasoningEngine)<br/>Trusted Orchestration Plane (Labs 1-4 Complete)"]
+        RT["Agent Runtime (ReasoningEngine)<br/>Trusted Plane + /usr/local/bin/agy (AGY_ADC_AUTH=true)"]
 
         ADK -->|"Build & Push ONCE"| AR_IMG
         TF --> RT
@@ -103,9 +103,10 @@ flowchart LR
 
 ### Key Architectural Highlights
 
-- **Trusted Orchestration vs. Untrusted Execution:** **Agent Runtime (`ReasoningEngine`)** holds the runtime identity, calls Gemini models, reads/writes Managed Sessions & Memory Bank, and emits OTel telemetry; **Managed Sandboxes (`SandboxEnvironment`)** execute LLM-generated shell/test commands inside a **gVisor-isolated container** (`appuser`) with **zero IAM roles**, **no ADC**, and **no metadata server access (`169.254.169.254`)**.
+- **Frontier Gemini 4 Dual-Model Routing (Replacing Retired `gemini-2.5-flash`):** Defaults to **Gemini 4 Hydrogen (`MODEL_NAME=gemini-4-hydrogen`)** for fast coding/tool-calling and **Gemini 4 Neon (`REASONING_MODEL_NAME=gemini-4-neon`)** for architecture, planning, and code review via **`MODEL_LOCATION=global`** using ADK 2.0 `Gemini(model=..., client_kwargs=...)` (`google-genai>=2.34.0` for 1M-token automatic `continuation_token` long decodes; `THINKING_LEVEL=MEDIUM` from `LOW|MEDIUM|HIGH|XHIGH`). Teams requiring strict Singapore regional inference residency can switch to **Gemini 4 Argon (`gemini-4-argon`, `MODEL_LOCATION=asia-southeast1`)**. *(Replaces `gemini-2.5-flash`, retired Oct 20, 2026.)*
+- **Trusted Orchestration vs. Untrusted Execution (and Enterprise `agy` Auth Boundary):** **Agent Runtime (`ReasoningEngine`)** holds the runtime identity, calls Gemini 4 models, reads/writes Managed Sessions & Memory Bank, and runs `/usr/local/bin/agy` exclusively via **`AGY_ADC_AUTH=true`** on the least-privilege Custom Service Account (`coding-agent-runtime-sa` — **never** proxying personal developer OAuth!); **Managed Sandboxes (`SandboxEnvironment`)** execute untrusted LLM-generated commands inside a **gVisor-isolated container** (`appuser`) with **zero IAM roles**, **no ADC**, and **no metadata server access (`169.254.169.254`)**.
 - **Build Complete Before Deploying Once:** Labs 2 & 3 run against a lightweight standalone Agent Platform backing instance (`client.runtimes.create()`, ~3 seconds), and Lab 4 wires Skill Registry + Agent Registry directly into `coding_agent/` — so Lab 5 containerizes and deploys the **100% feature-complete** agent **once** via `agents-cli` & Terraform.
-- **Portable ADK 2.0 Architectures:** Toggle `AGENT_ARCHITECTURE` across `simple` (default), `collaborative` (`single_turn`/`task` subagents + `GlobalInstructionPlugin`), `graph` (deterministic `Workflow`, `JoinNode`, `RetryConfig`, `RequestInput`), and `dynamic` (`@node(rerun_on_resume=True)`, `asyncio.gather(..., use_sub_branch=True)`) with zero changes to your sandbox or container contract.
+- **5 Portable ADK 2.0 Architectures:** Toggle `AGENT_ARCHITECTURE` across `simple` (default), `collaborative` (`single_turn`/`task` subagents + `GlobalInstructionPlugin`), `graph` (deterministic `Workflow`, `JoinNode`, `RetryConfig`, `RequestInput`), `dynamic` (`@node(rerun_on_resume=True)`, `asyncio.gather(..., use_sub_branch=True)`), and **`agy_harness`** (Outer ADK Factory + Inner `agy` Headless CLI Harness with 4-tier exit-code retry/fallback and independent `pytest`/`ruff` gates) with zero changes to your sandbox or container contract.
 - **Dual-Track Optimization Flywheel:** Root-prompt fixes roll out safely via Agent Runtime `v1beta1` `trafficSplitManual` canaries, while domain skill improvements (`GEPARootAgentOptimizer`) hot-update live via `client.skills.update(...)` or immutable Agent Registry `rev-2` revisions (with 1-command rollback to `rev-1`) and **zero agent container rebuild**.
 - **Cleanly Skippable Security & Governance (Lab 7):** Enterprise hardening (Agent Registry `ENABLED_BLOCKING` scanning, NLC Semantic Governance, Model Armor, SPIFFE `AGENT_IDENTITY`, IAM Conditions, CMEK/VPC-SC, WORM/SIEM/SCC) is isolated in [Optional Lab 7](workshop/07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md) so time-constrained workshops can skip directly from Lab 6 to [Lab 8 (Agent Runtime vs. GKE)](workshop/08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) with zero broken checkpoints.
 
@@ -125,19 +126,19 @@ Every service defaults to **Bangkok (`asia-southeast3`)** first. We only fall ba
 | Priority / Scope | Region / Env Var | Workshop Services Hosted Here |
 |---|---|---|
 | **1. Default (Bangkok)** | `PRIMARY_REGION=asia-southeast3` (`AR_LOCATION`, `BUILD_LOCATION`, `AGENT_REGISTRY_LOCATION`, `GKE_LOCATION`) | **Artifact Registry** (`asia-southeast3-docker.pkg.dev`), **Cloud Build** (`--region=asia-southeast3`), **Secret Manager**, **Agent Registry A2A/MCP Discovery** (`gcloud agent-registry agents` / ADK `AgentRegistry`), and **Lab 8 Self-Hosted GKE** *(Thailand PDPA / BoT compute residency)*. **Empirically verified:** a single Bangkok Artifact Registry repo (`asia-southeast3-docker.pkg.dev`) pulls cleanly into **both** Singapore Agent Runtime and Singapore BYOC Sandboxes — **no second Singapore AR repo is needed**. |
-| **2. Fallback Only Where Unavailable (Singapore)** | `GOOGLE_CLOUD_LOCATION=asia-southeast1` | **Agent Runtime** (`ReasoningEngine`), **Managed Sandboxes** (Shell / BYOC / Code Exec), **Managed Sessions**, **Memory Bank**, **Agent Gateway**, and **Gemini 2.5 Flash** *(nearest supported Agent Platform region — used only because these services are not yet available in `asia-southeast3`)*. |
+| **2. Fallback Only Where Unavailable (Singapore)** | `GOOGLE_CLOUD_LOCATION=asia-southeast1` | **Agent Runtime** (`ReasoningEngine`), **Managed Sandboxes** (Shell / BYOC / Code Exec), **Managed Sessions**, **Memory Bank**, **Agent Gateway**, plus optional **Gemini 4 Argon (`gemini-4-argon`, `MODEL_LOCATION=asia-southeast1`)** for strict regional inference residency *(nearest supported Agent Platform region — used only because these services are not yet available in `asia-southeast3`)*. |
 | **3. GCP-Mandated Preview (`us-central1`)** | `SKILL_REGISTRY_LOCATION=us-central1` | **Vertex AI Skill Registry** (`v1beta1` Preview — strictly limited to `us-central1`, `europe-west4`, `us-east5`). |
-| **4. GCP-Mandated Global (`global`)** | `EVAL_LOCATION=global` · `AGENT_REGISTRY_SKILLS_LOCATION=global` | **Gen AI Evaluation Service** (`global` is APAC-ready and supports `generate_loss_clusters`) & **Agent Registry Standalone Skills** (`gcloud alpha agent-registry skills --location=global`; standalone skills currently time out in `asia-southeast3`, while A2A/MCP discovery stays in Bangkok `asia-southeast3`). |
+| **4. GCP-Mandated Global (`global`)** | `MODEL_LOCATION=global` · `EVAL_LOCATION=global` · `AGENT_REGISTRY_SKILLS_LOCATION=global` | **Frontier Gemini 4 Inference** (`MODEL_NAME=gemini-4-hydrogen`, `REASONING_MODEL_NAME=gemini-4-neon` — empirically verified HTTP 200 on `global`, HTTP 404 on `asia-southeast1`, HTTP 501 on `asia-southeast3`; decoupled via ADK `Gemini(client_kwargs=...)`), **Gen AI Evaluation Service** (`global` is APAC-ready and supports `generate_loss_clusters`), & **Agent Registry Standalone Skills** (`gcloud alpha agent-registry skills --location=global`; A2A/MCP discovery stays in Bangkok `asia-southeast3`). |
 
 *(See the full verified Regional Availability Matrix and single-region US/EMEA alternatives in [00-WORKSHOP-OVERVIEW.md](workshop/00-WORKSHOP-OVERVIEW.md#regional-availability-matrix-bangkok-first-with-minimal-fallbacks).)*
 
 ### Prerequisites
 
-- **Python 3.11+** (required by ADK 2.0 and `google/agents-cli`)
+- **Python 3.11+** (required by ADK 2.0, `google-genai>=2.34.0` for Gemini 4 1M-token automatic long decodes, and `google/agents-cli`)
 - **[`uv`](https://docs.astral.sh/uv/)** (fast Python package & virtualenv manager — install standalone via `curl -LsSf https://astral.sh/uv/install.sh | sh`; works even on fresh Debian/Linux workstations without `python3-venv` or `docker`!)
 - **Google Cloud CLI (`gcloud`) + `alpha` component** (`gcloud components install alpha`, needed for `gcloud alpha agent-registry skills` in Labs 4, 6 & 7) authenticated against a **Standard billing-enabled GCP project** (see [Express Mode vs. Standard GCP caveats](workshop/00-WORKSHOP-OVERVIEW.md#express-mode-vs-standard-gcp-project-important))
 - **Cloud Build** (zero local Docker required — local `docker` CLI is strictly optional), **Terraform >= 1.5.0** (Lab 5), **Node.js** (optional, for `npx skills add`)
-- **`google/agents-cli` (Optional):** Recommended for rapid scaffolding, interactive playground, and `agents-cli deploy` / `eval`, installed via `uvx google-agents-cli setup` (or `uv tool install google-agents-cli`). Every lab works end-to-end with pure `uv`, `gcloud`, and Terraform even if `agents-cli` is not on your `PATH`.
+- **`google/agents-cli` & Antigravity (`agy`) Headless CLI (Optional Locally):** Install `agents-cli` via `uvx google-agents-cli setup` and optionally install the static Go `agy` headless CLI via `curl -fsSL https://antigravity.google/cli/install.sh | bash` (baked automatically into Lab 2 BYOC Sandbox and Lab 5 Agent Runtime containers via Bangkok Cloud Build!). Every lab works end-to-end with pure `uv`, `gcloud`, and Terraform — and `make test-agy-harness` validates Lab 1's `agy` harness contract even before installing `agy` locally via `--dry-run`.
 
 ### 1. Install `uv`, `gcloud alpha`, (Optional) `google/agents-cli` & Authenticate GCP
 
@@ -152,6 +153,10 @@ gcloud components install alpha --quiet
 uvx google-agents-cli setup
 agents-cli info   # optional check if agents-cli is on PATH
 
+# Optional: Install Antigravity (`agy`) headless CLI locally for Lab 1 Part B `agy_harness`
+# (Also baked automatically into Lab 2 BYOC Sandbox and Lab 5 Agent Runtime via Cloud Build!)
+curl -fsSL https://antigravity.google/cli/install.sh | bash
+
 # Authenticate Application Default Credentials (ADC) for your GCP project
 gcloud auth login
 gcloud auth application-default login
@@ -161,8 +166,8 @@ gcloud auth application-default login
 
 ```bash
 # Copy environment template and fill in GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_PROJECT_NUMBER
-# (Bangkok asia-southeast3 first, falling back to Singapore asia-southeast1 only for Agent Platform/Gemini,
-#  plus us-central1 Skill Registry Preview and global Eval / Agent Registry standalone skills)
+# (Bangkok asia-southeast3 first, Singapore asia-southeast1 fallback for Agent Platform,
+#  global for Gemini 4 Hydrogen/Neon, Eval & Agent Registry standalone skills, us-central1 for Skill Registry Preview)
 cp .env.example .env
 
 # Run automated pre-flight checks (gcloud, ADC, APIs, uv, regions — confirms zero Docker needed!)
@@ -183,7 +188,7 @@ Open this repository folder in **Antigravity** (or any IDE supporting the open A
 
 | Bundled Workshop Skill | Workshop Coverage |
 |---|---|
-| [`adk-coding-agent-build`](.agents/skills/adk-coding-agent-build/SKILL.md) | Lab 1 — ADK 2.0 Agent Architectures (Simple, Collaborative, Graph & Dynamic Workflows, `ManagedAgent`, `services.yaml`/`services.py`), `EnvironmentToolset`, `BaseEnvironment`, `LocalEnvironment`, `ExecuteBashTool`, `agents-cli` |
+| [`adk-coding-agent-build`](.agents/skills/adk-coding-agent-build/SKILL.md) | Lab 1 — Frontier Gemini 4 `client_kwargs` + `ThinkingConfig`, **5** ADK 2.0 Architectures (Simple, Collaborative, Graph, Dynamic & **`agy` Headless CLI Harness**), `ManagedAgent`, `services.yaml`/`services.py`, `EnvironmentToolset`, `BaseEnvironment`, `LocalEnvironment`, `ExecuteBashTool`, `agents-cli` |
 | [`agent-platform-sandbox-byoc`](.agents/skills/agent-platform-sandbox-byoc/SKILL.md) | Lab 2 — BYOC Dockerfile contract, Sandbox/Template/Snapshot lifecycle, Shell & Code Execution, PSC-I/NGFW/VPC-SC/CMEK |
 | [`agent-platform-runtime-and-state`](.agents/skills/agent-platform-runtime-and-state/SKILL.md) | Labs 3 & 5 — Managed Sessions, Memory Bank, Feedback, Telemetry, Terraform `google_vertex_ai_reasoning_engine`, quotas & deploy-once patterns |
 | [`agent-platform-governance-and-registries`](.agents/skills/agent-platform-governance-and-registries/SKILL.md) | Lab 4 & Optional Lab 7 — Skill Registry (16 atomic ZIP/`SKILL.md` checks), Agent Registry, `GCPSkillRegistry`/`AgentRegistry` ADK clients, `ENABLED_BLOCKING` scanning, Semantic Governance (NLC) & SPIFFE |
@@ -200,7 +205,7 @@ Choose the track that matches your session schedule (detailed time-boxed schedul
 
 | Track | Duration | Format & Scope |
 |---|---|---|
-| **Full-Day Deep-Dive** | **7 hours** *(6h 10m labs + 50m breaks; or 6h 25m skipping Optional Lab 7)* | Complete hands-on implementation across **Labs 1–8** (`starter/` → Lab 1 Parts A & B across all 4 ADK architectures, Lab 2 BYOC sandbox + standalone instance, Lab 3 Sessions + Memory Bank + Telemetry/Feedback, Lab 4 Skill/Agent Registry discovery, Lab 5 **Deploy ONCE** via `agents-cli` & Terraform, Lab 6 Offline/Simulated/Online Eval + Quality Alerts, **Optional / Skippable Lab 7** Security & Governance Hardening, and Lab 8 GKE Architecture Review). |
+| **Full-Day Deep-Dive** | **7 hours** *(6h 10m labs + 50m breaks; or 6h 25m skipping Optional Lab 7)* | Complete hands-on implementation across **Labs 1–8** (`starter/` → Lab 1 Parts A & B across Gemini 4 models and all **5** ADK architectures including **`agy_harness`**, Lab 2 BYOC sandbox with baked `/usr/local/bin/agy` + standalone instance, Lab 3 Sessions + Memory Bank + Telemetry/Feedback, Lab 4 Skill/Agent Registry discovery, Lab 5 **Deploy ONCE** via `agents-cli` & Terraform with `AGY_ADC_AUTH=true`, Lab 6 Offline/Simulated/Online Eval + Quality Alerts, **Optional / Skippable Lab 7** Security & Governance Hardening, and Lab 8 GKE Architecture Review). |
 | **Half-Day Fast-Track** | **3.5 hours** *(210 min)* | High-velocity executive + engineering track (**Labs 1–6 + Lab 8**, cleanly skipping **Optional Lab 7** with zero broken checkpoints): **Lab 1 (Part A hands-on + 5m Part B walkthrough), Labs 2, 4, and 5** hands-on (using pre-pushed sandbox/runtime images or `solution/` checkpoints where needed), instructor-led live demos of **Labs 3 (15m) & 6 (15m)**, and a **25-minute** architecture Q&A on **Lab 8 (Agent Runtime vs. GKE)**. |
 
 > [!TIP]
@@ -230,22 +235,24 @@ gemini-coding-agent-workshop/
 │   ├── 06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md          # Lab 6 (Optimize): Offline/Simulated/Online Eval, Alerts & Prompt Tuning
 │   ├── 07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md  # Lab 7 (Optional / Skippable): Scanning, NLC, Model Armor, SPIFFE, CMEK/VPC-SC, WORM/SIEM/SCC
 │   ├── 08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md     # Lab 8 (Architecture): Agent Runtime vs. Self-Hosted GKE & Agent Substrate
-│   └── FACILITATOR-GUIDE.md                        # Instructor checklist, skip-Lab-7 guide, quota math & Top-23 troubleshooting
+│   └── FACILITATOR-GUIDE.md                        # Instructor checklist, skip-Lab-7 guide, quota math & Top-25 troubleshooting
 ├── starter/                                        # Hands-on participant workspace with # TODO(lab-N) markers
-│   ├── pyproject.toml                              # Python >=3.11 uv dependencies (ADK >=2.0, Agent Platform, Eval, OTel)
+│   ├── pyproject.toml                              # Python >=3.11 uv dependencies (ADK >=2.0, google-genai>=2.34.0, Agent Platform, Eval, OTel)
 │   ├── agents-cli-manifest.yaml                    # Lab 1: agents-cli config (agent_directory: coding_agent, target: agent_runtime)
 │   ├── services.yaml                               # Lab 1 Part B: Declarative ADK 2.0+ custom service registration
 │   ├── services.py                                 # Lab 1 Part B: Programmatic ADK 2.0+ service registration (precedence over YAML)
-│   ├── Dockerfile                                  # Lab 5: Trusted Agent Runtime BYOC image (0.0.0.0:8080, non-root)
+│   ├── Dockerfile                                  # Lab 5: Trusted Agent Runtime BYOC image (0.0.0.0:8080, non-root + baked /usr/local/bin/agy)
 │   ├── main.py                                     # Lab 5: FastAPI/ADK HTTP server (GET /, /api/reasoning_engine, /api/stream_reasoning_engine)
-│   ├── requirements.txt                            # Lab 5: Agent Runtime container deps (for container_spec & source_code_spec)
+│   ├── requirements.txt                            # Lab 5: Agent Runtime container deps (google-genai>=2.34.0; container_spec & source_code_spec)
 │   ├── coding_agent/
 │   │   ├── __init__.py
-│   │   ├── config.py                               # Typed environment settings loader (incl. AGENT_ARCHITECTURE, MAX_FIX_ROUNDS, ENABLE_HITL_APPROVAL)
+│   │   ├── config.py                               # Typed settings loader (Gemini 4 model/location/thinking, AGENT_ARCHITECTURE, AGY_EXECUTION_MODE)
+│   │   ├── models.py                               # Lab 1: Frontier Gemini 4 ADK 2.0 model factory (client_kwargs + THINKING_LEVEL)
 │   │   ├── agent.py                                # Root ADK LlmAgent + architecture dispatcher (Lab 1 -> Lab 2 sandbox -> Lab 3/4 wired -> Lab 5 deployed)
-│   │   ├── architectures.py                        # Lab 1 Part B: Collaborative Team, Declarative Graph, Dynamic Workflow & ManagedAgent builders
+│   │   ├── architectures.py                        # Lab 1 Part B: Collaborative Team, Declarative Graph, Dynamic Workflow, agy_harness & ManagedAgent
 │   │   ├── train_eval_set.evalset.json             # Lab 6: Minimal ADK eval set consumed by `adk optimize`
 │   │   ├── tools/
+│   │   │   ├── agy_headless_harness.py             # Lab 1 Part B: Antigravity (`agy`) Headless CLI Harness (0/1/2/3 exit codes, auto|local|sandbox)
 │   │   │   ├── sandbox_lifecycle.py                # Lab 2: Template, Sandbox & Snapshot CRUD + Pause/Resume CLI
 │   │   │   ├── sandbox_execution.py                # Lab 2: Shell, BYOC /exec, Code Exec & BaseEnvironment adapter
 │   │   │   └── registry_loader.py                  # Lab 4: GCPSkillRegistry, SkillToolset & AgentRegistry loader
@@ -255,8 +262,8 @@ gemini-coding-agent-workshop/
 │   │   └── callbacks/
 │   │       └── telemetry_and_feedback.py           # Lab 3: OTel spans, parent sandbox stdout logging & Feedback API
 │   ├── sandbox_image/                              # Lab 2: Non-root Debian BYOC coding sandbox (untrusted /exec plane)
-│   │   ├── Dockerfile                              # USER appuser, Python 3.11+, Node.js, pytest, ruff, bandit
-│   │   ├── runner.py                               # Lightweight /health & /exec HTTP runner on port 8080
+│   │   ├── Dockerfile                              # USER appuser, Python 3.11+, Node.js, pytest, ruff, bandit + opt-in /usr/local/bin/agy
+│   │   ├── runner.py                               # Lightweight /health (agy_cli_available) & /exec (allowlisted per-call env) on port 8080
 │   │   └── requirements.txt
 │   ├── skills_to_register/                         # Lab 4: Enterprise skill package passing all 16 atomic checks
 │   │   └── secure-code-review/
@@ -316,7 +323,8 @@ Run `make help` at any time from the repository root to list available targets. 
 | `make install` | Sync Python 3.11+ dependencies via `uv` (`starter/` and `solution/`) | Lab 1 |
 | `make install-pip` | Pure `python3 -m venv` + `pip` dependency install fallback (zero `uv` required) | Lab 1 |
 | `make lint` | Run `ruff check` across `starter/`, `solution/`, and `scripts/` | All |
-| `make test-sandbox-local` | Pure-Python `runner.py` localhost smoke test (`/health` + `/exec`) — **zero Docker!** | Lab 2 |
+| `make test-agy-harness` | Dry-run & contract smoke test for Lab 1 `AgyHeadlessHarness` (exit codes `0/1/2/3`, NDJSON parser, `auto\|local\|sandbox` modes — **zero Docker**, works even before installing `agy`!) | Lab 1 (Part B) |
+| `make test-sandbox-local` | Pure-Python `runner.py` localhost smoke test (`/health` + `agy_cli_available`, `/exec`, `cwd` escape & allowlisted `env` HTTP 400 check) — **zero Docker!** | Lab 2 |
 | `make push-sandbox` | Build/push the BYOC sandbox image (`SANDBOX_IMAGE_URI`) via Cloud Build (`--region=asia-southeast3`) — **zero Docker!** | Lab 2 |
 | `make build-sandbox` | *(Optional)* Build the non-root BYOC coding sandbox image locally if Docker is installed | Lab 2 |
 | `make sandbox-lifecycle-demo` | Run the Sandbox Template -> Create -> Exec -> Pause -> Resume -> Snapshot -> Delete demo in Singapore (`asia-southeast1`) | Lab 2 |

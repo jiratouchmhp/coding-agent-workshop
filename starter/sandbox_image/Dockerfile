@@ -10,11 +10,12 @@ FROM node:22-bookworm-slim AS node_lts
 FROM python:3.11-slim-bookworm
 
 LABEL org.opencontainers.image.title="gemini-coding-agent-sandbox" \
-      org.opencontainers.image.description="Non-root Debian Bookworm BYOC coding sandbox with Python 3.11+, Node.js LTS, git, jq, pytest, ruff, and bandit."
+      org.opencontainers.image.description="Non-root Debian Bookworm BYOC coding sandbox with Python 3.11+, Node.js LTS, Antigravity (agy) headless CLI, git, jq, pytest, ruff, and bandit."
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
+    AGY_CLI_DISABLE_AUTO_UPDATE=true \
     SANDBOX_WORKSPACE=/workspace \
     SANDBOX_HOST=0.0.0.0 \
     SANDBOX_PORT=8080
@@ -34,6 +35,16 @@ RUN apt-get update \
         git \
         jq \
     && rm -rf /var/lib/apt/lists/*
+
+# Opt-in native Go Antigravity (`agy`) headless CLI binary baked into /usr/local/bin
+# (built remotely via Cloud Build `make push-sandbox` — zero local Docker required).
+ARG INSTALL_AGY_CLI=true
+RUN if [ "$INSTALL_AGY_CLI" = "true" ]; then \
+      curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy_install.sh \
+      && bash /tmp/agy_install.sh --dir /usr/local/bin \
+      && rm -f /tmp/agy_install.sh \
+      && chmod 0755 /usr/local/bin/agy; \
+    fi
 
 # Install Python coding, testing, linting, and SAST tools.
 COPY requirements.txt /tmp/requirements.txt

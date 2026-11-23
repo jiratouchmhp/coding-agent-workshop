@@ -97,6 +97,7 @@ Verify the following values in `.env`:
 - `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_PROJECT_NUMBER`
 - `PRIMARY_REGION`, `AR_LOCATION`, `BUILD_LOCATION`, and `AGENT_REGISTRY_LOCATION` (**`asia-southeast3`** — Bangkok default for Artifact Registry, Cloud Build, Secret Manager & Agent Registry A2A/MCP discovery; **empirically verified:** Bangkok AR pulls cleanly into Singapore Agent Runtime and Singapore BYOC Sandboxes, so no second AR repo is needed!)
 - `GOOGLE_CLOUD_LOCATION` (**`asia-southeast1`** — Singapore fallback used only because Agent Runtime & Managed Sandboxes are not yet launched in Bangkok)
+- `MODEL_NAME` (**`gemini-4-hydrogen`**), `REASONING_MODEL_NAME` (**`gemini-4-neon`**), `MODEL_LOCATION` (**`global`** — or `asia-southeast1` with `gemini-4-argon` for strict regional inference residency), `THINKING_LEVEL` (**`MEDIUM`** from `LOW|MEDIUM|HIGH|XHIGH`), and `AGY_EXECUTION_MODE` (**`auto`**)
 - `SANDBOX_IMAGE_URI` (`asia-southeast3-docker.pkg.dev/.../coding-agent-repo/coding-sandbox:v1`) and `SANDBOX_TEMPLATE_NAME` (from Lab 2, or `SANDBOX_MODE=shell`)
 - `ENABLE_TELEMETRY_CALLBACKS`, `ENABLE_MEMORY_BANK`, and your Lab 2/3 standalone `REASONING_ENGINE_NAME` (in `asia-southeast1`)
 - `ENABLE_SKILL_REGISTRY`, `SKILL_REGISTRY_LOCATION` (**`us-central1`** — 3-region Preview), `AGENT_REGISTRY_LOCATION` (**`asia-southeast3`** — Bangkok A2A/MCP), and `AGENT_REGISTRY_SKILLS_LOCATION` (**`global`** — standalone skills)
@@ -162,8 +163,8 @@ Never pass any of these **forbidden** environment variables in `--env-vars` or T
 Agent Runtime automatically injects `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, and `GOOGLE_CLOUD_AGENT_ENGINE_ID` into your container at startup.
 
 > [!TIP]
-> **Deploying Any Lab 1 ADK Architecture Without Changing the Container Contract:**
-> Because `starter/coding_agent/agent.py` resolves `root_agent` dynamically via `build_root_agent()` and exposes `app = App(...)` (with `ResumabilityConfig(is_resumable=True)` and `GlobalInstructionPlugin` across `collaborative`, `graph`, and `dynamic` modes), `main.py` forwards `coding_agent.agent.app` via `AdkApp(app=adk_app)` whenever the installed `AdkApp` signature supports `app=` (falling back cleanly to `AdkApp(agent=root_agent)` — plus `plugins=...` if supported — on older SDKs). That means you can switch your deployed Coding Agent between `simple` (default), `collaborative`, `graph`, and `dynamic` purely through environment variables — pass `AGENT_ARCHITECTURE`, `MAX_FIX_ROUNDS`, and `ENABLE_HITL_APPROVAL` via Terraform `deployment_spec.env` (or `agents-cli deploy --env-vars "AGENT_ARCHITECTURE=graph,MAX_FIX_ROUNDS=3,ENABLE_HITL_APPROVAL=false"`) with **zero changes** to `starter/Dockerfile`, `starter/main.py`, or the Agent Runtime HTTP/NDJSON contract! *(Note: if you pin an older SDK build whose `AdkApp` only accepts `agent=`, pass `plugins` explicitly on `AdkApp` when deploying remote HITL or collaborative workflows. Keep `AGENT_ARCHITECTURE=simple` as the default for Labs 1–6 unless you intentionally want to benchmark a multi-agent/graph revision via canary traffic splitting in Step D2.)*
+> **Deploying Any of the 5 Lab 1 ADK Architectures Without Changing the Container Contract:**
+> Because `starter/coding_agent/agent.py` resolves `root_agent` dynamically via `build_root_agent()` and exposes `app = App(...)` (with `ResumabilityConfig(is_resumable=True)` and `GlobalInstructionPlugin` across `collaborative`, `graph`, `dynamic`, and **`agy_harness`** modes), `main.py` forwards `coding_agent.agent.app` via `AdkApp(app=adk_app)` whenever the installed `AdkApp` signature supports `app=` (falling back cleanly to `AdkApp(agent=root_agent)` — plus `plugins=...` if supported — on older SDKs). That means you can switch your deployed Coding Agent between `simple` (default), `collaborative`, `graph`, `dynamic`, and `agy_harness` purely through environment variables — pass `AGENT_ARCHITECTURE`, `AGY_EXECUTION_MODE`, `MAX_FIX_ROUNDS`, and `ENABLE_HITL_APPROVAL` via Terraform `deployment_spec.env` (or `agents-cli deploy --env-vars "AGENT_ARCHITECTURE=agy_harness,AGY_EXECUTION_MODE=local,MAX_FIX_ROUNDS=3"`) with **zero changes** to `starter/Dockerfile`, `starter/main.py`, or the Agent Runtime HTTP/NDJSON contract! *(Note: if you pin an older SDK build whose `AdkApp` only accepts `agent=`, pass `plugins` explicitly on `AdkApp` when deploying remote HITL or collaborative workflows. Keep `AGENT_ARCHITECTURE=simple` as the default for Labs 1–6 unless you intentionally want to benchmark a multi-agent/graph/`agy_harness` revision via canary traffic splitting in Step D2.)*
 
 *(Optional — if you want to deploy an imperative prototype engine right now before Part B, remove `--dry-run` and add `--no-wait`, then poll with `agents-cli deploy --status`. Otherwise proceed directly to Part B so Terraform owns the lifecycle cleanly.)*
 
@@ -183,9 +184,14 @@ Before running `terraform plan` or `terraform apply` with Path 1 (`container_spe
 > - **Lab 5 Trusted Agent Runtime (`starter/Dockerfile`, `starter/main.py`, `starter/requirements.txt`, `starter/coding_agent/`, `starter/skills_to_register/` -> `coding-agent:v1`, `AGENT_IMAGE_URI`):** Packages your complete Labs 1–4 Coding Agent (ADK 2.0 + Managed Sandbox adapters + Sessions/Memory/OTel/Feedback + Skills & Agent Registry, including bundled local skill fallback) behind the trusted FastAPI/ADK HTTP server implementing `GET /`, `POST /api/reasoning_engine`, and `POST /api/stream_reasoning_engine` on `0.0.0.0:8080`. Pulled by **`gcp-sa-aiplatform-re`**.
 
 1. Inspect the three runtime server files at the root of `starter/`:
-   - [`starter/Dockerfile`](../starter/Dockerfile) — Non-root Python 3.11+ container packaging `main.py`, `requirements.txt`, the complete `coding_agent/` package, and `skills_to_register/` (for Lab 4 local skill fallback parity), starting Uvicorn on `0.0.0.0:8080`
-   - [`starter/main.py`](../starter/main.py) — FastAPI/ADK HTTP adapter implementing `GET /` (`200 OK`), `POST /api/reasoning_engine` (JSON), and `POST /api/stream_reasoning_engine` (NDJSON) — contains **3 `# TODO(lab-5)` blocks** (`get_runtime_app()`, `query_endpoint()`, `stream_query_endpoint()`)
-   - [`starter/requirements.txt`](../starter/requirements.txt) — Pinned runtime dependencies shared by both Option 1 (`container_spec`) and Option 2 (`source_code_spec`)
+   - [`starter/Dockerfile`](../starter/Dockerfile) — Non-root (`USER appuser`) Python 3.11+ container packaging `main.py`, `requirements.txt`, the complete `coding_agent/` package, `skills_to_register/` (for Lab 4 local skill fallback parity), **and opt-in `/usr/local/bin/agy` (`ARG INSTALL_AGY_CLI=true`)** installed via the official static Go script — built remotely in Bangkok Cloud Build (`make push-agent`) or Agent Runtime `source_code_spec` (`make pack-agent-source`) with **zero local Docker**, starting Uvicorn on `0.0.0.0:8080`.
+   - [`starter/main.py`](../starter/main.py) — FastAPI/ADK HTTP adapter implementing `GET /` (`200 OK`), `POST /api/reasoning_engine` (JSON), and `POST /api/stream_reasoning_engine` (NDJSON) — contains **3 `# TODO(lab-5)` blocks** (`get_runtime_app()`, `query_endpoint()`, `stream_query_endpoint()`).
+   - [`starter/requirements.txt`](../starter/requirements.txt) — Pinned runtime dependencies (including **`google-genai>=2.34.0`** for Gemini 4 1M-token automatic long decodes) shared by both Option 1 (`container_spec`) and Option 2 (`source_code_spec`).
+
+> [!CAUTION]
+> **Agent Runtime `agy` Authentication & Enterprise ToS Boundary (`AGY_ADC_AUTH=true`):**
+> - Inside the deployed Agent Runtime container, `/usr/local/bin/agy` runs as non-root `appuser` authenticated **exclusively via `AGY_ADC_AUTH=true`** backed by the runtime's dedicated least-privilege Custom Service Account (`coding-agent-runtime-sa`), with `AGY_CLI_DISABLE_AUTO_UPDATE=true` and `GOOGLE_CLOUD_LOCATION=global` scoped per `agy` subprocess invocation (preserving Agent Runtime's own auto-injected `GOOGLE_CLOUD_LOCATION=asia-southeast1` for Sessions, Memory Bank & Sandboxes!).
+> - **NEVER** proxy, copy, or relay a developer's personal `agy` OAuth credentials inside a shared or multi-tenant Agent Runtime! Use Custom SA ADC (`AGY_ADC_AUTH=true`) or native ADK 2.0 `LlmAgent` / `ManagedAgent` / `google-antigravity` SDK.
 
 2. Complete the 3 `# TODO(lab-5)` blocks in [`starter/main.py`](../starter/main.py) **before** building the image (compare with [`solution/main.py`](../solution/main.py) if you get stuck):
 
@@ -306,7 +312,7 @@ Before running `terraform plan` or `terraform apply` with Path 1 (`container_spe
 
 Review the files in `starter/terraform/`:
 - [`starter/terraform/versions.tf`](../starter/terraform/versions.tf) — Terraform and Google provider constraints (`hashicorp/google >= 6.0.0` and `hashicorp/google-beta >= 6.0.0`, required for `spec.container_spec`; note upstream `use-terraform` docs still print `>= 5.28.0`)
-- [`starter/terraform/variables.tf`](../starter/terraform/variables.tf) — Input variables (`project_id`, `project_number`, `location` defaulting to `asia-southeast1` Singapore fallback, `repository_name`, `agent_image_uri` & `sandbox_image_uri` in Bangkok `asia-southeast3-docker.pkg.dev`, `sandbox_template_name`, `api_key_value`, plus optional Lab 3/4 feature variables `enable_memory_bank`, `enable_skill_registry`, `skill_registry_location` defaulting to `us-central1`, `agent_registry_location` defaulting to `asia-southeast3`, and `agent_registry_skills_location` defaulting to `global`)
+- [`starter/terraform/variables.tf`](../starter/terraform/variables.tf) — Input variables (`project_id`, `project_number`, `location` defaulting to `asia-southeast1` Singapore fallback, `repository_name`, `agent_image_uri` & `sandbox_image_uri` in Bangkok `asia-southeast3-docker.pkg.dev`, `sandbox_template_name`, Frontier Gemini 4 & `agy` variables **`model_name`** [`"gemini-4-hydrogen"`], **`reasoning_model_name`** [`"gemini-4-neon"`], **`model_location`** [`"global"`], **`thinking_level`** [`"MEDIUM"`], **`agy_execution_mode`** [`"auto"`], `api_key_value`, plus optional Lab 3/4 feature variables `enable_memory_bank`, `enable_skill_registry`, `skill_registry_location` defaulting to `us-central1`, `agent_registry_location` defaulting to `asia-southeast3`, and `agent_registry_skills_location` defaulting to `global`)
 - [`starter/terraform/main.tf`](../starter/terraform/main.tf) — Service accounts, Secret Manager, dual service agent IAM bindings, and `google_vertex_ai_reasoning_engine` (contains `# TODO(lab-5)` markers)
 - [`starter/terraform/outputs.tf`](../starter/terraform/outputs.tf) — Exports `reasoning_engine_id`, `reasoning_engine_resource_name`, and `agent_runtime_service_account`
 - [`starter/terraform/terraform.tfvars.example`](../starter/terraform/terraform.tfvars.example) — Sample variables template
@@ -477,7 +483,31 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
       }
       env {
         name  = "MODEL_NAME"
-        value = var.model_name
+        value = var.model_name # Default "gemini-4-hydrogen" (or "gemini-4-argon" with model_location="asia-southeast1")
+      }
+      env {
+        name  = "REASONING_MODEL_NAME"
+        value = var.reasoning_model_name # Default "gemini-4-neon"
+      }
+      env {
+        name  = "MODEL_LOCATION"
+        value = var.model_location # Default "global" (decoupled from auto-injected GOOGLE_CLOUD_LOCATION=asia-southeast1)
+      }
+      env {
+        name  = "THINKING_LEVEL"
+        value = upper(var.thinking_level) # Strictly LOW | MEDIUM | HIGH | XHIGH
+      }
+      env {
+        name  = "AGY_EXECUTION_MODE"
+        value = var.agy_execution_mode # auto | local | sandbox
+      }
+      env {
+        name  = "AGY_ADC_AUTH"
+        value = "true" # Uses Custom SA ADC (`coding-agent-runtime-sa`), never personal OAuth!
+      }
+      env {
+        name  = "AGY_CLI_DISABLE_AUTO_UPDATE"
+        value = "true"
       }
       env {
         name  = "SANDBOX_MODE"
@@ -635,7 +665,11 @@ output "agent_runtime_service_account" {
    sandbox_image_uri       = "asia-southeast3-docker.pkg.dev/YOUR_PROJECT_ID/coding-agent-repo/coding-sandbox:v1"
    sandbox_template_name   = ""                 # Paste Lab 2 template name, or leave empty for SANDBOX_MODE=shell (omitted via dynamic "env")
    sandbox_mode            = ""                 # Empty auto-selects "byoc" when sandbox_template_name is set, else "shell"
-   model_name              = "gemini-2.5-flash"
+   model_name              = "gemini-4-hydrogen"  # Or "gemini-4-argon" with model_location = "asia-southeast1" for strict regional residency
+   reasoning_model_name    = "gemini-4-neon"
+   model_location          = "global"             # Empirically verified HTTP 200 on global for Hydrogen/Neon
+   thinking_level          = "MEDIUM"             # Strictly LOW | MEDIUM | HIGH | XHIGH
+   agy_execution_mode      = "auto"               # auto | local | sandbox (uses AGY_ADC_AUTH=true on Runtime Custom SA)
    api_key_value           = "replace-with-workshop-placeholder-value"
    enable_memory_bank      = false
    enable_skill_registry   = false
@@ -844,7 +878,7 @@ Run the automated Lab 5 verification script to check HCL formatting, Terraform v
 
 Expected pass criteria:
 1. `make test-agent-local` passes locally (zero Docker!) and `terraform -chdir=starter/terraform fmt -check` + `terraform validate` pass cleanly.
-2. Both `starter/main.py` and `starter/terraform/main.tf` contain zero remaining `# TODO(lab-5)` markers; `starter/terraform/main.tf` uses `region = var.location` (`asia-southeast1` Singapore), grants `roles/aiplatform.memoryUser`, conditional `roles/agentregistry.viewer` (when `enable_skill_registry = true`), `roles/telemetry.tracesWriter`, and self `roles/iam.serviceAccountTokenCreator` on `coding-agent-runtime-sa`, declares `roles/artifactregistry.reader` for `gcp-sa-aiplatform-re` and `gcp-sa-vertex-sandbox`, wires optional Lab 3/4 variables (`enable_memory_bank`, `enable_skill_registry`, `skill_registry_location`, and `agent_registry_location`, injecting both `SKILL_REGISTRY_LOCATION` and `AGENT_REGISTRY_LOCATION`), and lists IAM bindings inside `depends_on`.
+2. Both `starter/main.py` and `starter/terraform/main.tf` contain zero remaining `# TODO(lab-5)` markers; `starter/Dockerfile` bakes opt-in `/usr/local/bin/agy` (`ARG INSTALL_AGY_CLI=true`) as non-root `appuser`; `starter/terraform/main.tf` uses `region = var.location` (`asia-southeast1` Singapore), wires Frontier Gemini 4 & `agy` env vars (`MODEL_NAME`, `REASONING_MODEL_NAME`, `MODEL_LOCATION`, `THINKING_LEVEL`, `AGY_EXECUTION_MODE`, `AGY_ADC_AUTH=true`), grants `roles/aiplatform.memoryUser`, conditional `roles/agentregistry.viewer` (when `enable_skill_registry = true`), `roles/telemetry.tracesWriter`, and self `roles/iam.serviceAccountTokenCreator` on `coding-agent-runtime-sa`, declares `roles/artifactregistry.reader` for `gcp-sa-aiplatform-re` and `gcp-sa-vertex-sandbox`, wires optional Lab 3/4 variables (`enable_memory_bank`, `enable_skill_registry`, `skill_registry_location`, and `agent_registry_location`), and lists IAM bindings inside `depends_on`.
 3. *(If applied)* `REASONING_ENGINE_NAME` in Singapore (`asia-southeast1`) responds to `:streamQuery?alt=sse` with streamed output events.
 
 Need a clean reference? Compare your files against [`solution/main.py`](../solution/main.py) and [`solution/terraform/`](../solution/terraform/).

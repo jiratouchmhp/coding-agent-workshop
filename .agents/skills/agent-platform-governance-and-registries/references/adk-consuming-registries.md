@@ -19,7 +19,8 @@ gcloud auth application-default login
 export GOOGLE_CLOUD_PROJECT="GOVERNANCE_PROJECT_ID"
 export AGENT_REGISTRY_LOCATION="asia-southeast3"   # Bangkok default for A2A/MCP discovery (also supports "global", "us", "eu", or regional)
 export AGENT_REGISTRY_SKILLS_LOCATION="global"     # Required for Agent Registry standalone skills / GCPSkillRegistry (asia-southeast3 times out)
-export GOOGLE_CLOUD_LOCATION="asia-southeast1"     # Singapore fallback for Agent Runtime & Gemini 2.5 Flash (not yet in Bangkok)
+export GOOGLE_CLOUD_LOCATION="asia-southeast1"     # Singapore fallback for Agent Runtime (not yet in Bangkok)
+export MODEL_LOCATION="global"                     # Frontier Gemini 4 Hydrogen/Neon (or asia-southeast1 with gemini-4-argon)
 ```
 
 ---
@@ -105,8 +106,13 @@ skill_toolset = SkillToolset(
     registry=registry,
 )
 
+import inspect
+from google import genai
+from google.adk.models import Gemini
+
+auth_key = "enterprise" if "enterprise" in inspect.signature(genai.Client.__init__).parameters else "vertexai"
 agent = Agent(
-    model="gemini-2.5-flash",
+    model=Gemini(model="gemini-4-hydrogen", client_kwargs={auth_key: True, "project": os.environ["GOOGLE_CLOUD_PROJECT"], "location": "global"}),
     name="registry_coding_agent",
     description="Dynamically discovers and executes enterprise skills.",
     instruction=(
@@ -202,8 +208,9 @@ httpx_client = httpx.AsyncClient(auth=GoogleApiAuth(project_id), timeout=httpx.T
 # Fetch ONCE at startup; use .clone() if attaching to multiple orchestrators!
 base_remote = registry.get_remote_a2a_agent("agents/AGENT_ID", httpx_client=httpx_client)
 
-orchestrator_a = LlmAgent(name="orch_a", model="gemini-2.5-flash", sub_agents=[base_remote.clone()])
-orchestrator_b = LlmAgent(name="orch_b", model="gemini-2.5-flash", sub_agents=[base_remote.clone()])
+# Frontier Gemini 4 model routed to global (or gemini-4-argon on asia-southeast1 for regional residency)
+orchestrator_a = LlmAgent(name="orch_a", model="gemini-4-hydrogen", sub_agents=[base_remote.clone()])
+orchestrator_b = LlmAgent(name="orch_b", model="gemini-4-hydrogen", sub_agents=[base_remote.clone()])
 ```
 
 > **Single-Parent Reuse Gotcha:** A `RemoteA2aAgent` instance can belong to **only one parent orchestrator** at a time. Fetch once at startup to save latency and call **`base_remote.clone()`** for every parent `LlmAgent`.

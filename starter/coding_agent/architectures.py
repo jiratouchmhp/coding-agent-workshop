@@ -7,6 +7,8 @@ architectures beyond the default ``AGENT_ARCHITECTURE=simple`` single-agent setu
   bounded fix cycle, and optional ``RequestInput`` HITL approval gate
 - ``dynamic``: Programmatic ``@node(rerun_on_resume=True)`` orchestrator with
   ``ctx.run_node()``, ``asyncio.gather(..., use_sub_branch=True)``, and checkpointed HITL
+- ``agy_harness``: Outer ADK 2.0 orchestrator + Antigravity (``agy``) headless coding harness
+  with independent pytest/ruff gates, ``--conversation`` fix loops, and ``gemini-4-neon`` review
 
 Keep ``AGENT_ARCHITECTURE=simple`` as the default in ``.env`` so Labs 2-8
 continue working unchanged.
@@ -32,6 +34,11 @@ from google.adk.workflow import JoinNode, NodeTimeoutError, RetryConfig, node  #
 from pydantic import BaseModel, Field
 
 from coding_agent.config import Settings, get_settings
+from coding_agent.models import (
+    ModelRole,
+    build_gemini4_generate_config,
+    build_gemini_model,
+)
 
 __all__ = [
     "ApprovalDecision",
@@ -39,6 +46,8 @@ __all__ = [
     "CodeReviewReport",
     "Context",
     "GLOBAL_ENGINEERING_GUARDRAILS",
+    "SpecPlan",
+    "build_agy_harness_workflow",
     "build_collaborative_coding_team",
     "build_dynamic_coding_workflow",
     "build_global_instruction_plugin",
@@ -88,15 +97,43 @@ class CodeReviewReport(BaseModel):
     )
 
 
-def _build_gemini_model(settings: Settings) -> Any:
-    """Build a regional-safe versioned Gemini model with HTTP retries."""
-    from google.adk.models import Gemini
-    from google.genai import types
+class SpecPlan(BaseModel):
+    """Structured implementation specification emitted by ``spec_planner`` (``gemini-4-neon``)."""
 
-    return Gemini(
-        model=settings.model_name,
-        retry_options=types.HttpRetryOptions(initial_delay=1, attempts=2),
+    summary: str = Field(description="Concise engineering plan for the requested change.")
+    target_files: list[str] = Field(
+        default_factory=list,
+        description="Concrete workspace file paths to inspect, modify, or create.",
     )
+    acceptance_criteria: list[str] = Field(
+        default_factory=list,
+        description="Verifiable functional, lint, and unit-test acceptance criteria.",
+    )
+    implementation_prompt: str = Field(
+        description="Actionable implementation brief passed to the coding harness.",
+    )
+
+
+def _build_gemini_model(settings: Settings, *, role: ModelRole = "coding") -> Any:
+    """Build a Gemini 4 ADK model routed to ``settings.model_location`` with HTTP retries."""
+    return build_gemini_model(settings, role=role)
+
+
+def _build_generate_config(settings: Settings) -> Any:
+    """Build Gemini 4 ``GenerateContentConfig`` using ``ThinkingConfig(thinking_level=...)``."""
+    return build_gemini4_generate_config(settings)
+
+
+def _extract_sandbox_environment(tools: Sequence[Any]) -> Any | None:
+    """Return an attached remote ``AgentPlatformSandboxEnvironment`` from ``tools``, if present."""
+    for tool in tools:
+        env = getattr(tool, "_environment", None) or getattr(tool, "environment", None)
+        if env is not None and (
+            hasattr(env, "execute_with_env")
+            or type(env).__name__ == "AgentPlatformSandboxEnvironment"
+        ):
+            return env
+    return None
 
 
 def _attach_optional_callbacks(
@@ -463,6 +500,38 @@ def build_dynamic_coding_workflow(
     raise NotImplementedError(
         "Complete TODO(lab-1) in starter/coding_agent/architectures.py: "
         "build_dynamic_coding_workflow()."
+    )
+
+
+def build_agy_harness_workflow(
+    settings: Settings,
+    tools: Sequence[Any],
+    callbacks: Mapping[str, Any] | None = None,
+    code_executor: Any | None = None,
+) -> Any:
+    """Build the 5th ADK 2.0 architecture: outer ADK workflow + Antigravity (``agy``) harness.
+
+    Target 5-stage design (``AGENT_ARCHITECTURE=agy_harness``):
+    1. ``spec_planner`` (``_build_gemini_model(settings, role="reasoning")`` -> ``gemini-4-neon``,
+       ``output_schema=SpecPlan``) produces concrete file targets & acceptance criteria.
+    2. ``run_agy_harness_node`` delegates edits to ``AgyHeadlessHarness`` (auto-selecting BYOC
+       sandbox vs local/Agent Runtime ``agy`` vs native ADK fallback, capturing ``conversation_id``).
+    3. Independent deterministic ``run_pytest_node`` + ``run_ruff_node`` via
+       ``asyncio.gather(..., use_sub_branch=True)``.
+    4. Bounded fix loop (``settings.max_fix_rounds``) feeding failures back via
+       ``--conversation <conversation_id>`` (with exit-code-3 retry/fallback,
+       fail-fast on non-zero exit codes 1/2 without re-invoking ``agy``, and
+       surfacing any non-zero harness exit code in ``findings`` so the report
+       never claims ``PASSED`` on harness failure).
+    5. Independent ``code_reviewer`` (``gemini-4-neon``, ``output_schema=CodeReviewReport``)
+       + optional ``RequestInput`` HITL approval gate + single terminal ``Event``.
+    """
+    del settings, tools, callbacks, code_executor
+    # TODO(lab-1): Implement the 5-stage Antigravity (`agy`) headless coding harness
+    # workflow described above. Compare against `solution/coding_agent/architectures.py`.
+    raise NotImplementedError(
+        "Complete TODO(lab-1) in starter/coding_agent/architectures.py: "
+        "build_agy_harness_workflow()."
     )
 
 

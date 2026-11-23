@@ -1,7 +1,7 @@
 # Maintenance & Upstream Documentation Provenance
 
 - **Skill Name:** `agent-platform-sandbox-byoc`
-- **Last Verified Date:** `2026-11-19`
+- **Last Verified Date:** `2026-11-23`
 - **Primary Seed URL:** `https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/sandbox`
 
 ---

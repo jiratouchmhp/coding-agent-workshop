@@ -27,12 +27,13 @@ Production playbook for the **Scale pillar** of Google Cloud's **Gemini Enterpri
 Standardize new Python code on **`agentplatform.Client`** (`google-cloud-agentplatform>=2.0.1`) paired with **`google-adk[gcp]`** (ADK `>=2.1` for OTel `user.id`; `>=2.6.0` for GenAI metrics).
 
 ```bash
-pip install --upgrade "google-adk[gcp]" "google-cloud-agentplatform>=2.0.1"
+pip install --upgrade "google-adk[gcp]" "google-genai>=2.34.0" "google-cloud-agentplatform>=2.0.1"
 export GOOGLE_GENAI_USE_ENTERPRISE="TRUE"   # Required for Feedback Service & enterprise ADK
 export GOOGLE_CLOUD_PROJECT="PROJECT_ID"
 export PRIMARY_REGION="asia-southeast3"        # Bangkok default (AR, Cloud Build, Secret Manager, Agent Registry A2A/MCP)
-export GOOGLE_CLOUD_LOCATION="asia-southeast1" # Singapore fallback only for Agent Platform / Gemini services not yet in Bangkok
-export AR_LOCATION="${PRIMARY_REGION}"         # Single Bangkok AR (verified with both SG Agent Runtime & SG BYOC Sandboxes; no 2nd AR repo needed)
+export GOOGLE_CLOUD_LOCATION="asia-southeast1" # Singapore fallback only for Agent Platform services not yet in Bangkok
+export MODEL_LOCATION="global"                 # Frontier Gemini 4 Hydrogen/Neon (or asia-southeast1 with gemini-4-argon)
+export AR_LOCATION="${PRIMARY_REGION}"         # Single Bangkok AR (verified with both SG Agent Runtime & SG BYOC Sandboxes)
 export BUILD_LOCATION="${PRIMARY_REGION}"      # Bangkok remote Cloud Build (zero local Docker)
 ```
 
@@ -111,6 +112,10 @@ resource "google_vertex_ai_reasoning_engine" "agent" {
       env { name = "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY"; value = "true" }
       env { name = "OTEL_SEMCONV_STABILITY_OPT_IN"; value = "gen_ai_latest_experimental" }
       env { name = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"; value = "EVENT_ONLY" }
+      env { name = "MODEL_NAME"; value = var.model_name }          # Default "gemini-4-hydrogen" (reasoning: gemini-4-neon)
+      env { name = "MODEL_LOCATION"; value = var.model_location }  # Default "global" (decoupled from SG Runtime!)
+      env { name = "THINKING_LEVEL"; value = var.thinking_level }  # Strictly LOW|MEDIUM|HIGH|XHIGH
+      env { name = "AGY_ADC_AUTH"; value = "true" }                # Uses Custom SA ADC for /usr/local/bin/agy (never personal OAuth!)
       secret_env {
         name = "API_KEY"
         secret_ref { secret = google_secret_manager_secret.api_key.secret_id; version = "latest" }
@@ -152,25 +157,25 @@ client.runtimes.delete(name=engine, force=True)  # Full revision CRUD/split exam
 ### 3. ADK Managed Sessions + Memory Bank
 
 ```python
-from google import adk
+import inspect
+from google import adk, genai
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.memory import VertexAiMemoryBankService
+from google.adk.models import Gemini
 from google.adk.sessions import VertexAiSessionService
 from google.adk.tools.preload_memory_tool import PreloadMemoryTool
 
 async def save_turn_to_memory(callback_context: CallbackContext) -> None:
     await callback_context.add_events_to_memory(events=callback_context.session.events[-5:])
 
+auth_key = "enterprise" if "enterprise" in inspect.signature(genai.Client.__init__).parameters else "vertexai"
 agent = adk.Agent(
-    model="gemini-2.5-flash",
-    name="coding_agent",
-    instruction="Use recalled user preferences safely.",
-    tools=[PreloadMemoryTool()],
-    after_agent_callback=save_turn_to_memory,
+    model=Gemini(model="gemini-4-hydrogen", client_kwargs={auth_key: True, "project": "PROJECT_ID", "location": "global"}),
+    name="coding_agent", instruction="Use recalled user preferences safely.",
+    tools=[PreloadMemoryTool()], after_agent_callback=save_turn_to_memory,
 )
 runner = adk.Runner(
-    agent=agent,
-    app_name="coding_agent",
+    agent=agent, app_name="coding_agent",
     session_service=VertexAiSessionService(project="PROJECT_ID", location="asia-southeast1", agent_engine_id="ENGINE_ID"),
     memory_service=VertexAiMemoryBankService(project="PROJECT_ID", location="asia-southeast1", agent_engine_id="MEMORY_BANK_ID"),
 )
@@ -217,10 +222,10 @@ Read ONLY the reference file(s) matching the active subtask:
 | [references/sessions-and-memory-bank.md](references/sessions-and-memory-bank.md) | Managed Sessions (`VertexAiSessionService`, `client.sessions`, `v1beta1` REST, TTL, IAM Conditions) & Memory Bank (setup, models, `VertexAiMemoryBankService`, `generate`/`ingest_events`, similarity & scope retrieval, structured profiles, revisions/rollback/purge, prompt-injection defense, data residency, CMEK/VPC-SC) |
 | [references/feedback-service.md](references/feedback-service.md) | Feedback Service (Preview) CRUDL + `FeedbackContext`, Python SDK & `v1beta1` REST, standard labels, `event_id` -> OTel `gcp.vertex.agent.event_id` linking, Console UI workflow, immutable `gcp.vertex.agent.feedback` Cloud Trace span schema |
 | [references/runtime-telemetry.md](references/runtime-telemetry.md) | OTel tracing env vars & May 22 2026 `user.id` cutoff, Cloud Logging (`reasoning_engine_stdout`, Python logging, `log_struct`, Log Analytics SQL), Cloud Monitoring built-in/GenAI metrics, PromQL queries, log-based vs `generic_node` custom metrics, dashboards & alerts |
-| [references/maintenance.md](references/maintenance.md) | Canonical upstream URLs, `.md.txt`/`.md` refresh endpoints, verification date (`2026-11-19`), upstream doc-bug watchlist & section-by-section update checklist |
+| [references/maintenance.md](references/maintenance.md) | Canonical upstream URLs, `.md.txt`/`.md` refresh endpoints, verification date (`2026-11-23`), upstream doc-bug watchlist & section-by-section update checklist |
 
 ---
 
 ## Maintenance
 
-Last verified against Google Cloud Agent Platform & ADK upstream docs on **`2026-11-19`**. Before updating provider versions, quotas, SDK namespaces, or doc-bug workarounds, run the refresh checklist in [references/maintenance.md](references/maintenance.md).
+Last verified against Google Cloud Agent Platform & ADK upstream docs on **`2026-11-23`**. Before updating provider versions, quotas, SDK namespaces, or doc-bug workarounds, run the refresh checklist in [references/maintenance.md](references/maintenance.md).

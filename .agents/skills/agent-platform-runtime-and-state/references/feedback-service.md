@@ -49,7 +49,7 @@ create_op = client.feedback_entries.create(
         "feedback_labels": ["accurate", "tool_success"],
         "user_id": "user-123",
         "source": "Chat UI",
-        "custom_metadata": {"model_temperature": "0.2", "revision": "rev-42"},
+        "custom_metadata": {"model_name": "gemini-4-hydrogen", "thinking_level": "MEDIUM", "revision": "rev-42"},
     },
 )
 entry_name = create_op.response.name  # .../feedbackEntries/FEEDBACK_ENTRY_ID

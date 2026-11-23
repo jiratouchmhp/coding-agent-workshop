@@ -2,7 +2,7 @@
 
 Source-verified reference covering ADK 2.0+ Simple Agents, `ManagedAgent`, Service Registration, Collaborative Agent Teams, Deterministic & Dynamic Routing, and Multi-Agent Workflow Patterns (`adk.dev/agents/*`, `adk.dev/workflows/*`, `adk.dev/graphs/*`, and `adk.dev/2.0/`).
 
-> **Model ID Note:** Upstream `adk.dev` snippets often use `"gemini-flash-latest"`, which can return `404` on regional Agent Platform endpoints (such as `asia-southeast1`). The Python examples below use explicit versioned IDs (e.g., `"gemini-2.5-flash"`) for regional compatibility.
+> **Frontier Gemini 4 Model Note (Replacing Retired `gemini-2.5-flash` — Oct 20, 2026):** Default to **`gemini-4-hydrogen`** (fast coding/tool-calling) and **`gemini-4-neon`** (planning, architecture & review) routed via `Gemini(model=..., client_kwargs={auth_key: True, "project": ..., "location": "global"})` (`MODEL_LOCATION=global`, `google-genai>=2.34.0`), or use **`gemini-4-argon`** (`location="asia-southeast1"`) for strict Singapore regional residency. Short string model IDs in snippets below assume `GOOGLE_CLOUD_LOCATION=global` or wrapping with `build_gemini_model(...)`.
 
 ---
 
@@ -85,7 +85,7 @@ managed_code_agent = ManagedAgent(
 # 3. Recommended composition: add with mode="single_turn" to sub_agents
 coordinator = LlmAgent(
     name="research_coordinator",
-    model="gemini-2.5-flash",
+    model="gemini-4-hydrogen",
     instruction="Use managed_search_agent and managed_code_execution_agent as needed.",
     sub_agents=[managed_search_agent, managed_code_agent],
 )
@@ -179,6 +179,7 @@ registry.register_memory_service("mymemory", my_memory_factory)
 | **Graph-based workflows** | Python/TS/Go `v2.0.0+` (Kotlin `v1.5.0` Exp.) | Declarative `Workflow(edges=[...])` | Deterministic pipelines, conditional branches, fan-out/`JoinNode`, retries, HITL |
 | **Dynamic workflows** | Python/TS/Go `v2.0.0+` | `@node(rerun_on_resume=True)` + `ctx.run_node` | Bounded edit-test-fix loops, runtime-sized parallel fan-out, complex conditionals |
 | **Collaborative workflows** | Python/Go `v2.0.0+` | Coordinator `LlmAgent` + subagent `mode` | Open-ended tasks where an LLM coordinator delegates dynamically to specialists |
+| **`agy` Headless CLI Harness (`agy_harness`)** | ADK 2.0 + `agy` CLI | Outer ADK `Workflow` + Inner `AgyHeadlessHarness` (`auto\|local\|sandbox`) + independent `pytest`/`ruff` gates | Production coding harness with `--conversation` multi-round continuity, 4-tier exit codes (`0/1/2/3`), and `gemini-4-neon` review |
 
 ### Collaborative Agent Teams (`mode` + Auto-Injected Delegation Tools)
 
@@ -199,7 +200,7 @@ class FlightResult(BaseModel):
 
 weather_agent = Agent(
     name="weather_checker",
-    model="gemini-2.5-flash",
+    model="gemini-4-hydrogen",
     mode="single_turn",          # No user interaction; can run in parallel; auto-returns result
     description="Checks weather for a destination.",
     tools=[get_weather],
@@ -207,7 +208,7 @@ weather_agent = Agent(
 
 flight_agent = Agent(
     name="flight_booker",
-    model="gemini-2.5-flash",
+    model="gemini-4-hydrogen",
     mode="task",                 # May ask user clarifying questions; auto-returns via finish_task
     description="Searches and books flights.",
     input_schema=FlightInput,
@@ -217,7 +218,7 @@ flight_agent = Agent(
 
 root_agent = Agent(
     name="travel_planner",       # NEVER set `mode` on the root agent!
-    model="gemini-2.5-flash",
+    model="gemini-4-hydrogen",
     instruction="Coordinate travel planning using weather_checker and flight_booker.",
     sub_agents=[weather_agent, flight_agent],
     # Auto-injects delegation tools named `weather_checker` and `flight_booker`.
@@ -372,20 +373,20 @@ from google.adk.agents import LlmAgent
 # 1. Dynamic multi-level collaborative hierarchy (never set `mode` on root_agent!)
 web_searcher = LlmAgent(
     name="web_search",
-    model="gemini-2.5-flash",
+    model="gemini-4-hydrogen",
     mode="single_turn",  # Isolated branch; can run concurrently with sibling specialists
     description="Searches documentation and returns raw findings.",
 )
 summarizer = LlmAgent(
     name="summarizer",
-    model="gemini-2.5-flash",
+    model="gemini-4-hydrogen",
     mode="single_turn",
     description="Condenses evidence into structured bullet points.",
 )
 
 research_assistant = LlmAgent(
     name="research_assistant",
-    model="gemini-2.5-flash",
+    model="gemini-4-hydrogen",
     mode="single_turn",  # Auto-returns synthesized findings up to report_writer
     description="Coordinates web_search and summarizer for a research sub-task.",
     instruction="Gather evidence with web_search and condense it with summarizer.",
@@ -394,16 +395,16 @@ research_assistant = LlmAgent(
 
 report_writer = LlmAgent(
     name="report_writer",
-    model="gemini-2.5-flash",
+    model="gemini-4-hydrogen",
     instruction="Write the final report using research_assistant to collect evidence.",
     sub_agents=[research_assistant],
 )
 
 # 2. Deterministic sub-pipeline composition via nested Workflow (use fresh agent instances per parent)
 def build_deterministic_report_workflow() -> Workflow:
-    search_node = LlmAgent(name="search_step", model="gemini-2.5-flash", instruction="Collect source facts.")
-    summarize_node = LlmAgent(name="summarize_step", model="gemini-2.5-flash", instruction="Summarize source facts.")
-    writer_node = LlmAgent(name="write_step", model="gemini-2.5-flash", instruction="Draft final report from summary.")
+    search_node = LlmAgent(name="search_step", model="gemini-4-hydrogen", instruction="Collect source facts.")
+    summarize_node = LlmAgent(name="summarize_step", model="gemini-4-hydrogen", instruction="Summarize source facts.")
+    writer_node = LlmAgent(name="write_step", model="gemini-4-hydrogen", instruction="Draft final report from summary.")
 
     research_subworkflow = Workflow(
         name="research_subworkflow",

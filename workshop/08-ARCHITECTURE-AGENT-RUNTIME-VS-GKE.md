@@ -193,9 +193,24 @@ Open the four comparison-track files under [`starter/gke_reference/`](../starter
 4. **[`starter/gke_reference/gke_agent_example.py`](../starter/gke_reference/gke_agent_example.py)**:
    - Complete `# TODO(lab-8)` (`build_gke_code_executor`, `build_gke_coding_agent`, `run_warmpool_sdk_smoke_test`) to swap Agent Platform's `AgentEngineSandboxCodeExecutor` for ADK's **`GkeCodeExecutor`** (`pip install "google-adk[extensions]>=2.0.0"`, ADK Python 2.0+):
      ```python
+     import inspect
+     import os
+     from google import genai
      from google.adk.agents import LlmAgent
      from google.adk.code_executors import GkeCodeExecutor
+     from google.adk.models import Gemini
 
+     # Frontier Gemini 4 on global (or switch to model="gemini-4-argon", location="asia-southeast1"
+     # for strict Singapore regional inference residency; replaces retired gemini-2.5-flash)
+     auth_key = "enterprise" if "enterprise" in inspect.signature(genai.Client.__init__).parameters else "vertexai"
+     gemini4_model = Gemini(
+         model=os.environ.get("MODEL_NAME", "gemini-4-hydrogen"),
+         client_kwargs={
+             auth_key: True,
+             "project": os.environ["GOOGLE_CLOUD_PROJECT"],
+             "location": os.environ.get("MODEL_LOCATION", "global"),
+         },
+     )
      executor = GkeCodeExecutor(
          namespace="agent-sandbox-system",
          executor_type="sandbox",
@@ -204,7 +219,7 @@ Open the four comparison-track files under [`starter/gke_reference/`](../starter
      )
      gke_coding_agent = LlmAgent(
          name="gke_sandbox_coding_agent",
-         model="gemini-2.5-flash",
+         model=gemini4_model,
          instruction="Write and execute code inside the GKE gVisor sandbox.",
          code_executor=executor,
      )

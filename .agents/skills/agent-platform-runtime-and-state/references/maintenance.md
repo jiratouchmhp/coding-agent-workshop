@@ -1,6 +1,6 @@
 # Maintenance & Upstream Verification Manifest
 
-**Last Verified:** `2026-11-19`
+**Last Verified:** `2026-11-23`
 **Skill:** `agent-platform-runtime-and-state`
 **Scope:** Gemini Enterprise Agent Platform — Scale Pillar (Terraform Agent Runtime IaC, Deployed Runtime Operations & Quotas, Managed Sessions, Memory Bank, Feedback Service, and Runtime Telemetry).
 

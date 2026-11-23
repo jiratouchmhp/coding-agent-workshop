@@ -87,6 +87,8 @@ Author, provision, execute, and secure **Managed Sandboxes** (`SandboxEnvironmen
    *Why:* Automatic Cloud Logging applies only to the parent `ReasoningEngine`, Cloud Audit Logs does not log in-container child processes or WebSocket/CDP/PTY frames, and VPC-SC omits audit request/response payloads. Enable `ADMIN_READ` + `DATA_WRITE` audit logs and emit structured logs in the parent agent.
 9. **Always set `config.ttl` and respect lifecycle preconditions.**
    *Why:* Sandboxes bill while existing; `config.ttl` guarantees crash-safe auto-cleanup (max 7d BYOC, 14d Code Exec). `resume()` fails with `FAILED_PRECONDITION` unless state is `STATE_PAUSED`; snapshots are unsupported on Code Execution and fail to restore across CPU arch, runtime version, `image_uri`, or `owner` mismatches; CMEK requires a **single-region** KMS key set **immutably** at parent `ReasoningEngine` creation.
+10. **Bake `/usr/local/bin/agy` opt-in (`ARG INSTALL_AGY_CLI=true`), probe `/health` `agy_cli_available`, and restrict `/exec` `env` to `ALLOWED_EXEC_ENV_KEYS` — NEVER persist credentials or proxy personal OAuth.**
+    *Why:* Air-gapped sandboxes (`internet_access: False`) have zero IAM roles and block `169.254.169.254`. Prefer running `agy` in Agent Runtime (`AGY_ADC_AUTH=true`) with air-gapped sandboxes for `pytest`/`ruff`, or enable PSC-I + Cloud NGFW/SWP and inject only ephemeral scoped Secret Manager keys per `/exec` call (rejecting unknown `env` keys with HTTP 400).
 
 ---
 
@@ -168,15 +170,20 @@ snap_op = client.sandboxes.snapshots.create(
 client.sandboxes.delete(name=sandbox_name)
 ```
 
-### 4. Attach Managed Code Execution to an ADK Agent (`google-adk>=2.0.0`)
+### 4. Attach Managed Code Execution to an ADK Agent (`google-adk>=2.0.0`, Gemini 4)
 
 ```python
+import inspect
+from google import genai
 from google.adk.agents.llm_agent import Agent
 from google.adk.code_executors.agent_engine_sandbox_code_executor import AgentEngineSandboxCodeExecutor
+from google.adk.models import Gemini
 
-# Use explicit versioned regional model ID (never `gemini-flash-latest` on regional endpoints like asia-southeast1)
+# Route Frontier Gemini 4 Hydrogen to global (or gemini-4-argon on asia-southeast1 for regional residency)
+auth_key = "enterprise" if "enterprise" in inspect.signature(genai.Client.__init__).parameters else "vertexai"
 root_agent = Agent(
-    model="gemini-2.5-flash", name="code_exec_agent",
+    model=Gemini(model="gemini-4-hydrogen", client_kwargs={auth_key: True, "project": "PROJECT_ID", "location": "global"}),
+    name="code_exec_agent",
     code_executor=AgentEngineSandboxCodeExecutor(agent_engine_resource_name="projects/PROJECT_ID/locations/asia-southeast1/reasoningEngines/INSTANCE_ID"),
 )  # Pre-created sandbox_resource_name, custom BaseEnvironment & CDP -> references/sandbox-execution-and-adk.md
 ```
@@ -199,4 +206,4 @@ Load only the reference file matching the current subtask:
 
 ## Maintenance
 
-Last verified against official Gemini Enterprise Agent Platform and Google ADK documentation on **2026-11-19**. See [references/maintenance.md](references/maintenance.md) for canonical refresh endpoints, upstream doc-bug tracking, and update procedures.
+Last verified against official Gemini Enterprise Agent Platform and Google ADK documentation on **2026-11-23**. See [references/maintenance.md](references/maintenance.md) for canonical refresh endpoints, upstream doc-bug tracking, and update procedures.

@@ -19,7 +19,7 @@ Google Cloud and ADK documentation span **five Python package/import namespaces*
 | **`google.adk`** (`google-adk`) | `pip install "google-adk>=2.0.0"` (core)<br>`pip install "google-adk[a2a,agent-identity,mcp]>=2.0.0"` (recommended full coding-agent set) | `from google.adk import Agent, Workflow, Event`<br>`from google.adk.agents import Agent, LlmAgent`<br>`from google.adk.agents.context import Context`<br>`from google.adk.apps import App`<br>`from google.adk.models import Gemini`<br>`from google.adk.tools import ToolContext`<br>`from google.adk.environment import BaseEnvironment, EnvironmentScope, ExecutionResult, LocalEnvironment`<br>`from google.adk.tools.environment import EnvironmentToolset`<br>`from google.adk.tools.bash_tool import ExecuteBashTool, BashToolPolicy` | Core ADK 2.0+ framework. `Agent` and `LlmAgent` are interchangeable aliases. Scaffolded `agents-cli` projects ship `google-adk[gcp,otel-gcp]`; include the `mcp` extra before using `McpToolset`. |
 | **`vertexai`** (`google-cloud-aiplatform`) | `pip install "google-cloud-aiplatform[agent_engines,adk,langchain,ag2,llama_index]>=1.154.0"` | `import vertexai`<br>`client = vertexai.Client(project="PROJECT_ID", location="LOCATION")` | Companion Reasoning Engine client (`google-cloud-aiplatform >= 1.154.0` re-exports `agentplatform`). **Known bug:** `google-cloud-aiplatform <= 1.128.0` causes `"Session not found"` after `publish gemini` registration — upgrade before deploying/publishing. |
 | **`agentplatform`** (`google-cloud-agentplatform >= 2.0.1` / `google-cloud-aiplatform >= 1.154.0`) | `pip install "google-cloud-agentplatform>=2.0.1"` (canonical)<br>or `pip install "google-cloud-aiplatform>=1.154.0"` (re-export) | `import agentplatform`<br>`from agentplatform import types`<br>`from agentplatform.frameworks import AdkApp`<br>`client = agentplatform.Client(project="PROJECT_ID", location="LOCATION")` | Canonical Gemini Enterprise Agent Platform client & `AdkApp` runtime wrapper namespace: `google-cloud-agentplatform>=2.0.1` for `AdkApp`, Runtime, Sessions, Memory Bank, Feedback Service, and Scale Sandboxes; `google-cloud-aiplatform>=1.154.0` re-exports `agentplatform` and promotes Skill Registry `skill_id` to a top-level kwarg. |
-| **`google.genai`** (`google-genai`) | Installed with `google-adk` / `google-cloud-aiplatform` | `from google import genai`<br>`from google.genai import types`<br>`client = genai.Client(vertexai=True, project="PROJECT_ID", location="global")` | `GenerateContentConfig`, `HttpOptions`, `HttpRetryOptions`, `SafetySetting`, `Part`/`Blob`, model discovery (`client.models.list()`), and Managed Agents API (`client.agents.*`). |
+| **`google.genai`** (`google-genai>=2.34.0`) | Installed with `google-adk` / `google-cloud-aiplatform` (pin `>=2.34.0` for Gemini 4!) | `from google import genai`<br>`from google.genai import types`<br>`client = genai.Client(vertexai=True, project="PROJECT_ID", location="global")` | `GenerateContentConfig`, `ThinkingConfig` (`LOW\|MEDIUM\|HIGH\|XHIGH`), `HttpOptions`, `HttpRetryOptions`, automatic `continuation_token` long decodes (up to 1M unified context+output tokens on Gemini 4), `Part`/`Blob`, model discovery (`client.models.list()`), and Managed Agents API (`client.agents.*`). |
 | **`google.cloud.*`** | e.g., `pip install google-cloud-secret-manager` | `from google.cloud import secretmanager, storage` | Direct GCP clients for Secret Manager, Cloud Storage, Cloud Monitoring (`monitoring_v3`), and Cloud Trace (`trace_v2`). |
 
 ### Verified ADK Python 2.0+ Version Milestones
@@ -61,6 +61,9 @@ Google Cloud and ADK documentation span **five Python package/import namespaces*
 ### Standard Production `LlmAgent` + `App` Pattern
 
 ```python
+import inspect
+import os
+from google import genai
 from google.adk.agents import LlmAgent  # Alias: from google.adk.agents import Agent
 from google.adk.apps import App, ResumabilityConfig
 from google.adk.agents.context_cache_config import ContextCacheConfig
@@ -69,13 +72,22 @@ from google.adk.apps.llm_event_summarizer import LlmEventSummarizer
 from google.adk.models import Gemini
 from google.genai import types
 
+# Source-verified ADK 2.0 Gemini 4 model factory (preserves @PerLoopCachedProperty on api_client!)
+# Decouples MODEL_LOCATION="global" (gemini-4-hydrogen / gemini-4-neon) from GOOGLE_CLOUD_LOCATION="asia-southeast1".
+# For strict Singapore regional residency, set MODEL_NAME="gemini-4-argon" + MODEL_LOCATION="asia-southeast1".
+auth_key = "enterprise" if "enterprise" in inspect.signature(genai.Client.__init__).parameters else "vertexai"
+gemini4_client_kwargs = {
+    auth_key: True,
+    "project": os.environ["GOOGLE_CLOUD_PROJECT"],
+    "location": os.environ.get("MODEL_LOCATION", "global"),
+}
+
 root_agent = LlmAgent(
     name="coding_agent",
     model=Gemini(
-        model="gemini-2.5-flash",  # Explicit versioned ID for regional endpoints!
-        retry_options=types.HttpRetryOptions(initial_delay=1, attempts=2),
-        # Optional: override GOOGLE_CLOUD_LOCATION for this agent only:
-        # client_kwargs={"location": "global"},
+        model=os.environ.get("MODEL_NAME", "gemini-4-hydrogen"),  # Reasoning/review: "gemini-4-neon"
+        client_kwargs=gemini4_client_kwargs,
+        retry_options=types.HttpRetryOptions(initial_delay=1, attempts=3),
     ),
     description="Autonomous coding assistant that inspects, edits, and tests code.",
     instruction="""You are a coding agent. Current repo: {repo_name}.
@@ -83,8 +95,9 @@ Inspect files before editing and verify changes with tests.""",
     tools=[...],
     sub_agents=[],
     generate_content_config=types.GenerateContentConfig(
-        temperature=0.2,
-        max_output_tokens=4096,
+        # Gemini 4 thinking_level accepts strictly LOW | MEDIUM | HIGH | XHIGH (MINIMAL or thinking_budget -> HTTP 400!)
+        # Custom temperature / top_p / top_k are ignored on Gemini 4; durable implicit caching is automatic.
+        thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
     ),
     before_agent_callback=init_state,  # Populate {repo_name} before turn 1
     output_key="last_response",        # Optional: saves final text/dict into session state
@@ -104,13 +117,19 @@ app = App(
     events_compaction_config=EventsCompactionConfig(
         token_threshold=32000,   # Token-based compaction handles large tool outputs reliably
         event_retention_size=5,
-        summarizer=LlmEventSummarizer(llm=Gemini(model="gemini-2.5-flash")),
+        summarizer=LlmEventSummarizer(
+            llm=Gemini(model="gemini-4-hydrogen", client_kwargs=gemini4_client_kwargs)
+        ),
     ),
 )
 ```
 
 ### Critical Model & Configuration Rules
-1. **Regional Endpoints vs. `gemini-flash-latest`:** The alias `gemini-flash-latest` may fail with 404 on regional Agent Platform endpoints (such as `asia-southeast1`). Always pass an explicit versioned Gemini model ID (verify available models in your `GOOGLE_CLOUD_LOCATION` via `genai.Client(vertexai=True, location=...).models.list()`).
+1. **Frontier Gemini 4 Routing (`MODEL_LOCATION=global`) vs. Regional Residency (Replacing Retired `gemini-2.5-flash` — Oct 20, 2026):**
+   - Default fast coding/tool-calling model: **`gemini-4-hydrogen`**; deep reasoning/architecture/review model: **`gemini-4-neon`**. Both are empirically verified **HTTP 200 on `global`**, HTTP 404 on `asia-southeast1`, and HTTP 501 on `asia-southeast3`.
+   - Strict regional residency alternative: **`gemini-4-argon`** (`MODEL_LOCATION=asia-southeast1`, empirically verified HTTP 200 on both `asia-southeast1` and `global`).
+   - Always pass `client_kwargs={auth_key: True, "project": ..., "location": ...}` on `Gemini(...)` (never override the `api_client` property, which breaks `@PerLoopCachedProperty`) and check `inspect.signature(genai.Client.__init__).parameters` to pick `enterprise` vs `vertexai` safely across `google-genai>=2.34.0` and `3.x`.
+   - **Gemini 4 Thinking & Sampling:** `THINKING_LEVEL` must be `LOW`, `MEDIUM`, `HIGH`, or `XHIGH` (passing `MINIMAL` or `thinking_budget` returns **HTTP 400**); `temperature`/`top_p`/`top_k` are ignored; **`google-genai>=2.34.0`** is required for automatic `continuation_token` long decodes (up to 1M unified context+output tokens).
 2. **`App.name` Directory Match:** `App(name=...)` **must** equal the basename of the folder holding `agent.py` (e.g., `app` for `app/`, `coding_agent` for `coding_agent/`, `my_agent` for `src/my_agent/`). Any mismatch triggers `"Session not found"` during `adk` / `agents-cli eval` execution.
 3. **`output_schema` with `tools` (Python Behavior & Reliability Best Practice):** In ADK Python, `output_schema` and `tools` **can** be combined on the same `LlmAgent` — tools stay available while the agent works, and `output_schema` applies only to the final response. Gemini models on Google Cloud (and `LiteLlm` providers supporting response schemas) accept both in a single request, whereas other models fall back to an injected `set_model_response` function tool that may behave unreliably. For cross-model reliability, prefer separating tool execution from structured formatting in a dedicated sub-agent or downstream `Workflow` node.
 4. **429 `RESOURCE_EXHAUSTED` Client Retries:** Configure `types.HttpRetryOptions(initial_delay=1, attempts=2)` either on `Gemini(retry_options=...)` (adapter object) OR via `GenerateContentConfig(http_options=types.HttpOptions(retry_options=...))` (when `model` is a string).
@@ -282,7 +301,7 @@ from google.adk.workflow import DEFAULT_ROUTE, NodeTimeoutError, RetryConfig, no
 
 planner = LlmAgent(
     name="planner",
-    model="gemini-2.5-flash",
+    model=Gemini(model="gemini-4-neon", client_kwargs=gemini4_client_kwargs),
     # `output_schema` is OPTIONAL in a Workflow: without it, an LlmAgent passes its text `str`
     # output as `node_input` to downstream FunctionNodes (add Pydantic schemas when typed I/O helps).
     instruction="Propose a concise patch plan for the requested code change.",
@@ -360,7 +379,7 @@ Follow these positive architectural invariants across all ADK Python 2.0+ agents
 | Error / Symptom | Root Cause | Exact Fix |
 |---|---|---|
 | `Session not found` in eval or runtime | `App(name=...)` does not match agent directory name, OR `google-cloud-aiplatform <= 1.128.0` after Gemini publish | Set `App(name="<folder_basename>", root_agent=root_agent)` and upgrade `google-cloud-aiplatform`. |
-| `404 Model not found` on regional endpoint (e.g., `asia-southeast1`) | Using `gemini-flash-latest` alias on a regional endpoint | Use explicit versioned ID (e.g., `gemini-2.5-flash`) verified via `genai.Client(...).models.list()`. |
+| `404 Model not found` (`asia-southeast1`) / `501` (`asia-southeast3`) / `400` on thinking config | Calling `gemini-4-hydrogen`/`gemini-4-neon` on regional endpoints, using retired `gemini-2.5-flash` (Oct 20, 2026), or passing `THINKING_LEVEL=MINIMAL` / `thinking_budget` | Pass `client_kwargs={auth_key: True, "project": ..., "location": "global"}` to `Gemini(model="gemini-4-hydrogen"\|"gemini-4-neon")` (or use `gemini-4-argon` on `asia-southeast1` for strict regional residency) and set `THINKING_LEVEL` in `LOW\|MEDIUM\|HIGH\|XHIGH`. |
 | `KeyError: 'var_name'` on first turn | `{var_name}` in `instruction` is missing from `session.state` | Initialize all template variables in `before_agent_callback` with `callback_context.state.setdefault(...)`. |
 | Unreliable tool calls or malformed JSON after adding `output_schema` | Model falls back to injected `set_model_response` tool when combining `output_schema` + `tools` (non-Gemini-on-GCP / unsupported `LiteLlm` providers) | Use Gemini on Google Cloud (supports both in one request) or separate tool execution (`LlmAgent` without `output_schema`) from structured formatting (`LlmAgent` with `output_schema` in a sub-agent or downstream `Workflow` node). |
 | `ValidationError: Input should be a valid dictionary or instance of BaseAgent` | Passed sub-agent factory function reference instead of calling it | Call factory: `sub_agents=[create_sub_agent()]`. |

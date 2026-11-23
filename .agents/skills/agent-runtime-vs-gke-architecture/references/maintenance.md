@@ -1,7 +1,7 @@
 # Maintenance & Upstream Documentation Provenance
 
 - **Skill Name:** `agent-runtime-vs-gke-architecture`
-- **Last Verified Date:** `2026-11-19`
+- **Last Verified Date:** `2026-11-23`
 - **Mandatory Primary Seed URLs (3):**
   1. `https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/sandbox`
   2. `https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/runtime/manage-deployed-agents`

@@ -28,13 +28,14 @@ Production playbook for the **Optimize pillar** of Google Cloud's **Gemini Enter
 > **Preferred SDK & Fallback Split:** On `google-cloud-agentplatform[adk,evaluation]>=2.0.1` / `google-cloud-aiplatform>=1.154.0`, prefer **`agentplatform.Client(project=..., location="global")`** (and `agentplatform.types`) for evaluation, Feedback Service harvest, Canary `trafficSplitManual` rollouts, and Emergency Stop (`runtimes.delete`) — falling back to `from vertexai import Client, types` only on older builds to avoid `vertexai.Client` `FutureWarning` deprecations.
 
 ```bash
-pip install --upgrade "google-cloud-agentplatform[adk,evaluation]>=2.0.1" "google-cloud-aiplatform[adk,evaluation]>=1.154.0" "google-adk>=2.0.0" "google-cloud-monitoring"
+pip install --upgrade "google-cloud-agentplatform[adk,evaluation]>=2.0.1" "google-cloud-aiplatform[adk,evaluation]>=1.154.0" "google-adk>=2.0.0" "google-genai>=2.34.0" "google-cloud-monitoring"
 # Optional: multimodal GCS OTel capture requires exact pinned fsspec
 pip install "opentelemetry-instrumentation-google-genai>=0.4b0" "fsspec[gcs]==2025.10.0"
 
 export GOOGLE_CLOUD_PROJECT="PROJECT_ID"
 export PRIMARY_REGION="asia-southeast3"         # Bangkok default (AR, Cloud Build, Secrets, Agent Registry A2A/MCP)
 export GOOGLE_CLOUD_LOCATION="asia-southeast1"  # Singapore fallback (Agent Runtime, Feedback & Canary rollouts — not yet in Bangkok)
+export MODEL_LOCATION="global"                  # Frontier Gemini 4 Hydrogen/Neon inference (or asia-southeast1 with gemini-4-argon)
 export EVAL_LOCATION="global"                   # APAC-ready Gen AI Eval region (14 US/EU + global) & required for generate_loss_clusters
 export SKILL_REGISTRY_LOCATION="us-central1"    # Vertex AI Skill Registry Preview (3 regions only)
 ```
@@ -49,7 +50,7 @@ export SKILL_REGISTRY_LOCATION="us-central1"    # Vertex AI Skill Registry Previ
 | Offline eval of historical traces vs. sessions, 15 supported regions, managed rubric metrics + LLM call cost + `safety_v3` polarity, Metric Registry (`LLMMetric`/`CodeExecutionMetric`), `vertexai.evals` SDK, 2-step Simulated User eval (`generate_conversation_scenarios`, `run_inference`, `eval dataset synthesize`), `agents-cli eval` schema & CI gating | [Offline & Simulated Evaluation](references/offline-and-simulated-eval.md) |
 | Continuous Online Monitors (10-min loop, sampling/cost cap, P4SA security & 30-min wait, Logs Explorer queries), Viewing Results & Automatic Loss Analysis (`generate_loss_clusters`, `eval analyze`, all 26 Loss Patterns), 7-step triage, and Quality Alerts (Console, `gcloud`, `monitoring_v3`) | [Online Eval, Clustering & Alerts](references/online-eval-and-alerts.md) |
 | Automated prompt/skill optimization (`adk optimize`, `GEPARootAgentPromptOptimizer`, `GEPARootAgentOptimizer`, `SimplePromptOptimizer`, custom `Sampler`/`AgentOptimizer`), `agents-cli eval optimize`, zero-redeploy Example Store (max 50/region), and Feedback-to-Eval-to-Canary flywheel | [Agent Optimization Flywheel](references/agent-optimization-flywheel.md) |
-| Upstream source URLs (`.md.txt` / `.md` refresh endpoints), verification date (`2026-11-19`), and section-by-section update checklist | [Maintenance Manifest](references/maintenance.md) |
+| Upstream source URLs (`.md.txt` / `.md` refresh endpoints), verification date (`2026-11-23`), and section-by-section update checklist | [Maintenance Manifest](references/maintenance.md) |
 
 ---
 
@@ -172,10 +173,10 @@ adk optimize path/to/my_agent \
 | [references/offline-and-simulated-eval.md](references/offline-and-simulated-eval.md) | Traces vs. sessions, 15 regions + data-residency fallback, complete managed rubric matrix (`safety_v3` polarity, LLM call counts, version pinning), Console & `vertexai.evals` SDK, Metric Registry CRUD, 2-step Simulated User eval, `agents-cli eval` schema/config/CI gating |
 | [references/online-eval-and-alerts.md](references/online-eval-and-alerts.md) | Online Monitor 10-min loop, `online_evaluator/*` metric descriptors, Console setup/lifecycle, P4SA security & 30-min wait, Logs Explorer queries, 3-level result analysis, `generate_loss_clusters`/`eval analyze`, all 26 Loss Patterns, 7-step triage, Quality Alerts (Console, `gcloud`, `monitoring_v3`) |
 | [references/agent-optimization-flywheel.md](references/agent-optimization-flywheel.md) | ADK optimizer comparison (`GEPARootAgentPromptOptimizer`, `GEPARootAgentOptimizer`, `SimplePromptOptimizer`), `adk optimize` CLI & programmatic API, custom `Sampler`/`AgentOptimizer`, `agents-cli eval optimize` guardrails, Example Store (max 50), Feedback-to-Eval-to-Canary flywheel |
-| [references/maintenance.md](references/maintenance.md) | All 8 canonical seed URLs, 22 verified Tier-1/deep-dive refresh endpoints (`.md.txt`/`.md`), verification date (`2026-11-19`), and section-by-section update checklist |
+| [references/maintenance.md](references/maintenance.md) | All 8 canonical seed URLs, 22 verified Tier-1/deep-dive refresh endpoints (`.md.txt`/`.md`), verification date (`2026-11-23`), and section-by-section update checklist |
 
 ---
 
 ## Maintenance
 
-Last verified `2026-11-19` against Gemini Enterprise Agent Platform Optimize docs, `vertexai._genai.evals.Evals` (`1.153.1`), `adk.dev/optimize/`, and `google/agents-cli` (`v1.15.0`). Follow [references/maintenance.md](references/maintenance.md) to refresh upstream sources and re-run `python3 scripts/validate_skills.py .agents/skills`.
+Last verified `2026-11-23` against Gemini Enterprise Agent Platform Optimize docs, `vertexai._genai.evals.Evals` (`1.153.1`), `adk.dev/optimize/`, and `google/agents-cli` (`v1.15.0`). Follow [references/maintenance.md](references/maintenance.md) to refresh upstream sources and re-run `python3 scripts/validate_skills.py .agents/skills`.

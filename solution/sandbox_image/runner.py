@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import platform
+import shutil
 import signal
 import subprocess
 import time
@@ -39,7 +40,7 @@ MAX_TIMEOUT_SECONDS = float(os.environ.get("SANDBOX_MAX_TIMEOUT", "300"))
 MAX_REQUEST_BYTES = int(os.environ.get("SANDBOX_MAX_REQUEST_BYTES", str(2 * 1024 * 1024)))
 MAX_OUTPUT_BYTES = int(os.environ.get("SANDBOX_MAX_OUTPUT_BYTES", str(1024 * 1024)))
 
-# Allowlist of safe non-credential environment variables forwarded to child shells.
+# Allowlist of safe non-credential environment variables forwarded from the runner process.
 SAFE_ENV_KEYS = (
     "PATH",
     "HOME",
@@ -54,6 +55,20 @@ SAFE_ENV_KEYS = (
     "PYTHONDONTWRITEBYTECODE",
     "PYTHONPATH",
     "NODE_ENV",
+    "AGY_CLI_DISABLE_AUTO_UPDATE",
+)
+
+# Explicit allowlist of per-exec ephemeral environment variables accepted on POST /exec.
+# Injected ONLY into that single child process environment and NEVER logged or written to disk.
+ALLOWED_EXEC_ENV_KEYS: frozenset[str] = frozenset(
+    {
+        "AGY_ADC_AUTH",
+        "AGY_CLI_DISABLE_AUTO_UPDATE",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+        "GOOGLE_CLOUD_QUOTA_PROJECT",
+        "GEMINI_API_KEY",
+    }
 )
 
 
@@ -94,15 +109,45 @@ def _truncate_text(text: str, max_bytes: int = MAX_OUTPUT_BYTES) -> str:
     return f"{truncated}\n...[runner truncated output at {max_bytes} bytes]"
 
 
-def _build_child_env() -> dict[str, str]:
+def _validate_exec_env(raw_env: Any) -> dict[str, str] | None:
+    """Validate optional per-exec ``env`` payload strictly against ``ALLOWED_EXEC_ENV_KEYS``."""
+    if raw_env is None:
+        return None
+    if not isinstance(raw_env, dict):
+        raise ValueError("Field 'env' must be a JSON object mapping string keys to string values.")
+
+    validated: dict[str, str] = {}
+    for key, value in raw_env.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise ValueError("Field 'env' keys and values must all be strings.")
+        if key not in ALLOWED_EXEC_ENV_KEYS:
+            allowed = ", ".join(sorted(ALLOWED_EXEC_ENV_KEYS))
+            raise ValueError(
+                f"Disallowed env key {key!r} in POST /exec payload. Allowed keys: {allowed}."
+            )
+        if "\x00" in key or "\x00" in value:
+            raise ValueError(f"Invalid NUL byte in env entry for key {key!r}.")
+        validated[key] = value
+    return validated
+
+
+def _build_child_env(extra_env: dict[str, str] | None = None) -> dict[str, str]:
     env = {k: os.environ[k] for k in SAFE_ENV_KEYS if k in os.environ}
     env.setdefault("HOME", f"/home/{getpass.getuser()}")
     env.setdefault("USER", getpass.getuser())
     env.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin")
+    if extra_env:
+        # Merge strictly into this single child process environment (never mutate os.environ).
+        env.update(extra_env)
     return env
 
 
-def execute_command(command: str, cwd: Path, timeout_seconds: float) -> dict[str, Any]:
+def execute_command(
+    command: str,
+    cwd: Path,
+    timeout_seconds: float,
+    extra_env: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """Run ``command`` in a fresh non-root bash process group with hard timeout cleanup."""
     start = time.monotonic()
     # Use non-login `-c` so Debian `/etc/profile` does not reset `_build_child_env()` PATH.
@@ -115,7 +160,7 @@ def execute_command(command: str, cwd: Path, timeout_seconds: float) -> dict[str
         encoding="utf-8",
         errors="replace",
         start_new_session=True,
-        env=_build_child_env(),
+        env=_build_child_env(extra_env),
     )
     try:
         stdout, stderr = proc.communicate(timeout=timeout_seconds)
@@ -174,6 +219,7 @@ class SandboxRequestHandler(BaseHTTPRequestHandler):
                     "uid": os.getuid(),
                     "workspace": str(WORKSPACE_ROOT),
                     "python": platform.python_version(),
+                    "agy_cli_available": shutil.which("agy") is not None,
                 },
             )
             return
@@ -221,11 +267,17 @@ class SandboxRequestHandler(BaseHTTPRequestHandler):
         try:
             cwd = _resolve_confined_cwd(payload.get("cwd"))
             timeout_seconds = _clamp_timeout(payload.get("timeout"))
+            extra_env = _validate_exec_env(payload.get("env"))
         except ValueError as exc:
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             return
 
-        result = execute_command(command=command, cwd=cwd, timeout_seconds=timeout_seconds)
+        result = execute_command(
+            command=command,
+            cwd=cwd,
+            timeout_seconds=timeout_seconds,
+            extra_env=extra_env,
+        )
         self._send_json(HTTPStatus.OK, result)
 
 

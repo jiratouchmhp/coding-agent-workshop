@@ -64,7 +64,7 @@ Four metric categories are supported across Console, SDK, and `agents-cli`:
    - **`safety_v1` (legacy):** **`0` = UNSAFE** and **`1` = SAFE** (checks PII/demographic, hate speech, dangerous content, harassment, sexually explicit).
    - Always verify which version is active before setting CI thresholds or Cloud Monitoring alerts!
 2. **Multi-Turn 400 Restriction:** **ONLY** the 3 `multi_turn_*` metrics (`multi_turn_task_success`, `multi_turn_tool_use_quality`, `multi_turn_trajectory_quality`) accept multi-turn agent traces; every other built-in metric rejects them with HTTP 400 (`Single-turn metric '<name>' received agent_eval_data with N turns`). Split single-turn and multi-turn cases into separate dataset + config pairs.
-3. **Version Pinning for Regional Judge Availability:** Latest metric versions require **Gemini 3.5 Flash** availability. In regions without Gemini 3.5 Flash, pin to the prior Gemini 2.5 version:
+3. **Version Pinning & `global` Recommended:** Latest metric versions require **Gemini 3.5 Flash** judge availability (use `EVAL_LOCATION=global` for guaranteed availability alongside `generate_loss_clusters`; legacy `v1` metrics backed by Gemini 2.5 should be avoided as `gemini-2.5-flash` retired Oct 20, 2026):
    ```python
    from vertexai import types
    general_v1 = types.RubricMetric.GENERAL_QUALITY(version="v1")
@@ -217,7 +217,7 @@ client = Client(
 )
 
 travel_agent = Agent(
-    model="gemini-3-flash-preview",
+    model="gemini-4-hydrogen",  # Frontier Gemini 4 on MODEL_LOCATION=global (or gemini-4-argon on asia-southeast1)
     name="travel_agent",
     instruction="You are a travel expert; help users find flights and book flights with flight ID.",
     tools=[find_flights, book_flight],
@@ -349,7 +349,7 @@ custom_metrics:
       Rate 1-5 for accuracy and helpfulness.
       Prompt: {prompt} | Response: {response} | Full trace: {agent_data}
       Return JSON: {"score": <1|2|3|4|5>, "explanation": "<reason>"}
-    judge_model: gemini-3.8-flash
+    judge_model: gemini-4-hydrogen
     judge_model_sampling_count: 3   # 1..32
 
 thresholds:
@@ -367,6 +367,6 @@ thresholds:
 | `"Session not found"` in `eval generate` or `adk optimize` | ADK `App(name=...)` does not match the containing directory name | Set `App(root_agent=root_agent, name="app")` inside `app/`. |
 | First-turn `KeyError` on `{state_key}` in instruction | Session state key uninitialized on turn 0 | Initialize defaults inside `async def init_state(callback_context: CallbackContext) -> None` passed to `before_agent_callback`. |
 | Thinking model skips expected tool calls | Thinking mode answers directly without calling tools | Set `tool_config` with `mode="ANY"` or switch to a non-thinking model. |
-| Scores fluctuate across identical runs | Non-deterministic decoding or single-sample LLM judge | Set `temperature=0` on agent and `judge_model_sampling_count: 3` on custom judge; never delete flaky cases or lower thresholds. |
+| Scores fluctuate across identical runs | Non-deterministic decoding or single-sample LLM judge | Pin an explicit `THINKING_LEVEL` on the agent and set `judge_model_sampling_count: 3` on custom judges (Gemini 4 ignores custom `temperature`/`top_p`/`top_k`; reserve `temperature=0` for legacy non-Gemini-4 models); never delete flaky cases or lower thresholds. |
 | Built-in judge ignores image/audio inputs | Default text extractor (`get_text_from_content()`) skips non-text parts | Implement a custom metric with a vision/audio-capable judge model. |
 | `400 FAILED_PRECONDITION: Unsupported region` | `--region` or client `location` outside the 15 supported eval regions (e.g., APAC `asia-southeast1` or `asia-southeast3`) | Decouple `EVAL_LOCATION=global` from `GOOGLE_CLOUD_LOCATION=asia-southeast1` (so both `evaluate()` and `generate_loss_clusters()` succeed cleanly), pass `--region global` (or a supported US/EU region), or use local `custom_function` metrics for strict in-country residency. |

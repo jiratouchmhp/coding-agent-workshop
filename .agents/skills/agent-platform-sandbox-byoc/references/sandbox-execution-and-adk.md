@@ -147,13 +147,21 @@ for chunk in response.outputs:
 Maintains **one persistent Code Execution sandbox** across all tool calls in an ADK session. Requires `roles/aiplatform.user` on the agent's service account. Agent can run locally, on Cloud Run, GKE, or Agent Runtime.
 
 ```python
+import inspect
+from google import genai
 from google.adk.agents.llm_agent import Agent
 from google.adk.code_executors.agent_engine_sandbox_code_executor import (
     AgentEngineSandboxCodeExecutor,
 )
+from google.adk.models import Gemini
 
+# Frontier Gemini 4 Hydrogen on global (or gemini-4-argon on asia-southeast1 for strict regional residency)
+auth_key = "enterprise" if "enterprise" in inspect.signature(genai.Client.__init__).parameters else "vertexai"
 root_agent = Agent(
-    model="gemini-2.5-flash",  # Explicit versioned regional model ID (avoid gemini-flash-latest on regional endpoints like asia-southeast1)
+    model=Gemini(
+        model="gemini-4-hydrogen",
+        client_kwargs={auth_key: True, "project": "PROJECT_ID", "location": "global"},
+    ),
     name="agent_engine_code_execution_agent",
     instruction=(
         "Execute Python code step-by-step in the stateful sandbox. "

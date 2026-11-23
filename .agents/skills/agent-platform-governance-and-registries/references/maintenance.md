@@ -1,6 +1,6 @@
 # Maintenance & Upstream Verification Manifest
 
-**Last Verified:** `2026-11-19`
+**Last Verified:** `2026-11-23`
 **Skill:** `agent-platform-governance-and-registries`
 **Scope:** Gemini Enterprise Agent Platform — Build & Govern Pillars (Skill Registry Packaging & CRUD, Agent Registry Registration/Standalone Skills/Scanning/Search/Bindings/Quotas, ADK Registry Consumption, SPIFFE Agent Identity, Semantic Governance Policies, Agent Gateway, IAM UAPs, Model Armor, Dry-Run Reporting, Topology & Security Findings).
 

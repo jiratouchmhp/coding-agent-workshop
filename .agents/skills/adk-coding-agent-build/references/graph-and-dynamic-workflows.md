@@ -2,7 +2,7 @@
 
 Source-verified reference covering all 6 official ADK 2.0 Graph & Dynamic Workflow guides (`adk.dev/graphs/`, `routes`, `data-handling`, `human-input`, `retry`, `dynamic`) plus ADK 2.0 compatibility notes (`adk.dev/2.0/`).
 
-> **Model ID Note:** Upstream `adk.dev` snippets often use `"gemini-flash-latest"`, which can return `404` on regional Agent Platform endpoints (such as `asia-southeast1`). The Python examples below use explicit versioned IDs (e.g., `"gemini-2.5-flash"`).
+> **Frontier Gemini 4 Model Note (Replacing Retired `gemini-2.5-flash` — Oct 20, 2026):** Default to **`gemini-4-hydrogen`** (fast coding/tool-calling) and **`gemini-4-neon`** (planning/review) routed via `Gemini(model=..., client_kwargs={auth_key: True, "project": ..., "location": "global"})` (`MODEL_LOCATION=global`, `google-genai>=2.34.0`), or use **`gemini-4-argon`** (`location="asia-southeast1"`) for strict Singapore regional residency. Short string model IDs below assume `GOOGLE_CLOUD_LOCATION=global` or wrapping with `build_gemini_model(...)`.
 
 ---
 
@@ -20,7 +20,7 @@ from google.adk import Agent, Event, Workflow
 
 city_generator = Agent(
     name="city_generator",
-    model="gemini-2.5-flash",
+    model="gemini-4-hydrogen",
     instruction="Return the name of a random city. Return only the name.",
 )
 
@@ -34,7 +34,7 @@ def lookup_time(node_input: str) -> CityTime:
 
 city_reporter = Agent(
     name="city_reporter",
-    model="gemini-2.5-flash",
+    model="gemini-4-hydrogen",
     input_schema=CityTime,
     instruction="You receive a CityTime with time_info and city fields. Reply with one sentence stating the time in that city.",
 )
@@ -82,7 +82,7 @@ from google.adk.workflow import DEFAULT_ROUTE  # Fallback route sentinel
 
 classifier = Agent(
     name="classify_issue",
-    model="gemini-2.5-flash",
+    model="gemini-4-hydrogen",
     instruction='Classify into comma-separated labels from "BUG", "DOCS", "TESTS". Labels only.',
 )
 
@@ -236,7 +236,7 @@ def build_request(node_input: str):
 
 analyzer = Agent(
     name="patch_analyzer",
-    model="gemini-2.5-flash",
+    model="gemini-4-hydrogen",
     input_schema=PatchRequest,
     output_schema=PatchSummary,
     # Python `{key}` reads SESSION STATE (not node_input!).
@@ -328,7 +328,7 @@ def deploy_release(env: str, tool_context: ToolContext) -> str:
 
 root_agent = Agent(
     name="release_agent",
-    model="gemini-2.5-flash",
+    model="gemini-4-hydrogen",
     tools=[
         FunctionTool(delete_branch, require_confirmation=True),  # Static yes/no auto-gate
         deploy_release,                                           # Custom hint + explicit check
@@ -408,8 +408,8 @@ from google.adk.agents import LlmAgent
 from google.adk.workflow import node
 
 MAX_FIX_ROUNDS = 4
-coder_agent = LlmAgent(name="generator_agent", model="gemini-2.5-flash", instruction="Write Python code for the user request.")
-fixer_agent = LlmAgent(name="fixer_agent", model="gemini-2.5-flash", instruction="Refactor current code {code} to fix these review findings: {findings}")
+coder_agent = LlmAgent(name="generator_agent", model="gemini-4-hydrogen", instruction="Write Python code for the user request.")
+fixer_agent = LlmAgent(name="fixer_agent", model="gemini-4-hydrogen", instruction="Refactor current code {code} to fix these review findings: {findings}")
 
 @node(name="lint_reviewer")
 async def compile_lint_check(ctx: Context, node_input: str) -> dict:

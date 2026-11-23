@@ -301,7 +301,7 @@ def build_adk_sampler_and_optimizer(
     optimizer_choice: OptimizerChoice = "simple",
     iterations: int = 2,
     batch_size: int = 4,
-    optimizer_model: str = "gemini-2.5-flash",
+    optimizer_model: str = "gemini-4-hydrogen",
 ) -> tuple[Any, Any]:
     """Instantiate ADK ``LocalEvalSampler`` and the selected ``google.adk.optimization`` optimizer."""
     # Pre-filled boilerplate helper
@@ -391,7 +391,7 @@ async def run_prompt_optimization(
     optimizer_choice: OptimizerChoice = "simple",
     iterations: int = 2,
     batch_size: int = 4,
-    optimizer_model: str = "gemini-2.5-flash",
+    optimizer_model: str = "gemini-4-hydrogen",
     skill_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Run non-mutating ADK prompt (and optional skill) optimization and return best candidate."""
@@ -549,7 +549,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--optimizer", choices=["simple", "gepa", "gepa-skills"], default="simple")
     parser.add_argument("--iterations", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--optimizer-model", default="gemini-2.5-flash")
+    parser.add_argument("--optimizer-model", default=None)
     parser.add_argument("--sampler-config", type=Path, default=Path("eval/sampler_config.json"))
     parser.add_argument("--output", type=Path, default=Path("artifacts/optimized_instruction.txt"))
     parser.add_argument("--skill-dir", type=Path, default=Path("skills_to_register/secure-code-review"))
@@ -568,7 +568,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
     settings = get_settings()
 
-    if settings.agent_architecture in {"graph", "dynamic"}:
+    if settings.agent_architecture in {"graph", "dynamic", "agy_harness"}:
         logger.warning(
             "AGENT_ARCHITECTURE=%r exposes an ADK 2.0 Workflow root_agent with no top-level "
             "`.instruction`. Switch to AGENT_ARCHITECTURE=simple (or target an inner LlmAgent "
@@ -656,6 +656,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
+    resolved_optimizer_model = args.optimizer_model or settings.model_name
     opt_result = asyncio.run(
         run_prompt_optimization(
             sampler_config_path=sampler_path,
@@ -663,7 +664,7 @@ def main(argv: list[str] | None = None) -> int:
             optimizer_choice=args.optimizer,
             iterations=args.iterations,
             batch_size=args.batch_size,
-            optimizer_model=args.optimizer_model,
+            optimizer_model=resolved_optimizer_model,
             skill_dir=skill_dir if (skill_dir / "SKILL.md").is_file() else None,
         )
     )

@@ -45,8 +45,16 @@ client = agentplatform.Client(project="PROJECT_ID", location="asia-southeast1")
 parent = client.runtimes.create(config={"display_name": "Workshop Session Store"})
 agent_engine_id = parent.api_resource.name.split("/")[-1]
 
-# 2. Wire ADK Runner to VertexAiSessionService
-root_agent = adk.Agent(model="gemini-2.5-flash", name="coding_agent", instruction="Help with code.")
+# 2. Wire ADK Runner to VertexAiSessionService (Frontier Gemini 4 routed via client_kwargs to global)
+import inspect
+from google import genai
+from google.adk.models import Gemini
+auth_key = "enterprise" if "enterprise" in inspect.signature(genai.Client.__init__).parameters else "vertexai"
+root_agent = adk.Agent(
+    model=Gemini(model="gemini-4-hydrogen", client_kwargs={auth_key: True, "project": "PROJECT_ID", "location": "global"}),
+    name="coding_agent",
+    instruction="Help with code.",
+)
 session_service = VertexAiSessionService(project="PROJECT_ID", location="asia-southeast1", agent_engine_id=agent_engine_id)
 runner = Runner(agent=root_agent, app_name="coding_agent", session_service=session_service)
 
@@ -145,7 +153,7 @@ client.sessions.delete(name=session_name)
 ### Regions, Default Models & Immutability
 
 - **Unsupported regions:** `asia-southeast2`, `australia-southeast2`, `northamerica-northeast2`. Multi-regional (`us`, `eu`) and `global` are supported.
-- **Generation LLM:** Defaults to **`gemini-3.5-flash`** effective **June 29, 2026** (earlier instances use `gemini-2.5-flash`). Routing: `us`/`us-*` -> `us`, `eu`/`eu-*` -> `eu`, others -> `global`.
+- **Generation LLM:** Defaults to **`gemini-3.5-flash`** effective **June 29, 2026** (earlier pre-June 2026 instances used `gemini-2.5-flash`, retired Oct 20, 2026). Routing: `us`/`us-*` -> `us`, `eu`/`eu-*` -> `eu`, others -> `global`.
 - **Embedding Model:** Defaults to **`text-embedding-005`** (multilingual alternatives: `gemini-embedding-2`, `gemini-embedding-001`, `text-multilingual-embedding-002`).
   - **CRITICAL TRAP 1:** `gemini-embedding-2` ONLY accepts `global`, `us`, or `eu` in its model resource name—NOT regional locations like `asia-southeast1` or `us-central1`.
   - **CRITICAL TRAP 2:** The embedding model can **only be changed before the first memory is stored**.

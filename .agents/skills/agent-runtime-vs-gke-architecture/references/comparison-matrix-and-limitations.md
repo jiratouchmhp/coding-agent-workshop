@@ -131,7 +131,7 @@ Regional service availability can be a **decisive architectural trigger** indepe
 |---|---|---|---|
 | **GKE & Self-Hosted GKE Agent Sandbox** | **Available today** (`GKE_LOCATION=asia-southeast3`) | Available | — |
 | **Artifact Registry, Cloud Build, Secret Manager & Agent Registry (A2A/MCP)** | **Available today** (`AR_LOCATION`, `BUILD_LOCATION`, `AGENT_REGISTRY_LOCATION=asia-southeast3`) | Available | `AGENT_REGISTRY_SKILLS_LOCATION=global` *(standalone skills via `gcloud alpha`)* |
-| **Agent Runtime, Managed Sandboxes (Shell/BYOC/Code Exec), Managed Sessions, Memory Bank, Agent Gateway & Gemini 2.5 Flash** | **Not yet launched** | **Officially live** (`GOOGLE_CLOUD_LOCATION=asia-southeast1`, zero regional feature restrictions) | — |
+| **Agent Runtime, Managed Sandboxes (Shell/BYOC/Code Exec), Managed Sessions, Memory Bank & Agent Gateway** | **Not yet launched** | **Officially live** (`GOOGLE_CLOUD_LOCATION=asia-southeast1`, zero regional feature restrictions; optional regional **`gemini-4-argon`**) | `MODEL_LOCATION=global` *(Frontier **`gemini-4-hydrogen`** & **`gemini-4-neon`**; replaces retired `gemini-2.5-flash` Oct 20, 2026)* |
 | **Vertex AI Skill Registry (Preview)** | Not available | Not available | `SKILL_REGISTRY_LOCATION=us-central1` *(3 regions only: `us-central1`, `europe-west4`, `us-east5`)* |
 | **Gen AI Evaluation Service** | Not available | Not available | `EVAL_LOCATION=global` *(14 US/EU regions + `global`; `generate_loss_clusters` is `global`-only)* |
 

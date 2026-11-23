@@ -19,6 +19,7 @@ Code inside a Scale Sandbox runs inside a **gVisor-isolated container** in a Goo
 - **No ADC & No Metadata Server:** Sandboxed processes have no Application Default Credentials and **cannot** reach `169.254.169.254:80` to mint OAuth 2.0 tokens, read service account keys, or inspect project metadata.
 - **No `sudo` / No Root:** Unprivileged Linux user inside gVisor kernel containment.
 - **Outbound Auth Best Practice:** Execute authenticated Google Cloud API operations in the trusted parent agent on Agent Runtime and pass only the required input data into the sandbox. If code inside the sandbox must call an external API directly, inject **short-lived, narrowly scoped tokens** per execution — never long-lived SA keys.
+- **Zero-Ambient-Credential Boundary for `agy` Headless CLI:** Never proxy or relay a developer's personal `agy` OAuth credentials inside a shared runtime or sandbox. Prefer running `/usr/local/bin/agy` in the trusted Agent Runtime (`AGY_ADC_AUTH=true` on Custom SA `coding-agent-runtime-sa`) while keeping the gVisor BYOC Sandbox air-gapped (`internet_access: False`) for `pytest`/`ruff`/`bandit`. If running `agy` inside a BYOC sandbox (`AGY_EXECUTION_MODE=sandbox`), attach PSC-I + Cloud NGFW/SWP allowlisting Gemini/Vertex endpoints and pass only scoped ephemeral credentials/API keys per `/exec` call via `runner.py`'s strict `ALLOWED_EXEC_ENV_KEYS` allowlist (never written to disk or logged).
 
 ---
 

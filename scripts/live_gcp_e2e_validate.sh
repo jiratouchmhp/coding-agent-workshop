@@ -9,12 +9,14 @@
 # Bangkok-first fallback strategy (asia-southeast3 first; falling back to
 # asia-southeast1 / global / us-central1 only where GCP requires it) with
 # guaranteed cleanup on EXIT (even on mid-run failure):
+#   0. Frontier Gemini 4 config (`gemini-4-hydrogen` / `gemini-4-neon` on `global`,
+#      `THINKING_LEVEL=MEDIUM`) + `make test-agy-harness` (`--dry-run` NDJSON & exit codes)
 #   1. Cloud Build remote builds + Artifact Registry (Bangkok asia-southeast3 — ZERO local Docker)
-#   2. BYOC Sandbox (from Bangkok AR) + Shell Sandbox lifecycle (Singapore asia-southeast1 fallback)
+#   2. BYOC Sandbox `GET /health` (local + live BYOC from Bangkok AR) + Shell Sandbox lifecycle (Singapore asia-southeast1 fallback)
 #   3. Managed Sessions + Memory Bank + Feedback Service (Singapore asia-southeast1 fallback)
 #   4. Disposable Vertex AI Skill Registry create+update (us-central1) +
 #      Agent Registry standalone skill two-step create+describe via `gcloud alpha` (global fallback)
-#   5. Isolated Terraform apply (Singapore asia-southeast1 fallback, Bangkok AR image) + live GET / & query check
+#   5. Isolated Terraform apply (Singapore asia-southeast1 fallback, Bangkok AR image, Gemini 4 vars) + live GET / & query check
 #   6. Offline Evaluation (global) + Cloud Monitoring Quality Alert Policy
 #   7. Full Teardown + Verification that 0 dry-run resources remain
 #
@@ -352,9 +354,20 @@ export AGENT_REGISTRY_SKILLS_LOCATION="${AGENT_REG_SKILLS_LOC}"
 export GOOGLE_CLOUD_LOCATION="${AGENT_PLATFORM_LOC}"
 export SKILL_REGISTRY_LOCATION="${SKILL_REG_LOC}"
 export EVAL_LOCATION="${EVAL_LOC}"
+export MODEL_NAME="gemini-4-hydrogen"
+export REASONING_MODEL_NAME="gemini-4-neon"
+export MODEL_LOCATION="global"
+export THINKING_LEVEL="MEDIUM"
+export AGY_EXECUTION_MODE="auto"
+export AGY_ADC_AUTH="true"
+export AGY_CLI_DISABLE_AUTO_UPDATE="true"
 export GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=true
 export OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental
 export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=EVENT_ONLY
+
+# Validate Antigravity (agy) headless CLI harness locally before provisioning cloud resources
+make -C "${REPO_ROOT}" TRACK="${TRACK}" test-agy-harness
+pass "Verified Antigravity (agy) headless CLI harness (--dry-run NDJSON + 4-tier exit codes)"
 
 # Ensure Artifact Registry repository exists in AR_LOC (asia-southeast3)
 if ! gcloud artifacts repositories describe "${AR_REPO}" \
@@ -373,7 +386,7 @@ CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha services identity create \
   --service=aiplatform.googleapis.com \
   --project="${PROJECT_ID}" </dev/null >/dev/null 2>&1 || true
 
-pass "Stage 0 ready (project=${PROJECT_ID} #${PROJECT_NUMBER}, bangkok-first=${PRIMARY_REG}, agent-fallback=${AGENT_PLATFORM_LOC}, agent-reg-skills=${AGENT_REG_SKILLS_LOC}, skill=${SKILL_REG_LOC}, eval=${EVAL_LOC})"
+pass "Stage 0 ready (project=${PROJECT_ID} #${PROJECT_NUMBER}, model=${MODEL_NAME}/${REASONING_MODEL_NAME}@${MODEL_LOCATION}, thinking=${THINKING_LEVEL}, bangkok-first=${PRIMARY_REG}, agent-fallback=${AGENT_PLATFORM_LOC}, agent-reg-skills=${AGENT_REG_SKILLS_LOC}, skill=${SKILL_REG_LOC}, eval=${EVAL_LOC})"
 
 # -----------------------------------------------------------------------------
 # Stage 1: Cloud Build Remote Image Builds (asia-southeast3 — ZERO Docker)
@@ -398,6 +411,10 @@ pass "Pushed Agent Runtime image: ${AGENT_IMG_URI}"
 # Stage 2: Managed Sandboxes — Shell Sandbox + BYOC Sandbox (asia-southeast1)
 # -----------------------------------------------------------------------------
 log "Stage 2: Provisioning standalone parent instance + Shell & BYOC Sandboxes (${AGENT_PLATFORM_LOC})"
+
+# Verify BYOC runner HTTP contract locally (GET /health + agy_cli_available, /exec allowlisted/disallowed env, cwd escape)
+make -C "${REPO_ROOT}" TRACK="${TRACK}" test-sandbox-local
+pass "Verified BYOC sandbox runner GET /health (agy_cli_available) and /exec security boundaries locally"
 
 INST_JSON="$(run_track_python -m coding_agent.tools.sandbox_lifecycle \
   --project "${PROJECT_ID}" \
@@ -424,7 +441,7 @@ run_track_python -m coding_agent.tools.sandbox_lifecycle \
   demo --mode shell --ttl 900s >/dev/null
 pass "Shell Sandbox full lifecycle demo succeeded in ${AGENT_PLATFORM_LOC}"
 
-# BYOC Sandbox template + lifecycle validation
+# BYOC Sandbox template + live GET /health probe + lifecycle validation
 TPL_JSON="$(run_track_python -m coding_agent.tools.sandbox_lifecycle \
   --project "${PROJECT_ID}" \
   --location "${AGENT_PLATFORM_LOC}" \
@@ -436,6 +453,77 @@ TPL_JSON="$(run_track_python -m coding_agent.tools.sandbox_lifecycle \
 BYOC_TEMPLATE_NAME="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])' <<< "${TPL_JSON}")"
 export SANDBOX_TEMPLATE_NAME="${BYOC_TEMPLATE_NAME}"
 pass "Created BYOC SandboxEnvironmentTemplate: ${BYOC_TEMPLATE_NAME}"
+
+# Probe GET /health on a disposable live BYOC sandbox (with guaranteed finally delete)
+BYOC_HEALTH_OUT="$(run_track_python - "${PROJECT_ID}" "${AGENT_PLATFORM_LOC}" "${STANDALONE_ENGINE_NAME}" "${BYOC_TEMPLATE_NAME}" "${RUN_SUFFIX}" <<'PYEOF'
+import json
+import os
+import sys
+
+from coding_agent.tools.sandbox_execution import (
+    fetch_iam_bearer_token,
+    generate_sandbox_access_token,
+)
+from coding_agent.tools.sandbox_lifecycle import (
+    SandboxLifecycleManager,
+    get_sandboxes_namespace,
+)
+
+project_id, location, instance_name, template_name, suffix = sys.argv[1:6]
+mgr = SandboxLifecycleManager(
+    project_id=project_id,
+    location=location,
+    instance_name=instance_name,
+)
+sb = mgr.create_sandbox(
+    display_name=f"byoc-health-{suffix}",
+    template_name=template_name,
+    ttl="900s",
+    wait_for_completion=True,
+)
+try:
+    sandboxes_ns = get_sandboxes_namespace(mgr.client)
+    sandbox_env = sandboxes_ns.get(name=sb.name)
+    sa_email = os.environ.get("SANDBOX_SERVICE_ACCOUNT_EMAIL", "").strip()
+    token = (
+        generate_sandbox_access_token(mgr.client, sa_email)
+        if sa_email
+        else fetch_iam_bearer_token()
+    )
+    try:
+        resp = sandboxes_ns.send_command(
+            http_method="GET",
+            path="health",
+            access_token=token,
+            request_dict=None,
+            sandbox_environment=sandbox_env,
+        )
+    except Exception as exc:
+        msg = str(exc).upper()
+        if not sa_email and any(tok in msg for tok in ("401", "403", "UNAUTHENTICATED", "PERMISSION_DENIED")):
+            print(json.dumps({"skipped_reason": str(exc)}))
+            sys.exit(0)
+        raise
+    raw_body = getattr(resp, "body", resp)
+    if isinstance(raw_body, bytes):
+        raw_body = raw_body.decode("utf-8", errors="replace")
+    health = json.loads(raw_body) if isinstance(raw_body, str) else raw_body
+    assert isinstance(health, dict) and health.get("status") == "ok", (
+        f"Unexpected live BYOC GET /health payload: {health!r}"
+    )
+    assert isinstance(health.get("agy_cli_available"), bool), (
+        f"Live BYOC GET /health missing boolean 'agy_cli_available': {health!r}"
+    )
+    print(json.dumps(health))
+finally:
+    mgr.delete_sandbox(sb.name, wait_for_completion=True)
+PYEOF
+)"
+if grep -q '"skipped_reason"' <<< "${BYOC_HEALTH_OUT}"; then
+  warn "Live BYOC data-plane GET /health skipped without SANDBOX_SERVICE_ACCOUNT_EMAIL (${BYOC_HEALTH_OUT}); local GET /health + agy_cli_available already verified."
+else
+  pass "Live BYOC Sandbox GET /health verified in ${AGENT_PLATFORM_LOC} (${BYOC_HEALTH_OUT})"
+fi
 
 run_track_python -m coding_agent.tools.sandbox_lifecycle \
   --project "${PROJECT_ID}" \
@@ -589,7 +677,10 @@ agent_image_uri         = "${AGENT_IMG_URI}"
 sandbox_image_uri       = "${SANDBOX_IMG_URI}"
 sandbox_template_name   = "${BYOC_TEMPLATE_NAME}"
 sandbox_mode            = "byoc"
-model_name              = "gemini-2.5-flash"
+model_name              = "gemini-4-hydrogen"
+reasoning_model_name    = "gemini-4-neon"
+model_location          = "global"
+thinking_level          = "MEDIUM"
 api_key_value           = "e2e-dryrun-placeholder-${RUN_SUFFIX}"
 enable_memory_bank      = false
 enable_skill_registry   = false
@@ -601,6 +692,9 @@ if grep -q 'variable "agent_registry_location"' "${TF_WORK_DIR}/variables.tf"; t
 fi
 if grep -q 'variable "agent_registry_skills_location"' "${TF_WORK_DIR}/variables.tf"; then
   printf 'agent_registry_skills_location = "%s"\n' "${AGENT_REG_SKILLS_LOC}" >> "${TF_WORK_DIR}/e2e.tfvars"
+fi
+if grep -q 'variable "agy_execution_mode"' "${TF_WORK_DIR}/variables.tf"; then
+  printf 'agy_execution_mode = "auto"\n' >> "${TF_WORK_DIR}/e2e.tfvars"
 fi
 
 terraform -chdir="${TF_WORK_DIR}" init -input=false >/dev/null

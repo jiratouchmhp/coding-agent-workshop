@@ -350,6 +350,9 @@ When deployed with `identity_type = "AGENT_IDENTITY"`, your Coding Agent receive
 | **2. Agent Identity** | SPIFFE X.509 cert (24h TTL, mTLS + DPoP), OIDC ID token, 2LO / API key from Auth Manager | `AGENT_TO_ANYWHERE` egress: IAM Allow/Deny/UAP, PAB, Context-Aware Access | Agent's SPIFFE principal |
 | **3. Delegated Identity** | Scoped 3LO user token brokered by Agent Identity Auth Manager | `AGENT_TO_ANYWHERE` egress: **least-privilege intersection** of agent egress policy AND user permissions/consented scopes | **Dual attribution** (both agent SPIFFE ID and human user) |
 
+> [!CAUTION]
+> **Enterprise `agy` Headless CLI Auth & ToS Boundary:** Never proxy, copy, or relay a developer's personal `agy` OAuth session into a shared multi-tenant Agent Runtime or BYOC Sandbox. Inside Agent Runtime, run `/usr/local/bin/agy` exclusively via **`AGY_ADC_AUTH=true`** on the runtime's dedicated least-privilege Service Account (`coding-agent-runtime-sa`), OR use native ADK 2.0 `LlmAgent` / `ManagedAgent` / `google-antigravity` SDK with SPIFFE `AGENT_IDENTITY` + Auth Manager 3LO delegation. Inside gVisor Sandboxes (zero IAM roles, metadata server blocked), pass only scoped ephemeral credentials/API keys per `/exec` call (when PSC-I + Cloud NGFW/SWP egress is enabled) or keep sandboxes air-gapped for `pytest`/`ruff`/`bandit`!
+
 ### Step C2: Upgrade Lab 5's Custom SA Terraform (`starter/terraform/main.tf`) to `AGENT_IDENTITY` + Agent Gateway
 
 In [Lab 5](./05-LAB-DEPLOY-RUNTIME-TERRAFORM.md), you deployed `google_vertex_ai_reasoning_engine.coding_agent` in [`starter/terraform/main.tf`](../starter/terraform/main.tf) using a **dedicated Custom Service Account** (`service_account = google_service_account.agent_runtime_sa.email`) so the core workshop stays GA-compatible and runs cleanly without requiring an Organization-level Agent Gateway.
@@ -380,7 +383,8 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
     }
 
     deployment_spec {
-      # ... keep existing OTel, GOOGLE_GENAI_USE_ENTERPRISE, MODEL_NAME, SANDBOX_*,
+      # ... keep existing OTel, GOOGLE_GENAI_USE_ENTERPRISE, MODEL_NAME, REASONING_MODEL_NAME,
+      #     MODEL_LOCATION, THINKING_LEVEL, AGY_EXECUTION_MODE, AGY_ADC_AUTH, SANDBOX_*,
       #     ENABLE_MEMORY_BANK, ENABLE_SKILL_REGISTRY, SKILL_REGISTRY_LOCATION,
       #     and secret_env blocks from Lab 5's starter/terraform/main.tf ...
 

@@ -15,10 +15,19 @@ from typing import Any, Literal
 SandboxMode = Literal["local", "shell", "byoc", "code_execution"]
 VALID_SANDBOX_MODES: frozenset[str] = frozenset({"local", "shell", "byoc", "code_execution"})
 
-AgentArchitecture = Literal["simple", "collaborative", "graph", "dynamic"]
+AgentArchitecture = Literal["simple", "collaborative", "graph", "dynamic", "agy_harness"]
 VALID_AGENT_ARCHITECTURES: frozenset[str] = frozenset(
-    {"simple", "collaborative", "graph", "dynamic"}
+    {"simple", "collaborative", "graph", "dynamic", "agy_harness"}
 )
+
+ThinkingLevel = Literal["LOW", "MEDIUM", "HIGH", "XHIGH"]
+VALID_THINKING_LEVELS: frozenset[str] = frozenset({"LOW", "MEDIUM", "HIGH", "XHIGH"})
+
+AgyExecutionMode = Literal["local", "sandbox", "auto"]
+VALID_AGY_EXECUTION_MODES: frozenset[str] = frozenset({"local", "sandbox", "auto"})
+
+AgyEffortLevel = Literal["low", "medium", "high", "xhigh"]
+VALID_AGY_EFFORT_LEVELS: frozenset[str] = frozenset({"low", "medium", "high", "xhigh"})
 
 
 def _parse_bool(value: str | None, default: bool = False) -> bool:
@@ -99,14 +108,32 @@ class Settings:
     eval_location: str = "global"
     gke_location: str = "asia-southeast3"
 
-    # Explicit versioned Gemini model ID (avoid `gemini-flash-latest` on regional endpoints)
-    model_name: str = "gemini-2.5-flash"
+    # Frontier Gemini 4 model routing & thinking controls:
+    # - `gemini-4-hydrogen` (fast coding/tool-calling) & `gemini-4-neon` (deep reasoning/review)
+    #   run on `MODEL_LOCATION=global` (decoupled from `GOOGLE_CLOUD_LOCATION=asia-southeast1`
+    #   for Agent Runtime, Managed Sandboxes, Sessions, Memory Bank, and Feedback).
+    # - Strict regional residency alternative: `MODEL_NAME=gemini-4-argon` + `MODEL_LOCATION=asia-southeast1`.
+    # - Gemini 4 thinking_level supports strictly LOW | MEDIUM | HIGH | XHIGH (never MINIMAL/thinking_budget).
+    model_name: str = "gemini-4-hydrogen"
+    reasoning_model_name: str = "gemini-4-neon"
+    model_location: str = "global"
+    thinking_level: ThinkingLevel = "MEDIUM"
 
     # ADK 2.0 Architecture & Workflow Controls (Lab 1; default `simple` keeps Labs 2-8 unchanged)
     agent_architecture: AgentArchitecture = "simple"
     max_fix_rounds: int = 3
     enable_hitl_approval: bool = False
     managed_agent_id: str = ""
+
+    # Antigravity (`agy`) headless CLI coding harness controls (local, Agent Runtime, & BYOC sandbox)
+    agy_bin: str = "agy"
+    agy_model: str = ""
+    agy_effort: AgyEffortLevel = "medium"
+    agy_print_timeout: str = "5m"
+    agy_execution_mode: AgyExecutionMode = "auto"
+    agy_enable_sandbox: bool = True
+    agy_skip_permissions: bool = False
+    agy_adc_auth: bool = True
 
     # Additional workshop settings used progressively across Labs 1-6
     local_workspace_dir: str = "/tmp/coding_agent_workspace"
@@ -159,6 +186,50 @@ class Settings:
         object.__setattr__(self, "eval_location", normalized_eval_loc)
         normalized_gke_loc = self.gke_location.strip() or self.primary_region
         object.__setattr__(self, "gke_location", normalized_gke_loc)
+        normalized_model_name = self.model_name.strip() or "gemini-4-hydrogen"
+        object.__setattr__(self, "model_name", normalized_model_name)
+        normalized_reasoning_model = self.reasoning_model_name.strip() or "gemini-4-neon"
+        object.__setattr__(self, "reasoning_model_name", normalized_reasoning_model)
+        normalized_model_loc = self.model_location.strip() or "global"
+        object.__setattr__(self, "model_location", normalized_model_loc)
+        normalized_thinking = self.thinking_level.strip().upper() or "MEDIUM"
+        if normalized_thinking == "MINIMAL":
+            raise ValueError(
+                "Invalid THINKING_LEVEL='MINIMAL'. Gemini 4 rejects MINIMAL (and "
+                "thinking_budget) with HTTP 400. Expected one of: HIGH, LOW, MEDIUM, XHIGH."
+            )
+        if normalized_thinking not in VALID_THINKING_LEVELS:
+            valid_thinking = ", ".join(sorted(VALID_THINKING_LEVELS))
+            raise ValueError(
+                f"Invalid THINKING_LEVEL={self.thinking_level!r}. Expected one of: "
+                f"{valid_thinking} (Gemini 4 rejects MINIMAL and thinking_budget with HTTP 400)."
+            )
+        object.__setattr__(self, "thinking_level", normalized_thinking)
+        normalized_agy_bin = self.agy_bin.strip() or "agy"
+        object.__setattr__(self, "agy_bin", normalized_agy_bin)
+        object.__setattr__(self, "agy_model", self.agy_model.strip())
+        normalized_agy_effort = self.agy_effort.strip().lower() or "medium"
+        if normalized_agy_effort not in VALID_AGY_EFFORT_LEVELS:
+            valid_effort = ", ".join(sorted(VALID_AGY_EFFORT_LEVELS))
+            raise ValueError(
+                f"Invalid AGY_EFFORT={self.agy_effort!r}. Expected one of: {valid_effort}."
+            )
+        object.__setattr__(self, "agy_effort", normalized_agy_effort)
+        normalized_agy_timeout = self.agy_print_timeout.strip() or "5m"
+        object.__setattr__(self, "agy_print_timeout", normalized_agy_timeout)
+        normalized_agy_mode = self.agy_execution_mode.strip().lower() or "auto"
+        if normalized_agy_mode not in VALID_AGY_EXECUTION_MODES:
+            valid_agy_modes = ", ".join(sorted(VALID_AGY_EXECUTION_MODES))
+            raise ValueError(
+                f"Invalid AGY_EXECUTION_MODE={self.agy_execution_mode!r}. "
+                f"Expected one of: {valid_agy_modes}."
+            )
+        object.__setattr__(self, "agy_execution_mode", normalized_agy_mode)
+
+    @property
+    def resolved_agy_model(self) -> str:
+        """Return explicit ``AGY_MODEL`` override or fall back to ``MODEL_NAME``."""
+        return self.agy_model or self.model_name
 
     @property
     def local_workspace_path(self) -> Path:
@@ -252,11 +323,22 @@ def load_settings() -> Settings:
         agent_registry_skills_location=agent_registry_skills_location,
         eval_location=eval_location,
         gke_location=gke_location,
-        model_name=os.environ.get("MODEL_NAME", "gemini-2.5-flash").strip(),
+        model_name=os.environ.get("MODEL_NAME", "gemini-4-hydrogen").strip(),
+        reasoning_model_name=os.environ.get("REASONING_MODEL_NAME", "gemini-4-neon").strip(),
+        model_location=os.environ.get("MODEL_LOCATION", "global").strip() or "global",
+        thinking_level=os.environ.get("THINKING_LEVEL", "MEDIUM").strip().upper() or "MEDIUM",  # type: ignore[arg-type]
         agent_architecture=raw_arch,  # type: ignore[arg-type]
         max_fix_rounds=_parse_int(os.environ.get("MAX_FIX_ROUNDS"), 3),
         enable_hitl_approval=_parse_bool(os.environ.get("ENABLE_HITL_APPROVAL"), False),
         managed_agent_id=os.environ.get("MANAGED_AGENT_ID", "").strip(),
+        agy_bin=os.environ.get("AGY_BIN", "agy").strip() or "agy",
+        agy_model=os.environ.get("AGY_MODEL", "").strip(),
+        agy_effort=os.environ.get("AGY_EFFORT", "medium").strip().lower() or "medium",  # type: ignore[arg-type]
+        agy_print_timeout=os.environ.get("AGY_PRINT_TIMEOUT", "5m").strip() or "5m",
+        agy_execution_mode=os.environ.get("AGY_EXECUTION_MODE", "auto").strip().lower() or "auto",  # type: ignore[arg-type]
+        agy_enable_sandbox=_parse_bool(os.environ.get("AGY_ENABLE_SANDBOX"), True),
+        agy_skip_permissions=_parse_bool(os.environ.get("AGY_SKIP_PERMISSIONS"), False),
+        agy_adc_auth=_parse_bool(os.environ.get("AGY_ADC_AUTH"), True),
         local_workspace_dir=os.environ.get(
             "LOCAL_WORKSPACE_DIR", "/tmp/coding_agent_workspace"
         ).strip(),

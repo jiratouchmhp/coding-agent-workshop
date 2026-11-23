@@ -53,6 +53,15 @@ RUN pip install --upgrade pip \
     && pip install -r /tmp/requirements.txt \
     && rm -f /tmp/requirements.txt
 
+# Opt-in static Go Antigravity (`agy`) headless CLI (zero local Docker via Bangkok Cloud Build)
+ARG INSTALL_AGY_CLI=true
+RUN if [ "${INSTALL_AGY_CLI}" = "true" ]; then \
+      curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy_install.sh \
+      && bash /tmp/agy_install.sh --dir /usr/local/bin \
+      && rm -f /tmp/agy_install.sh \
+      && chmod 0755 /usr/local/bin/agy; \
+    fi
+
 # Unprivileged UID 1000 user; confine writable workspace to /workspace
 RUN groupadd --gid 1000 appuser \
     && useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash appuser \
@@ -78,8 +87,9 @@ ENTRYPOINT ["python3", "/opt/sandbox_runner/runner.py"]
 ### Runner Hardening Checklist
 
 - Bind `0.0.0.0:8080` (matching the declared `ports` entry on the template).
+- Report `"agy_cli_available": shutil.which("agy") is not None` in `GET /health` so `AGY_EXECUTION_MODE=auto` can probe sandbox capabilities cleanly.
 - Resolve requested `cwd` with `Path.resolve().is_relative_to(WORKSPACE_ROOT)` to block directory traversal outside `/workspace`.
-- Pass a strict allowlist of non-credential environment variables (`PATH`, `HOME`, `USER`, `LANG`, `TMPDIR`, `PYTHONUNBUFFERED`) to child shells.
+- Pass a strict allowlist of non-credential base environment variables (`PATH`, `HOME`, `USER`, `LANG`, `TMPDIR`, `PYTHONUNBUFFERED`) to child shells. When `POST /exec` optionally accepts `"env": dict[str, str]` for ephemeral `agy` invocations, restrict keys strictly to `ALLOWED_EXEC_ENV_KEYS` (`AGY_ADC_AUTH`, `AGY_CLI_DISABLE_AUTO_UPDATE`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GOOGLE_CLOUD_QUOTA_PROJECT`, `GEMINI_API_KEY`), reject non-dict `env` or unknown keys with **HTTP 400**, inject ONLY into that single child process `env`, and **NEVER** write values to disk or log them.
 - Spawn child processes with `start_new_session=True` so timeouts kill the entire process group (`os.killpg(proc.pid, SIGTERM)` -> `SIGKILL`), preventing zombie background processes.
 - Cap request payload size (e.g., 2 MB) and stdout/stderr truncation size (e.g., 1 MB) to avoid OOM under container memory limits.
 - Prefer `["/bin/bash", "-c", command]` (non-login) so `/etc/profile` does not overwrite your configured `PATH`.

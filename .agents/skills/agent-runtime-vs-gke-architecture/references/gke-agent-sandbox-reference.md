@@ -215,9 +215,14 @@ sandbox_executor = GkeCodeExecutor(
     sandbox_gateway_name="your-gateway-name",  # Optional
 )
 
+import inspect
+from google import genai
+from google.adk.models import Gemini
+
+auth_key = "enterprise" if "enterprise" in inspect.signature(genai.Client.__init__).parameters else "vertexai"
 agent = LlmAgent(
     name="gke_sandbox_coding_agent",
-    model="gemini-2.5-flash",
+    model=Gemini(model="gemini-4-hydrogen", client_kwargs={auth_key: True, "project": "PROJECT_ID", "location": "global"}),
     instruction="Write and execute Python code safely in the GKE sandbox.",
     code_executor=sandbox_executor,
 )

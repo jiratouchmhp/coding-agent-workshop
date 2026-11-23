@@ -1,6 +1,6 @@
 # Maintenance & Upstream Verification Manifest
 
-**Last Verified:** `2026-11-19`
+**Last Verified:** `2026-11-23`
 **Skill:** `agent-platform-optimize-and-eval`
 **Scope:** Gemini Enterprise Agent Platform — Optimize Pillar (Observability Overview & Traces, Multimodal GCS Capture & BigQuery Analytics, Security Ops & Anomaly Detection, Offline & Simulated Evaluation, Metric Registry, Online Monitors, Failure Clustering, Quality Alerts, ADK/CLI Optimization, Example Store, and Feedback-to-Eval-to-Canary Flywheel).
 

@@ -1,6 +1,6 @@
 # Maintenance & Upstream Source Verification (`adk-coding-agent-build`)
 
-- **Last Verified Date:** `2026-11-19`
+- **Last Verified Date:** `2026-11-23`
 - **Skill Scope:** Build Pillar — Google ADK Python (`v2.0+` / `v2.4.0` Preview), `EnvironmentToolset` / `LocalEnvironment` / `BaseEnvironment`, `ExecuteBashTool` / `BashToolPolicy`, ADK 2.0 Agent Architectures, Collaborative Teams, Service Registration, Graph & Dynamic Workflows, and `google/agents-cli` (`~= 1.15.0`).
 - **Validation Command:** `python3 scripts/validate_skills.py .agents/skills` (must exit `0` with `PASS`, `<= 450` lines in `SKILL.md`, `< 1024` char folded `description: >-`, zero orphan references, zero 2-hop reference links, and zero hardcoded workstation paths).
 

@@ -29,8 +29,8 @@ usage() {
 Usage: ./scripts/verify_lab.sh <1|2|3|4|5|6|7|8|all> [--track starter|solution]
 
 Verify workshop checkpoints locally for Labs 1-8:
-  1    Lab 1: Setup, agents-cli-manifest.yaml, .agents/skills/ & ADK LlmAgent + LocalEnvironment
-  2    Lab 2: Non-root BYOC Sandbox Dockerfile, Lifecycle & BaseEnvironment execution
+  1    Lab 1: Setup, Gemini 4 models, agy headless harness, .agents/skills/ & ADK LlmAgent + LocalEnvironment
+  2    Lab 2: Non-root BYOC Sandbox Dockerfile (+ agy CLI & env allowlist), Lifecycle & BaseEnvironment execution
   3    Lab 3: Managed Sessions, Memory Bank, Prompt-Injection Sanitizer & Telemetry/Feedback
   4    Lab 4: Skill Registry 16-check packaging, GCPSkillRegistry & AgentRegistry loader
   5    Lab 5: Agent Runtime BYOC Dockerfile/main.py/requirements.txt & Terraform IaC + IAM
@@ -227,8 +227,13 @@ verify_lab_1() {
     fail "scripts/fast_forward_lab.sh is not executable (run: chmod +x scripts/fast_forward_lab.sh)"
   fi
   check_file_exists "${TRACK}/pyproject.toml"
+  check_file_exists "${TRACK}/requirements.txt"
+  check_pattern "${TRACK}/pyproject.toml" '^[[:space:]]*["'\'']google-genai(\[[^]]*\])?>=2\.34\.0' "pyproject.toml specifies Gemini 4 SDK floor google-genai>=2.34.0"
+  check_pattern "${TRACK}/requirements.txt" '^[[:space:]]*google-genai(\[[^]]*\])?>=2\.34\.0([[:space:],;#]|$)' "requirements.txt specifies Gemini 4 SDK floor google-genai>=2.34.0"
   check_file_exists "${TRACK}/agents-cli-manifest.yaml"
   check_file_exists "${TRACK}/coding_agent/config.py"
+  check_file_exists "${TRACK}/coding_agent/models.py"
+  check_file_exists "${TRACK}/coding_agent/tools/agy_headless_harness.py"
   check_file_exists "${TRACK}/coding_agent/agent.py"
   check_file_exists "${TRACK}/coding_agent/architectures.py"
   check_file_exists "${TRACK}/services.yaml"
@@ -236,6 +241,17 @@ verify_lab_1() {
 
   check_pattern ".env.example" "^PRIMARY_REGION=asia-southeast3$" ".env.example sets PRIMARY_REGION=asia-southeast3 (Bangkok first)"
   check_pattern ".env.example" "^GOOGLE_CLOUD_LOCATION=asia-southeast1$" ".env.example sets GOOGLE_CLOUD_LOCATION=asia-southeast1 (Singapore fallback for Agent Platform)"
+  check_pattern ".env.example" "^MODEL_NAME=gemini-4-hydrogen$" ".env.example sets frontier MODEL_NAME=gemini-4-hydrogen"
+  check_pattern ".env.example" "^REASONING_MODEL_NAME=gemini-4-neon$" ".env.example sets frontier REASONING_MODEL_NAME=gemini-4-neon"
+  check_pattern ".env.example" "^MODEL_LOCATION=global$" ".env.example sets MODEL_LOCATION=global for frontier Gemini 4 endpoints"
+  check_pattern ".env.example" "^THINKING_LEVEL=MEDIUM$" ".env.example sets THINKING_LEVEL=MEDIUM"
+  check_pattern ".env.example" "^AGY_EXECUTION_MODE=auto$" ".env.example sets AGY_EXECUTION_MODE=auto"
+  check_pattern ".env.example" "^AGY_ADC_AUTH=true$" ".env.example sets AGY_ADC_AUTH=true"
+  if grep -Ev '^[[:space:]]*#' ".env.example" | grep -Eq 'gemini-2\.5-flash'; then
+    fail ".env.example still contains an active retired gemini-2.5-flash default"
+  else
+    pass "Zero active retired gemini-2.5-flash defaults in .env.example"
+  fi
   check_pattern ".env.example" "^AGENT_REGISTRY_LOCATION=asia-southeast3$" ".env.example sets AGENT_REGISTRY_LOCATION=asia-southeast3 (Bangkok A2A/MCP discovery)"
   check_pattern ".env.example" "^AGENT_REGISTRY_SKILLS_LOCATION=global$" ".env.example sets AGENT_REGISTRY_SKILLS_LOCATION=global (Agent Registry standalone skills fallback)"
   check_pattern ".env.example" "^SKILL_REGISTRY_LOCATION=us-central1$" ".env.example sets SKILL_REGISTRY_LOCATION=us-central1"
@@ -245,6 +261,7 @@ verify_lab_1() {
   check_pattern ".env.example" "^ENABLE_HITL_APPROVAL=false$" ".env.example sets ENABLE_HITL_APPROVAL=false"
 
   check_pattern "Makefile" "^preflight:" "Makefile defines preflight target"
+  check_pattern "Makefile" "^test-agy-harness:" "Makefile defines zero-Docker test-agy-harness target"
   check_pattern "Makefile" "^test-sandbox-local:" "Makefile defines zero-Docker test-sandbox-local target"
   check_pattern "Makefile" "^test-agent-local:" "Makefile defines zero-Docker test-agent-local target"
   check_pattern "Makefile" "^pack-agent-source:" "Makefile defines zero-Docker/zero-AR pack-agent-source target"
@@ -318,16 +335,110 @@ PYEOF
   check_pattern "${TRACK}/agents-cli-manifest.yaml" "deployment_target:[[:space:]]*agent_runtime" "agents-cli manifest sets deployment_target: agent_runtime"
 
   check_py_compile "${TRACK}/coding_agent/config.py"
+  check_py_compile "${TRACK}/coding_agent/models.py"
+  check_py_compile "${TRACK}/coding_agent/tools/agy_headless_harness.py"
   check_py_compile "${TRACK}/coding_agent/agent.py"
   check_py_compile "${TRACK}/coding_agent/architectures.py"
   check_py_compile "${TRACK}/services.py"
+  check_no_todo_markers "${TRACK}/coding_agent/models.py" "lab-1"
+  check_no_todo_markers "${TRACK}/coding_agent/tools/agy_headless_harness.py" "lab-1"
   check_no_todo_markers "${TRACK}/coding_agent/agent.py" "lab-1"
   check_no_todo_markers "${TRACK}/coding_agent/architectures.py" "lab-1"
 
+  check_pattern "${TRACK}/coding_agent/config.py" "gemini-4-hydrogen" "config.py defaults MODEL_NAME to gemini-4-hydrogen"
+  check_pattern "${TRACK}/coding_agent/config.py" "gemini-4-neon" "config.py defaults REASONING_MODEL_NAME to gemini-4-neon"
+  check_pattern "${TRACK}/coding_agent/config.py" "MODEL_LOCATION" "config.py reads MODEL_LOCATION"
+  check_pattern "${TRACK}/coding_agent/config.py" "THINKING_LEVEL" "config.py reads THINKING_LEVEL"
   check_pattern "${TRACK}/coding_agent/config.py" "AGENT_ARCHITECTURE" "config.py reads AGENT_ARCHITECTURE"
+  check_pattern "${TRACK}/coding_agent/config.py" "agy_harness" "config.py supports AGENT_ARCHITECTURE=agy_harness"
   check_pattern "${TRACK}/coding_agent/config.py" "agent_architecture" "config.py exposes typed agent_architecture"
   check_pattern "${TRACK}/coding_agent/config.py" "max_fix_rounds" "config.py exposes typed max_fix_rounds"
   check_pattern "${TRACK}/coding_agent/config.py" "enable_hitl_approval" "config.py exposes typed enable_hitl_approval"
+
+  # Frontier Gemini 4 model factory (`models.py`) checks
+  check_pattern "${TRACK}/coding_agent/models.py" "client_kwargs" "models.py configures ADK Gemini via client_kwargs (preserving @PerLoopCachedProperty)"
+  check_pattern "${TRACK}/coding_agent/models.py" "thinking_level" "models.py configures and validates Gemini 4 thinking_level"
+  check_pattern "${TRACK}/coding_agent/models.py" "gemini-4-hydrogen|gemini-4-neon|model_location" "models.py supports Gemini 4 frontier models and model_location routing"
+  if [[ -f "${TRACK}/coding_agent/models.py" ]]; then
+    if python3 - "${TRACK}/coding_agent/models.py" <<'PYEOF'
+import ast
+import sys
+from pathlib import Path
+
+tree = ast.parse(Path(sys.argv[1]).read_text(encoding="utf-8"))
+for node in ast.walk(tree):
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "api_client":
+        sys.exit(1)
+    if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+        if isinstance(node.value, ast.Constant) and node.value.value == "gemini-2.5-flash":
+            sys.exit(1)
+PYEOF
+    then
+      pass "models.py preserves Gemini.api_client (@PerLoopCachedProperty) and avoids retired gemini-2.5-flash defaults (${TRACK}/coding_agent/models.py)"
+    else
+      fail "${TRACK}/coding_agent/models.py must NOT override api_client (use client_kwargs) or default to retired gemini-2.5-flash"
+    fi
+  fi
+  if grep -Eq "XHIGH|MINIMAL" "${TRACK}/coding_agent/models.py" "${TRACK}/coding_agent/config.py" 2>/dev/null; then
+    pass "Gemini 4 thinking_level validation (LOW/MEDIUM/HIGH/XHIGH, rejecting MINIMAL) present in models.py/config.py"
+  else
+    fail "Missing Gemini 4 thinking_level validation (LOW/MEDIUM/HIGH/XHIGH, rejecting MINIMAL) in ${TRACK}/coding_agent/models.py or config.py"
+  fi
+
+  # Antigravity (`agy`) headless CLI harness checks
+  local agy_mod="${TRACK}/coding_agent/tools/agy_headless_harness.py"
+  check_pattern "${agy_mod}" "class AgyExitCode\(" "agy_headless_harness.py defines 4-tier AgyExitCode enum"
+  check_pattern "${agy_mod}" "--output-format" "agy_headless_harness.py passes --output-format flag"
+  check_pattern "${agy_mod}" "stream-json" "agy_headless_harness.py parses stream-json NDJSON events"
+  check_pattern "${agy_mod}" "AGY_ADC_AUTH" "agy_headless_harness.py supports AGY_ADC_AUTH enterprise ADC auth"
+  if [[ -f "${agy_mod}" ]]; then
+    if python3 - "${agy_mod}" <<'PYEOF'
+import ast
+import sys
+from pathlib import Path
+
+tree = ast.parse(Path(sys.argv[1]).read_text(encoding="utf-8"))
+expected = {
+    "SUCCESS": 0,
+    "FAILURE": 1,
+    "UNSUPPORTED_COMMAND": 2,
+    "AGENT_ERROR": 3,
+}
+found = {}
+for node in tree.body:
+    if isinstance(node, ast.ClassDef) and node.name == "AgyExitCode":
+        for item in node.body:
+            if isinstance(item, ast.Assign) and len(item.targets) == 1 and isinstance(item.targets[0], ast.Name):
+                if isinstance(item.value, ast.Constant) and isinstance(item.value.value, int):
+                    found[item.targets[0].id] = item.value.value
+            elif isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name) and item.value is not None:
+                if isinstance(item.value, ast.Constant) and isinstance(item.value.value, int):
+                    found[item.target.id] = item.value.value
+
+for k, v in expected.items():
+    if found.get(k) != v:
+        sys.exit(1)
+PYEOF
+    then
+      pass "AgyExitCode defines exact 4-tier contract (0=SUCCESS, 1=FAILURE, 2=UNSUPPORTED_COMMAND, 3=AGENT_ERROR) (${agy_mod})"
+    else
+      fail "${agy_mod} AgyExitCode must define SUCCESS=0, FAILURE=1, UNSUPPORTED_COMMAND=2, AGENT_ERROR=3"
+    fi
+
+    if ! has_todo_markers "${agy_mod}" "lab-1"; then
+      local agy_py="python3"
+      if [[ -x "${TRACK}/.venv/bin/python" ]]; then
+        agy_py="${TRACK}/.venv/bin/python"
+      fi
+      if (cd "${TRACK}" && env PYTHONDONTWRITEBYTECODE=1 "${agy_py}" -m coding_agent.tools.agy_headless_harness --prompt "Verify stream-json NDJSON dry-run" --dry-run >/dev/null 2>&1); then
+        pass "agy_headless_harness.py --dry-run passed (${agy_mod})"
+      else
+        fail "agy_headless_harness.py --dry-run failed (${agy_mod})"
+      fi
+    else
+      warn "Skipping agy_headless_harness.py --dry-run until TODO(lab-1) markers are resolved."
+    fi
+  fi
 
   check_pattern "${TRACK}/coding_agent/agent.py" "LocalEnvironment\(" "Uses ADK LocalEnvironment"
   check_pattern "${TRACK}/coding_agent/agent.py" "Path" "Passes pathlib.Path to LocalEnvironment"
@@ -335,6 +446,8 @@ PYEOF
   check_pattern "${TRACK}/coding_agent/agent.py" "max_output_chars" "Sets max_output_chars on EnvironmentToolset"
   check_pattern "${TRACK}/coding_agent/agent.py" "def build_root_agent\(" "Defines build_root_agent() architecture dispatcher"
   check_pattern "${TRACK}/coding_agent/agent.py" "agent_architecture" "Dispatches root_agent on cfg.agent_architecture"
+  check_pattern "${TRACK}/coding_agent/agent.py" "agy_harness" "Dispatches AGENT_ARCHITECTURE=agy_harness in agent.py"
+  check_pattern "${TRACK}/coding_agent/agent.py" "build_agy_harness_workflow" "Wires build_agy_harness_workflow() in agent.py"
   check_pattern "${TRACK}/coding_agent/agent.py" "ResumabilityConfig" "Configures ResumabilityConfig on App"
   check_pattern "${TRACK}/coding_agent/agent.py" 'App\(.*name="coding_agent"' "App.name matches coding_agent directory"
 
@@ -344,6 +457,7 @@ PYEOF
   check_pattern "${TRACK}/coding_agent/architectures.py" "def build_collaborative_coding_team\(" "Defines collaborative coordinator team builder"
   check_pattern "${TRACK}/coding_agent/architectures.py" "def build_graph_coding_workflow\(" "Defines declarative graph Workflow builder"
   check_pattern "${TRACK}/coding_agent/architectures.py" "def build_dynamic_coding_workflow\(" "Defines dynamic workflow builder"
+  check_pattern "${TRACK}/coding_agent/architectures.py" "def build_agy_harness_workflow\(" "Defines 5th ADK 2.0 architecture build_agy_harness_workflow()"
   check_pattern "${TRACK}/coding_agent/architectures.py" "def build_optional_managed_agent\(" "Defines optional ManagedAgent builder"
 
   # Anti-regression check: forbid deprecated ADK 1.x workflow agents and legacy _require_adk_v2 wrapper
@@ -373,16 +487,38 @@ PYEOF
   # Validate Settings defaults/validation in config.py (stdlib-only smoke check)
   if [[ -f "${TRACK}/coding_agent/config.py" ]]; then
     if python3 - "${TRACK}/coding_agent/config.py" <<'PYEOF'
+import ast
 import importlib.util
 import sys
+from pathlib import Path
 
-spec = importlib.util.spec_from_file_location("_verify_cfg", sys.argv[1])
+cfg_path = Path(sys.argv[1])
+tree = ast.parse(cfg_path.read_text(encoding="utf-8"))
+
+# Ensure zero active retired gemini-2.5-flash defaults in Settings fields or env fallbacks
+for node in ast.walk(tree):
+    if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+        if isinstance(node.value, ast.Constant) and node.value.value == "gemini-2.5-flash":
+            raise AssertionError("Found retired gemini-2.5-flash default assignment in config.py")
+    elif isinstance(node, ast.Call):
+        fn_attr = node.func.attr if isinstance(node.func, ast.Attribute) else ""
+        fn_id = node.func.id if isinstance(node.func, ast.Name) else ""
+        if fn_attr in {"get", "getenv"} or fn_id == "getenv":
+            for arg in list(node.args) + [kw.value for kw in node.keywords]:
+                if isinstance(arg, ast.Constant) and arg.value == "gemini-2.5-flash":
+                    raise AssertionError("Found retired gemini-2.5-flash env fallback in config.py")
+
+spec = importlib.util.spec_from_file_location("_verify_cfg", str(cfg_path))
 assert spec and spec.loader
 mod = importlib.util.module_from_spec(spec)
 sys.modules["_verify_cfg"] = mod
 spec.loader.exec_module(mod)
 
 s = mod.Settings()
+assert s.model_name == "gemini-4-hydrogen", f"Expected default model_name='gemini-4-hydrogen', got {s.model_name!r}"
+assert s.reasoning_model_name == "gemini-4-neon", f"Expected default reasoning_model_name='gemini-4-neon', got {s.reasoning_model_name!r}"
+assert s.model_location == "global", f"Expected default model_location='global', got {s.model_location!r}"
+assert str(s.thinking_level).upper() == "MEDIUM", f"Expected default thinking_level='MEDIUM', got {s.thinking_level!r}"
 assert s.agent_architecture == "simple", f"Expected default simple, got {s.agent_architecture!r}"
 assert s.max_fix_rounds == 3, f"Expected default max_fix_rounds=3, got {s.max_fix_rounds!r}"
 assert s.enable_hitl_approval is False, f"Expected default enable_hitl_approval=False, got {s.enable_hitl_approval!r}"
@@ -401,7 +537,7 @@ assert mod.Settings(primary_region="europe-west4", agent_registry_location="").a
 assert mod.Settings(skill_registry_location="europe-west4", agent_registry_location="global").agent_registry_location == "global"
 assert mod.Settings(agent_registry_skills_location="").agent_registry_skills_location == "global"
 
-for arch in ("simple", "collaborative", "graph", "dynamic"):
+for arch in ("simple", "collaborative", "graph", "dynamic", "agy_harness"):
     assert mod.Settings(agent_architecture=arch).agent_architecture == arch
 
 try:
@@ -417,7 +553,7 @@ except ValueError:
     pass
 PYEOF
     then
-      pass "config.py Settings defaults and ADK 2.0 field validation verified (${TRACK}/coding_agent/config.py)"
+      pass "config.py Settings Gemini 4 defaults, zero retired gemini-2.5-flash defaults, and ADK 2.0 field validation verified (${TRACK}/coding_agent/config.py)"
     else
       fail "config.py Settings validation failed (${TRACK}/coding_agent/config.py)"
     fi
@@ -487,6 +623,8 @@ verify_lab_2() {
     check_pattern "${df}" "^USER[[:space:]]+appuser" "BYOC Dockerfile enforces non-root USER appuser"
     check_pattern "${df}" "^WORKDIR[[:space:]]+/workspace" "BYOC Dockerfile sets WORKDIR /workspace"
     check_pattern "${df}" "^EXPOSE[[:space:]]+8080" "BYOC Dockerfile exposes port 8080"
+    check_pattern "${df}" "^ARG[[:space:]]+INSTALL_AGY_CLI" "BYOC Dockerfile declares opt-in ARG INSTALL_AGY_CLI"
+    check_pattern "${df}" "https://antigravity\.google/cli/install\.sh" "BYOC Dockerfile installs official Antigravity CLI (antigravity.google/cli/install.sh)"
     check_pattern "${df}" "RUN.*[[:space:]]chmod[[:space:]]+0?644[[:space:]]+/opt/sandbox_runner/runner\.py" "BYOC Dockerfile sets runner.py permissions with Cloud Build legacy-compatible RUN chmod 0644"
     if grep -Ev '^[[:space:]]*#' "${df}" | grep -Eq -- '--chmod='; then
       fail "BYOC Dockerfile uses BuildKit-only --chmod= flag (fails under default Cloud Build legacy builder); use RUN chmod 0644 instead (${df})"
@@ -498,6 +636,11 @@ verify_lab_2() {
 
   check_py_compile "${runner}"
   check_pattern "${runner}" '"/bin/bash",[[:space:]]*"-c"' "Sandbox runner invokes non-login /bin/bash -c to preserve PATH"
+  check_pattern "${runner}" "agy_cli_available" "Sandbox runner GET /health exposes agy_cli_available"
+  check_pattern "${runner}" 'shutil\.which\(["'\'']agy["'\'']\)' "Sandbox runner probes agy binary on PATH via shutil.which"
+  check_pattern "${runner}" "AGY_ADC_AUTH" "Sandbox runner allowlists AGY_ADC_AUTH in ephemeral /exec env"
+  check_pattern "${runner}" "GOOGLE_CLOUD_LOCATION" "Sandbox runner allowlists GOOGLE_CLOUD_LOCATION in ephemeral /exec env"
+  check_pattern "${runner}" 'payload\.get\(["'\'']env["'\'']\)|"env"[[:space:]]+in[[:space:]]+payload' "Sandbox runner POST /exec parses and validates optional allowlisted env dict"
   check_py_compile "${lc}"
   check_py_compile "${ex}"
 
@@ -1087,6 +1230,8 @@ must_preserve = [
     "services.py",
     "services.yaml",
     "coding_agent/agent.py",
+    "coding_agent/models.py",
+    "coding_agent/tools/agy_headless_harness.py",
     "skills_to_register/secure-code-review/SKILL.md",
 ]
 
@@ -1108,6 +1253,13 @@ PYEOF
   if [[ -f "${runtime_df}" ]]; then
     check_dockerfile_non_root "${runtime_df}" "Agent Runtime BYOC Dockerfile"
     check_pattern "${runtime_df}" "^EXPOSE[[:space:]]+8080" "Agent Runtime Dockerfile exposes port 8080"
+    check_pattern "${runtime_df}" "^ARG[[:space:]]+INSTALL_AGY_CLI" "Agent Runtime Dockerfile declares opt-in ARG INSTALL_AGY_CLI"
+    check_pattern "${runtime_df}" "https://antigravity\.google/cli/install\.sh" "Agent Runtime Dockerfile installs official Antigravity CLI (antigravity.google/cli/install.sh)"
+    if grep -Ev '^[[:space:]]*#' "${runtime_df}" | grep -Eq -- '--chmod='; then
+      fail "Agent Runtime Dockerfile uses BuildKit-only --chmod= flag (fails under default Cloud Build legacy builder); use RUN chmod instead (${runtime_df})"
+    else
+      pass "Agent Runtime Dockerfile avoids BuildKit-only --chmod= flag (${runtime_df})"
+    fi
     check_pattern "${runtime_df}" "uvicorn" "Agent Runtime Dockerfile launches uvicorn"
     check_pattern "${runtime_df}" '^COPY[[:space:]]+.*skills_to_register/[[:space:]]+\./skills_to_register/' "Agent Runtime Dockerfile packages skills_to_register/ for Lab 4 local fallback"
     check_pattern "${runtime_df}" 'Dockerfile[[:space:]]+main\.py[[:space:]]+requirements\.txt[[:space:]]+coding_agent/[[:space:]]+skills_to_register/' "Agent Runtime Dockerfile source_code_spec tar example includes skills_to_register/"
@@ -1174,12 +1326,40 @@ PYEOF
   check_no_todo_markers "${main_tf}" "lab-5"
 
   check_pattern "${versions_tf}" 'version[[:space:]]*=[[:space:]]*">= 6\.0\.0"' "Terraform provider floor >= 6.0.0 for container_spec support"
+  check_pattern "${vars_tf}" 'default[[:space:]]*=[[:space:]]*"gemini-4-hydrogen"' "variables.tf defaults model_name to frontier gemini-4-hydrogen"
+  check_pattern "${vars_tf}" 'variable "reasoning_model_name"' "variables.tf declares reasoning_model_name"
+  check_pattern "${vars_tf}" 'default[[:space:]]*=[[:space:]]*"gemini-4-neon"' "variables.tf defaults reasoning_model_name to frontier gemini-4-neon"
+  check_pattern "${vars_tf}" 'variable "model_location"' "variables.tf declares model_location"
+  check_pattern "${vars_tf}" 'default[[:space:]]*=[[:space:]]*"global"' "variables.tf sets global default for Gemini 4 model_location"
+  check_pattern "${vars_tf}" 'variable "thinking_level"' "variables.tf declares thinking_level"
+  check_pattern "${vars_tf}" 'default[[:space:]]*=[[:space:]]*"MEDIUM"' "variables.tf defaults thinking_level to MEDIUM"
+  check_pattern "${vars_tf}" '^variable "agy_execution_mode"' "variables.tf declares agy_execution_mode"
   check_pattern "${vars_tf}" 'variable "enable_memory_bank"' "Declares optional enable_memory_bank variable with safe default"
   check_pattern "${vars_tf}" 'variable "enable_skill_registry"' "Declares optional enable_skill_registry variable with safe default"
   check_pattern "${vars_tf}" 'variable "skill_registry_location"' "Declares optional skill_registry_location variable with safe default"
+  check_pattern "${tfvars_example}" '^model_name[[:space:]]*=[[:space:]]*"gemini-4-hydrogen"' "terraform.tfvars.example sets model_name = \"gemini-4-hydrogen\""
+  check_pattern "${tfvars_example}" '^reasoning_model_name[[:space:]]*=[[:space:]]*"gemini-4-neon"' "terraform.tfvars.example sets reasoning_model_name = \"gemini-4-neon\""
+  check_pattern "${tfvars_example}" '^model_location[[:space:]]*=[[:space:]]*"global"' "terraform.tfvars.example sets model_location = \"global\""
+  check_pattern "${tfvars_example}" '^thinking_level[[:space:]]*=[[:space:]]*"MEDIUM"' "terraform.tfvars.example sets thinking_level = \"MEDIUM\""
+  check_pattern "${tfvars_example}" '^agy_execution_mode[[:space:]]*=[[:space:]]*"auto"' "terraform.tfvars.example declares agy_execution_mode = \"auto\""
   check_pattern "${tfvars_example}" '^enable_memory_bank[[:space:]]*=[[:space:]]*false' "terraform.tfvars.example declares enable_memory_bank = false"
   check_pattern "${tfvars_example}" '^enable_skill_registry[[:space:]]*=[[:space:]]*false' "terraform.tfvars.example declares enable_skill_registry = false"
   check_pattern "${tfvars_example}" '^skill_registry_location[[:space:]]*=[[:space:]]*"us-central1"' "terraform.tfvars.example declares skill_registry_location"
+  for tf_check_file in "${vars_tf}" "${tfvars_example}"; do
+    if [[ -f "${tf_check_file}" ]]; then
+      if grep -Ev '^[[:space:]]*(#|//)' "${tf_check_file}" | grep -Eq 'gemini-2\.5-flash'; then
+        fail "${tf_check_file} still contains an active retired gemini-2.5-flash default"
+      else
+        pass "Zero active retired gemini-2.5-flash defaults in ${tf_check_file}"
+      fi
+    fi
+  done
+  check_pattern "${main_tf}" "REASONING_MODEL_NAME" "Injects REASONING_MODEL_NAME env var in Agent Runtime deployment_spec"
+  check_pattern "${main_tf}" "MODEL_LOCATION" "Injects MODEL_LOCATION env var in Agent Runtime deployment_spec"
+  check_pattern "${main_tf}" "THINKING_LEVEL" "Injects THINKING_LEVEL env var in Agent Runtime deployment_spec"
+  check_pattern "${main_tf}" '^[[:space:]]*name[[:space:]]*=[[:space:]]*"AGY_EXECUTION_MODE"' "Injects AGY_EXECUTION_MODE env var in Agent Runtime deployment_spec"
+  check_pattern "${main_tf}" '^[[:space:]]*name[[:space:]]*=[[:space:]]*"AGY_ADC_AUTH"' "Injects AGY_ADC_AUTH env var in Agent Runtime deployment_spec"
+  check_pattern "${main_tf}" '^[[:space:]]*name[[:space:]]*=[[:space:]]*"AGY_CLI_DISABLE_AUTO_UPDATE"' "Injects AGY_CLI_DISABLE_AUTO_UPDATE env var in Agent Runtime deployment_spec"
   check_pattern "${main_tf}" 'resource "google_vertex_ai_reasoning_engine"' "Declares google_vertex_ai_reasoning_engine"
   check_pattern "${main_tf}" "region[[:space:]]*=[[:space:]]*var\.location" "Uses verified Terraform attribute 'region = var.location'"
   if [[ -f "${main_tf}" ]]; then
@@ -1330,6 +1510,29 @@ verify_lab_6() {
   check_file_exists "${eval_dir}/datasets/coding_agent_single_turn.json"
   check_file_exists "${eval_dir}/datasets/coding_agent_multi_turn.json"
   check_file_exists "${eval_dir}/eval_config.yaml"
+  # Regression guard: reject active retired gemini-2.5-flash judge/model references in eval_config.yaml
+  if [[ -f "${eval_dir}/eval_config.yaml" ]]; then
+    if python3 - "${eval_dir}/eval_config.yaml" <<'PYEOF'
+import re
+import sys
+from pathlib import Path
+
+raw = Path(sys.argv[1]).read_text(encoding="utf-8")
+for idx, line in enumerate(raw.splitlines(), start=1):
+    active = re.sub(r"#.*$", "", line)
+    if re.search(r"\bgemini-2\.5-flash(?:-[a-z0-9._-]+)?\b", active, flags=re.IGNORECASE):
+        print(
+            f"Active retired gemini-2.5-flash reference at line {idx}: {line.strip()}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+PYEOF
+    then
+      pass "Zero active retired gemini-2.5-flash references in ${eval_dir}/eval_config.yaml"
+    else
+      fail "${eval_dir}/eval_config.yaml still contains an active retired gemini-2.5-flash reference (upgrade to Gemini 4, e.g. gemini-4-hydrogen)"
+    fi
+  fi
   check_file_exists "${eval_dir}/sampler_config.json"
   check_file_exists "${TRACK}/coding_agent/train_eval_set.evalset.json"
 
@@ -1817,6 +2020,71 @@ verify_lab_8() {
   check_no_todo_markers "${tpl}" "lab-8"
   check_no_todo_markers "${pool}" "lab-8"
   check_no_todo_markers "${py}" "lab-8"
+
+  # Regression guard: reject active retired gemini-2.5-flash in gke_agent_example.py and assert gemini-4-hydrogen
+  if [[ -f "${py}" ]]; then
+    if python3 - "${py}" <<'PYEOF'
+import ast
+import importlib.util
+import os
+import re
+import sys
+from pathlib import Path
+
+py_path = Path(sys.argv[1])
+source = py_path.read_text(encoding="utf-8")
+tree = ast.parse(source, filename=str(py_path))
+
+docstring_nodes: set[int] = set()
+for parent in ast.walk(tree):
+    if isinstance(parent, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+        if (
+            parent.body
+            and isinstance(parent.body[0], ast.Expr)
+            and isinstance(parent.body[0].value, ast.Constant)
+            and isinstance(parent.body[0].value.value, str)
+        ):
+            docstring_nodes.add(id(parent.body[0].value))
+
+found_hydrogen = False
+for node in ast.walk(tree):
+    if (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and id(node) not in docstring_nodes
+    ):
+        if re.search(r"\bgemini-2\.5-flash(?:-[a-z0-9._-]+)?\b", node.value, flags=re.IGNORECASE):
+            raise AssertionError(
+                f"Found active retired gemini-2.5-flash string literal: {node.value!r}"
+            )
+        if node.value == "gemini-4-hydrogen":
+            found_hydrogen = True
+
+if not found_hydrogen:
+    raise AssertionError("Missing 'gemini-4-hydrogen' model default in gke_agent_example.py")
+
+os.environ.pop("MODEL_NAME", None)
+spec = importlib.util.spec_from_file_location("_verify_gke_example", str(py_path))
+assert spec and spec.loader
+mod = importlib.util.module_from_spec(spec)
+sys.modules["_verify_gke_example"] = mod
+spec.loader.exec_module(mod)
+
+default_cfg = mod.GkeSandboxSettings()
+env_cfg = mod.GkeSandboxSettings.from_env()
+assert default_cfg.model_name == "gemini-4-hydrogen", (
+    f"Expected GkeSandboxSettings().model_name=='gemini-4-hydrogen', got {default_cfg.model_name!r}"
+)
+assert env_cfg.model_name == "gemini-4-hydrogen", (
+    f"Expected GkeSandboxSettings.from_env().model_name=='gemini-4-hydrogen', got {env_cfg.model_name!r}"
+)
+PYEOF
+    then
+      pass "gke_agent_example.py defaults to gemini-4-hydrogen with zero active retired gemini-2.5-flash references (${py})"
+    else
+      fail "${py} must default to gemini-4-hydrogen and contain zero active retired gemini-2.5-flash references"
+    fi
+  fi
 
   if python3 - "${rbac}" "${tpl}" "${pool}" 2>/dev/null <<'PYEOF'
 import sys

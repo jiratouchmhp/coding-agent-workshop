@@ -12,7 +12,7 @@
 
 By the end of Lab 2, you will:
 
-1. Smoke-test the non-root BYOC runner locally in pure Python (`make test-sandbox-local` — **zero local Docker!**), build and push the **non-root Debian BYOC coding sandbox image** (`starter/sandbox_image/Dockerfile` + `runner.py`) remotely via Cloud Build in **Bangkok (`asia-southeast3`)** into Artifact Registry (`make push-sandbox`), and grant **`roles/artifactregistry.reader`** to the **Agent Sandbox Service Agent** (`service-PROJECT_NUMBER@gcp-sa-vertex-sandbox.iam.gserviceaccount.com`) — or take the zero-build **`SANDBOX_MODE=shell`** fast-track in **Singapore (`asia-southeast1`)**.
+1. Smoke-test the non-root BYOC runner locally in pure Python (`make test-sandbox-local` — **zero local Docker!**, checking `/health` `agy_cli_available`, `/exec`, `cwd` escape, and allowlisted per-invocation `env` rejection), build and push the **non-root Debian BYOC coding sandbox image** (`starter/sandbox_image/Dockerfile` with opt-in `/usr/local/bin/agy` via `ARG INSTALL_AGY_CLI=true` + `runner.py`) remotely via Cloud Build in **Bangkok (`asia-southeast3`)** into Artifact Registry (`make push-sandbox`), and grant **`roles/artifactregistry.reader`** to the **Agent Sandbox Service Agent** (`service-PROJECT_NUMBER@gcp-sa-vertex-sandbox.iam.gserviceaccount.com`) — or take the zero-build **`SANDBOX_MODE=shell`** fast-track in **Singapore (`asia-southeast1`)**.
 2. Implement the 4 focused `# TODO(lab-2)` lifecycle hooks (`create_template`, `create_sandbox`, `pause_sandbox`, `snapshot_sandbox`) in [`starter/coding_agent/tools/sandbox_lifecycle.py`](../starter/coding_agent/tools/sandbox_lifecycle.py) — alongside pre-filled CRUD/query helpers (`get`, `list`, `update`, `resume`, `delete`) — to run the complete **`SandboxEnvironmentTemplate`, `SandboxEnvironment`, and `SandboxEnvironmentSnapshot`** lifecycles in **Singapore (`asia-southeast1`)**.
 3. Implement the 2 focused `# TODO(lab-2)` execution hooks (`execute_byoc_command`, `AgentPlatformSandboxEnvironment.execute`) in [`starter/coding_agent/tools/sandbox_execution.py`](../starter/coding_agent/tools/sandbox_execution.py) — with supporting adapters (`execute_shell_command`, `execute_code_snippet`, `build_code_execution_executor`, and `AgentPlatformSandboxEnvironment`'s `initialize`/`read_file`/`write_file`) pre-filled — and wire `_build_remote_execution_components` in [`starter/coding_agent/agent.py`](../starter/coding_agent/agent.py) so ADK `EnvironmentToolset` operates transparently against a remote managed sandbox.
 4. Verify **gVisor credential isolation** (zero ambient credentials, blocked metadata server `169.254.169.254:80`), design **PSC-I + Cloud NGFW / Secure Web Proxy egress allowlisting**, and account for **TTLs (7d/14d), cold-start latencies (2m vs. seconds), and Cloud Audit Log / `stdout` blind spots**.
@@ -55,7 +55,7 @@ flowchart LR
 
     subgraph UNTRUSTED["Untrusted Execution Plane (gVisor Tenant Project — Singapore)"]
         SBX["SandboxEnvironment Container\nappuser / sandbox-untrusted - No ADC or Metadata"]
-        EXEC["Runner /exec (Port 8080)\nPython + Node + pytest + ruff + bandit"]
+        EXEC["Runner /health & /exec (Port 8080)\nPython + Node + pytest + ruff + bandit + /usr/local/bin/agy"]
         SBX --- EXEC
     end
 
@@ -109,19 +109,44 @@ Per [Custom Containers (BYOC)](https://docs.cloud.google.com/gemini-enterprise-a
 3. **Compatible runner / entry point & declared TCP port:** Listens on a declared TCP port (`ports: [{"port": 8080, "protocol": "TCP"}]`) to accept execution requests.
 
 > [!NOTE]
-> **Runner Contract Transparency:** Official `scale/sandbox/custom-containers` docs require *"a compatible runner or entry point"* and reference open-source architectures [AX](https://agentexecutor.io/) and [Substrate](https://github.com/agent-substrate/substrate), while `scale/sandbox/shell-sandbox-quickstart` documents the `/exec` endpoint returning `{"stdout", "stderr", "returncode", "duration_ms"}`. Official docs do not publish a verbatim custom Dockerfile wire spec; [`starter/sandbox_image/Dockerfile`](../starter/sandbox_image/Dockerfile) and [`starter/sandbox_image/runner.py`](../starter/sandbox_image/runner.py) implement an educational, non-root Debian Bookworm coding sandbox exposing `GET /health` and `POST /exec` on port `8080` aligned with that exact response schema—complete with `Python 3.11+`, `Node.js LTS`, `git`, `pytest`, `ruff`, `bandit`, and `jq`, owned by `USER appuser` under `/workspace`.
+> **Runner Contract Transparency & Baked `/usr/local/bin/agy`:** Official `scale/sandbox/custom-containers` docs require *"a compatible runner or entry point"* and reference open-source architectures [AX](https://agentexecutor.io/) and [Substrate](https://github.com/agent-substrate/substrate), while `scale/sandbox/shell-sandbox-quickstart` documents the `/exec` endpoint returning `{"stdout", "stderr", "returncode", "duration_ms"}`. Official docs do not publish a verbatim custom Dockerfile wire spec; [`starter/sandbox_image/Dockerfile`](../starter/sandbox_image/Dockerfile) and [`starter/sandbox_image/runner.py`](../starter/sandbox_image/runner.py) implement an educational, non-root Debian Bookworm coding sandbox exposing `GET /health` and `POST /exec` on port `8080` aligned with that exact response schema—complete with `Python 3.11+`, `Node.js LTS`, `git`, `pytest`, `ruff`, `bandit`, `jq`, and opt-in **`/usr/local/bin/agy`** (`ARG INSTALL_AGY_CLI=true`), owned by `USER appuser` under `/workspace`.
 
-Verify the non-root directive and smoke-test `runner.py` locally with **zero Docker**:
+#### Baked Antigravity (`agy`) Headless CLI & Allowlisted Per-Exec `env` Security Boundary
+
+Inspect how `starter/sandbox_image/Dockerfile` and `starter/sandbox_image/runner.py` enable Lab 1 Part B's `AGY_EXECUTION_MODE=sandbox` **with zero local Docker** (built remotely in Bangkok Cloud Build via `make push-sandbox`) while preserving strict gVisor credential hygiene:
+
+1. **Static Go `agy` Binary (`ARG INSTALL_AGY_CLI=true`):** `starter/sandbox_image/Dockerfile` bakes `/usr/local/bin/agy` cleanly at image build time (or set `--build-arg INSTALL_AGY_CLI=false` for air-gapped minimal images):
+   ```dockerfile
+   ARG INSTALL_AGY_CLI=true
+   RUN if [ "${INSTALL_AGY_CLI}" = "true" ]; then \
+         curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy_install.sh \
+         && bash /tmp/agy_install.sh --dir /usr/local/bin \
+         && rm -f /tmp/agy_install.sh \
+         && chmod 0755 /usr/local/bin/agy; \
+       fi
+   ```
+2. **Capability Probe on `GET /health`:** `runner.py` returns `"agy_cli_available": shutil.which("agy") is not None` alongside container UID/workspace metadata so `AgyHeadlessHarness` (`AGY_EXECUTION_MODE=auto`) can detect cleanly whether the BYOC sandbox image includes `agy`.
+3. **Strict Allowlisted Per-Invocation `env` on `POST /exec`:** `runner.py` optionally accepts `"env": dict[str, str]` restricted strictly to an explicit safe allowlist (`ALLOWED_EXEC_ENV_KEYS`):
+   - `AGY_ADC_AUTH`
+   - `AGY_CLI_DISABLE_AUTO_UPDATE`
+   - `GOOGLE_CLOUD_PROJECT`
+   - `GOOGLE_CLOUD_LOCATION`
+   - `GOOGLE_CLOUD_QUOTA_PROJECT`
+   - `GEMINI_API_KEY`
+   - Any non-dict `env` payload or **any key outside `ALLOWED_EXEC_ENV_KEYS`** is immediately rejected with **HTTP 400**! Allowed keys are injected **strictly into that single child process's `env`** and are **NEVER written to disk, persisted to `/workspace`, or logged** by `runner.py`.
+
+Verify the non-root directive, `INSTALL_AGY_CLI` build arg, and smoke-test `runner.py` locally with **zero Docker**:
 
 ```bash
-# 1. Confirm non-root USER appuser, WORKDIR /workspace, and EXPOSE 8080
-grep -E "^(FROM|USER|WORKDIR|EXPOSE|ENTRYPOINT|CMD)" starter/sandbox_image/Dockerfile
+# 1. Confirm non-root USER appuser, WORKDIR /workspace, ARG INSTALL_AGY_CLI, and EXPOSE 8080
+grep -E "^(FROM|ARG|USER|WORKDIR|EXPOSE|ENTRYPOINT|CMD)" starter/sandbox_image/Dockerfile
 
 # 2. Run pure-Python localhost smoke test against starter/sandbox_image/runner.py (ZERO Docker!)
+#    Verifies GET /health (incl. agy_cli_available), POST /exec, cwd='/etc' -> 400, and disallowed env -> 400!
 make test-sandbox-local
 ```
 
-Confirm you see a non-root `USER appuser` (never `USER root`), `WORKDIR /workspace`, `EXPOSE 8080`, and passing `/health` + `/exec` assertions from `make test-sandbox-local`.
+Confirm you see a non-root `USER appuser` (never `USER root`), `WORKDIR /workspace`, `EXPOSE 8080`, `agy_cli_available` in `/health`, and passing `/exec` + HTTP 400 assertions from `make test-sandbox-local`.
 
 > [!WARNING]
 > **Cloud Build Legacy Builder Gotcha (`COPY --chmod` vs. `RUN chmod`):**
@@ -513,6 +538,9 @@ class AgentPlatformSandboxEnvironment(BaseEnvironment):
         self, command: str, *, timeout: float | None = None, ctx: Context | None = None
     ) -> ExecutionResult:
         # Dispatch command to execute_bash() or BYOC /exec and map into ExecutionResult(exit_code, stdout, stderr, timed_out)
+        # (Pre-filled companion helpers `execute_with_env(...)` and `check_byoc_health(...)` build on
+        # `execute_byoc_command()` so Lab 1's `AgyHeadlessHarness` can probe `/health` and forward
+        # allowlisted ephemeral env keys into BYOC `/exec` without modifying `BaseEnvironment.execute`!)
         ...
 
     @override
@@ -587,6 +615,18 @@ There is **no built-in domain allowlist property** on `SandboxEnvironment` or `S
 | **In-Container Blind Spot** | Cloud Audit Logs records only the outer API call—**NOT** child subprocesses, syscalls, file writes, or individual WebSocket/CDP/PTY stream frames. |
 | **`stdout` / `stderr` Logging Gap (CRITICAL!)** | Automatic Cloud Logging (`reasoning_engine_stdout` / `reasoning_engine_stderr`) applies **only** to the parent `ReasoningEngine` and does **NOT** collect logs from child sandboxes! Your parent agent **must** inspect and log sandbox execution responses explicitly (which we wire into ADK callbacks in [Lab 3](./03-LAB-SESSIONS-MEMORY-FEEDBACK.md)). |
 
+### D.4 Zero-Ambient-Credential Sandbox Boundary for `agy` Headless CLI
+
+When combining Lab 1 Part B's **`AGENT_ARCHITECTURE=agy_harness`** with Lab 2's **gVisor BYOC Managed Sandbox**, choose one of these two enterprise-safe patterns based on your egress posture:
+
+| Pattern | Egress Posture | Where `agy` Runs | Credential & Security Boundary |
+|---|---|---|---|
+| **Pattern 1 (Default Air-Gapped Recommended)** | `internet_access: False` (sandbox completely air-gapped) | Trusted **Agent Runtime (Lab 5)** via `AGY_EXECUTION_MODE=local` + `AGY_ADC_AUTH=true` on Custom SA (`coding-agent-runtime-sa`) | **Zero credentials ever enter the sandbox.** Untrusted `pytest`, `ruff`, and `bandit` commands run inside the air-gapped gVisor BYOC Sandbox; `agy` / Gemini 4 calls stay strictly inside the trusted Agent Runtime! |
+| **Pattern 2 (In-Sandbox `agy` Harness)** | `internet_access: True` + **PSC-I + Cloud NGFW / SWP** allowlisting Gemini/Vertex endpoints | Inside **BYOC gVisor Sandbox** via `AGY_EXECUTION_MODE=sandbox` (`agy -p ... --output-format stream-json --dangerously-skip-permissions`) | Because gVisor sandboxes have **zero IAM roles** and **block `169.254.169.254`**, the parent Agent Runtime fetches a **scoped ephemeral credential / Secret Manager key** and passes it per-call inside `POST /exec`'s allowlisted `env` dict (injected only into that child process, never written to disk or logged). **NEVER** relay a developer's personal `agy` OAuth session! |
+
+> [!TIP]
+> **`AGY_EXECUTION_MODE=auto` Handles Air-Gapped Sandboxes Automatically:** When `SANDBOX_MODE=byoc`, `auto` checks `GET /health` for `agy_cli_available=True`; if the BYOC sandbox is air-gapped (`internet_access=False`) or `agy` is absent, it seamlessly runs `agy` locally in the trusted runtime (`AGY_ADC_AUTH=true`) or falls back to native ADK 2.0 `LlmAgent` + `EnvironmentToolset`!
+
 ---
 
 ## Part E: Lab 2 Verification Checkpoint & Cleanup
@@ -600,7 +640,7 @@ Run the Lab 2 automated checkpoint verifier from the repository root:
 ```
 
 **Checkpoint Pass Criteria:**
-- [ ] `starter/sandbox_image/Dockerfile` sets a non-root `USER appuser`, uses Cloud Build-compatible `COPY --chown=root:root` + `RUN chmod 0644` (not BuildKit-only `--chmod`), passes `make test-sandbox-local` (zero local Docker!), and pushes cleanly to `coding-agent-repo` in Bangkok Artifact Registry (`asia-southeast3-docker.pkg.dev` — empirically verified with Singapore BYOC Sandboxes!) via `make push-sandbox` — OR you opted into the zero-build `SANDBOX_MODE=shell` fast-track in Singapore (`asia-southeast1`).
+- [ ] `starter/sandbox_image/Dockerfile` sets a non-root `USER appuser`, bakes opt-in `/usr/local/bin/agy` (`ARG INSTALL_AGY_CLI=true`), uses Cloud Build-compatible `COPY --chown=root:root` + `RUN chmod 0644` (not BuildKit-only `--chmod`), passes `make test-sandbox-local` (zero local Docker! verifying `/health` `agy_cli_available`, `/exec`, `cwd='/etc'` -> 400, and disallowed `env` -> 400), and pushes cleanly to `coding-agent-repo` in Bangkok Artifact Registry (`asia-southeast3-docker.pkg.dev` — empirically verified with Singapore BYOC Sandboxes!) via `make push-sandbox` — OR you opted into the zero-build `SANDBOX_MODE=shell` fast-track in Singapore (`asia-southeast1`).
 - [ ] `service-PROJECT_NUMBER@gcp-sa-vertex-sandbox.iam.gserviceaccount.com` holds `roles/artifactregistry.reader` on `coding-agent-repo`.
 - [ ] `starter/coding_agent/tools/sandbox_lifecycle.py` has zero remaining `# TODO(lab-2)` markers, completes template/sandbox/snapshot lifecycle operations in Singapore (`asia-southeast1`), and waits for delete LROs to finish so zero snapshots or templates remain orphaned.
 - [ ] `starter/coding_agent/tools/sandbox_execution.py` implements Shell `execute_bash`, BYOC `/exec`, `AgentEngineSandboxCodeExecutor`, and `AgentPlatformSandboxEnvironment(BaseEnvironment)` with `EnvironmentScope.SESSION` and `*, ctx: Context | None = None`.
