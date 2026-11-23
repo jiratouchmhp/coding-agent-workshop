@@ -30,7 +30,7 @@ gcloud services enable agentregistry.googleapis.com --project=PROJECT_ID
 | `roles/agentregistry.user` | View all registry resources + create, update, delete **standalone skills, revisions, and scan settings** (cannot edit agents/MCP/endpoints) |
 | `roles/agentregistry.editor` | View and edit agents, MCP servers, endpoints, standalone skills, and revisions |
 | `roles/agentregistry.admin` | Full control: all editor actions + **bindings**, **resource-level skill IAM policies**, and **security `Finding` list/describe** |
-| `service-PROJECT_NUMBER@gcp-sa-agentregistry.iam.gserviceaccount.com` | **GCS Import Service Agent** — requires `storage.objects.get` on buckets holding skill ZIPs. Trigger creation via `gcloud beta services identity create --service=agentregistry.googleapis.com --project=PROJECT_ID` if no skill has been created yet. |
+| `service-PROJECT_NUMBER@gcp-sa-agentregistry.iam.gserviceaccount.com` | **GCS Import Service Agent** — requires `storage.objects.get` on buckets holding skill ZIPs. Trigger creation via `gcloud alpha services identity create --service=agentregistry.googleapis.com --project=PROJECT_ID` if no skill has been created yet. |
 
 ---
 
@@ -141,48 +141,77 @@ Standalone skills do **NOT** use `Service` resources — they are top-level `Ski
   - Deleting the `defaultRevision` clears the pointer and transitions an `ACTIVE` skill to `DISABLED` (update `defaultRevision` first to avoid downtime!).
   - **Download Preconditions:** Parent skill must be `ACTIVE` or `DEPRECATED`, revision must be `ACTIVE`, and (if `ENABLED_BLOCKING`) zero findings.
 
-### Standalone Skill & Revision Commands (`gcloud` & REST)
+### Standalone Skill & Revision Commands (`gcloud alpha` in `--location=global` & REST)
+
+> **Empirically Verified Regional Split & `gcloud 588.0.0 alpha` CLI Quirks:**
+> 1. **Alpha-Only CLI:** Only **`gcloud alpha agent-registry skills`** exists (`gcloud agent-registry skills` returns `Invalid choice`). Run `gcloud components install alpha`.
+> 2. **Bangkok A2A/MCP vs. `global` Standalone Skills:** Keep A2A/MCP discovery (`gcloud agent-registry agents list`, ADK `AgentRegistry`) in **Bangkok (`asia-southeast3`)** first, and run standalone skills in **`--location=global`** (`AGENT_REGISTRY_SKILLS_LOCATION=global`, because `--location=asia-southeast3` currently times out for `skills list`/`skills create`).
+> 3. **2-Step Create (Omit `--payload` on `skills create`):** In `gcloud 588.0.0 alpha`, `skills create --payload=...` drops `--payload` from the JSON request (`400 source is required`), and 2-char revision IDs (`v1`, `v2`) fail format validation. Create the bare skill shell first, then upload `rev-1` / `rev-2` (or `v1-0-0`) via `revisions create --payload=...`.
+> 4. **Wait for Async Scan Under `ENABLED_BLOCKING` Before `--default-revision`:** Immediately calling `skills update --default-revision=...` right after `revisions create` returns **`FAILED_PRECONDITION: cannot set default revision to a revision with pending scan results when scanning policy is ENABLED_BLOCKING`**. Poll `revisions describe <rev>` until `scanResult.scanState: SUCCEEDED` with 0 findings before promoting — or pass `--scanning-policy=enabled-nonblocking` on `skills create` for rapid workshop demos.
+> 5. **Revision-Before-Skill Deletion:** `gcloud alpha agent-registry skills delete` has no `--force` flag and returns `FAILED_PRECONDITION` (`cannot_delete_skill_with_revisions`) until all child revisions are deleted via `revisions delete`.
+
 ```bash
-# Register skill from local ZIP (or --gcs-source-uri="gs://BUCKET/skill.zip")
-gcloud agent-registry skills create workspace-docs-skill \
-  --project=PROJECT_ID --location=LOCATION \
+export AGENT_REGISTRY_SKILLS_LOCATION="${AGENT_REGISTRY_SKILLS_LOCATION:-global}"
+
+# Step 1: Create bare skill shell WITHOUT --payload (Agent Registry auto-prefixes `private-`)
+# Production default: `--scanning-policy=enabled-blocking` (or `--scanning-policy=enabled-nonblocking` for rapid workshop demos)
+gcloud alpha agent-registry skills create workspace-docs-skill \
+  --project=PROJECT_ID --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
   --display-name="Workspace Docs Skill" \
   --description="Audits and summarizes workspace docs." \
   --target-state=disabled \
-  --scanning-policy=enabled-blocking \
+  --scanning-policy=enabled-blocking
+
+# Step 2: Upload initial revision `rev-1` from local ZIP (or --gcs-source-uri="gs://BUCKET/skill.zip")
+# Avoid 2-char IDs like `v1`/`v2` (rejected by revision ID format validation).
+gcloud alpha agent-registry skills revisions create rev-1 \
+  --skill=private-workspace-docs-skill \
+  --project=PROJECT_ID --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
   --payload="./workspace-docs-skill.zip"
 
 # Subsequent ops MUST use private-workspace-docs-skill!
-gcloud agent-registry skills list --project=PROJECT_ID --location=LOCATION
-gcloud agent-registry skills describe private-workspace-docs-skill \
-  --project=PROJECT_ID --location=LOCATION
+gcloud alpha agent-registry skills list --project=PROJECT_ID --location="${AGENT_REGISTRY_SKILLS_LOCATION}"
+gcloud alpha agent-registry skills describe private-workspace-docs-skill \
+  --project=PROJECT_ID --location="${AGENT_REGISTRY_SKILLS_LOCATION}"
 
-# Upload new revision, promote defaultRevision, and activate
-gcloud agent-registry skills revisions create v2 \
+# Upload new revision `rev-2`, verify scan completion, promote defaultRevision, and activate
+gcloud alpha agent-registry skills revisions create rev-2 \
   --skill=private-workspace-docs-skill \
-  --project=PROJECT_ID --location=LOCATION \
+  --project=PROJECT_ID --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
   --payload="./workspace-docs-skill-v2.zip"
 
-gcloud agent-registry skills update private-workspace-docs-skill \
-  --project=PROJECT_ID --location=LOCATION \
-  --default-revision="projects/PROJECT_ID/locations/LOCATION/skills/private-workspace-docs-skill/revisions/v2" \
+# REQUIRED under ENABLED_BLOCKING: wait until scanResult.scanState == SUCCEEDED with 0 findings
+# (promoting immediately fails with FAILED_PRECONDITION: pending scan results)
+gcloud alpha agent-registry skills revisions describe rev-2 \
+  --skill=private-workspace-docs-skill \
+  --project=PROJECT_ID --location="${AGENT_REGISTRY_SKILLS_LOCATION}"
+
+gcloud alpha agent-registry skills update private-workspace-docs-skill \
+  --project=PROJECT_ID --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
+  --default-revision="projects/PROJECT_ID/locations/${AGENT_REGISTRY_SKILLS_LOCATION}/skills/private-workspace-docs-skill/revisions/rev-2" \
   --target-state=ACTIVE
 
 # Download & extract revision locally (gcloud auto-extracts & deletes temp zip)
-gcloud agent-registry skills revisions download v2 \
+gcloud alpha agent-registry skills revisions download rev-2 \
   --skill=private-workspace-docs-skill \
-  --project=PROJECT_ID --location=LOCATION \
+  --project=PROJECT_ID --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
   --destination="./extracted" --allow-overwrite
 
 # Share skill via resource-level IAM (requires roles/agentregistry.admin)
-gcloud agent-registry skills add-iam-policy-binding private-workspace-docs-skill \
-  --project=PROJECT_ID --location=LOCATION \
+gcloud alpha agent-registry skills add-iam-policy-binding private-workspace-docs-skill \
+  --project=PROJECT_ID --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
   --member="serviceAccount:agent-sa@PROJECT_ID.iam.gserviceaccount.com" \
   --role="roles/agentregistry.viewer"
 
-# Delete skill & all revisions (REST requires ?force=true when revisions exist!)
-gcloud agent-registry skills delete private-workspace-docs-skill \
-  --project=PROJECT_ID --location=LOCATION
+# Teardown: MUST delete every child revision BEFORE deleting the parent skill (no --force in CLI!)
+gcloud alpha agent-registry skills revisions delete rev-2 \
+  --skill=private-workspace-docs-skill \
+  --project=PROJECT_ID --location="${AGENT_REGISTRY_SKILLS_LOCATION}" --quiet
+gcloud alpha agent-registry skills revisions delete rev-1 \
+  --skill=private-workspace-docs-skill \
+  --project=PROJECT_ID --location="${AGENT_REGISTRY_SKILLS_LOCATION}" --quiet
+gcloud alpha agent-registry skills delete private-workspace-docs-skill \
+  --project=PROJECT_ID --location="${AGENT_REGISTRY_SKILLS_LOCATION}" --quiet
 ```
 
 **REST Essentials (`v1`):**
@@ -209,19 +238,19 @@ gcloud agent-registry skills delete private-workspace-docs-skill \
 
 ### Inspecting Scans & Triaging `Finding` Resources (Requires `roles/agentregistry.admin`)
 ```bash
-# Check revision scan state
-gcloud agent-registry skills revisions describe v1 \
-  --skill=private-my-skill --project=PROJECT_ID --location=LOCATION
+# Check revision scan state (`--location=global` for standalone skills)
+gcloud alpha agent-registry skills revisions describe rev-1 \
+  --skill=private-my-skill --project=PROJECT_ID --location=global
 
 # List findings for a revision
-gcloud agent-registry findings list \
-  --project=PROJECT_ID --location=LOCATION \
-  --filter='resource="projects/PROJECT_ID/locations/LOCATION/skills/private-my-skill/revisions/v1"'
+gcloud alpha agent-registry findings list \
+  --project=PROJECT_ID --location=global \
+  --filter='resource="projects/PROJECT_ID/locations/global/skills/private-my-skill/revisions/rev-1"'
 
 # Inspect severity (SEVERITY_{CRITICAL,HIGH,MEDIUM,LOW}), findingClass (VULNERABILITY|SECRET),
 # files[{path, lineNumber (0 = whole file)}], and detail
-gcloud agent-registry findings describe FINDING_ID \
-  --project=PROJECT_ID --location=LOCATION --format=json
+gcloud alpha agent-registry findings describe FINDING_ID \
+  --project=PROJECT_ID --location=global --format=json
 ```
 
 ### Custom Organization Policy Constraint (No Managed Constraint Exists)
@@ -280,17 +309,17 @@ gcloud agent-registry agents search --project=PROJECT_ID --location=REGION \
 gcloud agent-registry mcp-servers search --project=PROJECT_ID --location=REGION \
   --search-string="database"
 
-# Standalone skill keyword search (fields: displayName, description, name, skillId,
-# publisher, frontmatter.*, plus filter-only: state, targetState, defaultRevisionFindingCount)
-gcloud agent-registry skills search --project=PROJECT_ID --location=REGION \
+# Standalone skill keyword search (`gcloud alpha`, `--location=global`; fields: displayName, description, name,
+# skillId, publisher, frontmatter.*, plus filter-only: state, targetState, defaultRevisionFindingCount)
+gcloud alpha agent-registry skills search --project=PROJECT_ID --location=global \
   --query="displayName:cloud-* AND description:database" --search-type=keyword
 
 # Google-managed FIRST_PARTY skills (from github.com/google/skills)
-gcloud agent-registry skills search --project=PROJECT_ID --location=REGION \
+gcloud alpha agent-registry skills search --project=PROJECT_ID --location=global \
   --query="publisher:cloud.google.com" --search-type=keyword
 
 # Standalone skill semantic search (indexes full SKILL.md, scripts & assets of defaultRevision)
-gcloud agent-registry skills search --project=PROJECT_ID --location=REGION \
+gcloud alpha agent-registry skills search --project=PROJECT_ID --location=global \
   --query="manage and configure relational databases" --search-type=semantic
 ```
 
@@ -349,7 +378,7 @@ resource "google_agent_registry_binding" "auth_binding" {
 > **3-Layer Runtime Quota Rule:** Agent Registry rate quotas apply **only** to discovery/management calls. Once resolved, live A2A/MCP traffic consumes target runtime quotas and downstream per-service API/LLM token quotas (govern bursty loops with Secure Web Proxy / Agent Gateway token management policies).
 
 ### Concrete Verification Steps
-1. Register a standalone skill with `--target-state=disabled --scanning-policy=enabled-blocking` and verify `private-SKILL_ID` appears in `gcloud agent-registry skills list`.
-2. Poll `gcloud agent-registry skills revisions describe REV_ID --skill=private-SKILL_ID` until `scanResult.scanState: SUCCEEDED` and `findings` is empty.
-3. Promote to `--target-state=ACTIVE`, verify `gcloud agent-registry skills search --search-type=semantic` returns it, and test `gcloud agent-registry skills revisions download` cleanly extracts `SKILL.md`.
-4. For manual A2A/MCP registrations, confirm `services describe` populates `registryResource` and `agents list` / `mcp-servers list` reflects the read-only resource.
+1. Register a standalone skill in `--location=global` via the 2-step flow: bare `gcloud alpha agent-registry skills create ... --target-state=disabled --scanning-policy=enabled-blocking` (no `--payload`) followed by `gcloud alpha agent-registry skills revisions create rev-1 --skill=private-SKILL_ID --location=global --payload=<zip>`, and verify `private-SKILL_ID` appears in `gcloud alpha agent-registry skills list --location=global`.
+2. Poll `gcloud alpha agent-registry skills revisions describe rev-1 --skill=private-SKILL_ID --location=global` until `scanResult.scanState: SUCCEEDED` and `findings` is empty.
+3. Promote to `--target-state=ACTIVE` with `--default-revision=.../revisions/rev-1`, verify `gcloud alpha agent-registry skills search --location=global --search-type=semantic` returns it, test `gcloud alpha agent-registry skills revisions download rev-1 ...` cleanly extracts `SKILL.md`, and on teardown delete child revisions (`revisions delete`) **before** `skills delete`.
+4. For manual A2A/MCP registrations (in Bangkok `asia-southeast3` default), confirm `services describe` populates `registryResource` and `agents list` / `mcp-servers list` reflects the read-only resource.

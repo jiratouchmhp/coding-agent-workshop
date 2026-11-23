@@ -27,6 +27,7 @@ import json
 import logging
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -244,6 +245,31 @@ def _infer_parent_instance(resource_name: str) -> str:
     return ""
 
 
+def _is_not_found_error(exc: Exception) -> bool:
+    """Return True when an API exception represents HTTP 404 / NOT_FOUND."""
+    code = getattr(exc, "code", None)
+    status_code = getattr(exc, "status_code", None)
+    if code == 404 or status_code == 404:
+        return True
+    msg = str(exc).upper()
+    return "NOT_FOUND" in msg or "404" in msg
+
+
+def _is_transient_delete_precondition_error(exc: Exception) -> bool:
+    """Return True for transient ``FAILED_PRECONDITION`` while child resources finalize."""
+    msg = str(exc).upper()
+    return any(
+        token in msg
+        for token in (
+            "FAILED_PRECONDITION",
+            "IN PROGRESS",
+            "STILL IN USE",
+            "BEING DELETED",
+            "CANNOT BE DELETED",
+        )
+    )
+
+
 # ---------------------------------------------------------------------------
 # Sandbox Lifecycle Manager
 # ---------------------------------------------------------------------------
@@ -377,6 +403,139 @@ class SandboxLifecycleManager:
             "egress_control_config": egress_cfg.to_payload(),
         }
 
+    def _wait_for_delete_operation(
+        self,
+        operation: Any,
+        *,
+        resource_name: str,
+        namespace_obj: Any = None,
+        get_operation_fn: Callable[..., Any] | None = None,
+        get_resource_fn: Callable[..., Any] | None = None,
+        poll_interval_seconds: float = 1.0,
+        timeout_seconds: float = 180.0,
+    ) -> None:
+        """Poll a sandbox/snapshot/template delete LRO until terminal completion."""
+        if operation is None:
+            return
+        if getattr(operation, "done", None) is True:
+            op_err = getattr(operation, "error", None)
+            if op_err:
+                raise RuntimeError(f"Delete operation failed for {resource_name}: {op_err}")
+            return
+
+        op_name = str(getattr(operation, "name", "") or "")
+        if not op_name:
+            return
+
+        api_client = getattr(namespace_obj, "_api_client", None) or getattr(
+            self.sandboxes, "_api_client", None
+        )
+        deadline = time.monotonic() + timeout_seconds
+        use_typed_getter = callable(get_operation_fn)
+
+        while True:
+            done = False
+            op_error: Any = None
+            polled_via_lro = False
+
+            if use_typed_getter and callable(get_operation_fn):
+                try:
+                    polled = get_operation_fn(operation_name=op_name)
+                    done = bool(getattr(polled, "done", False))
+                    op_error = getattr(polled, "error", None)
+                    polled_via_lro = True
+                except Exception as exc:
+                    if _is_not_found_error(exc):
+                        return
+                    # Delete LROs return google.protobuf.Empty in `response`, which
+                    # typed create-operation models can reject on strict validation.
+                    use_typed_getter = False
+                    logger.debug(
+                        "Falling back from typed LRO getter for %s (%s).",
+                        op_name,
+                        exc,
+                    )
+
+            if not polled_via_lro and api_client is not None and callable(getattr(api_client, "request", None)):
+                try:
+                    raw_resp = api_client.request("get", op_name, {}, None)
+                    body = getattr(raw_resp, "body", "") or ""
+                    parsed = json.loads(body) if body else {}
+                    done = bool(parsed.get("done", False))
+                    op_error = parsed.get("error")
+                    polled_via_lro = True
+                except Exception as exc:
+                    if _is_not_found_error(exc):
+                        return
+                    logger.debug("Raw LRO poll failed for %s (%s).", op_name, exc)
+
+            if not polled_via_lro and callable(get_resource_fn):
+                try:
+                    get_resource_fn(name=resource_name)
+                except Exception as exc:
+                    if _is_not_found_error(exc):
+                        return
+                    raise
+
+            if done:
+                if op_error:
+                    raise RuntimeError(f"Delete operation {op_name} failed: {op_error}")
+                return
+
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Timed out after {timeout_seconds:.0f}s waiting for delete LRO "
+                    f"{op_name} ({resource_name})."
+                )
+            time.sleep(poll_interval_seconds)
+
+    def _delete_with_retry(
+        self,
+        delete_fn: Callable[..., Any],
+        *,
+        resource_name: str,
+        resource_kind: str,
+        namespace_obj: Any = None,
+        get_operation_fn: Callable[..., Any] | None = None,
+        get_resource_fn: Callable[..., Any] | None = None,
+        wait_for_completion: bool = True,
+        max_attempts: int = 6,
+        initial_backoff_seconds: float = 2.0,
+        timeout_seconds: float = 180.0,
+    ) -> None:
+        """Delete a resource, polling its LRO and retrying transient ``FAILED_PRECONDITION``."""
+        for attempt in range(1, max_attempts + 1):
+            try:
+                operation = delete_fn(name=resource_name)
+                if wait_for_completion:
+                    self._wait_for_delete_operation(
+                        operation,
+                        resource_name=resource_name,
+                        namespace_obj=namespace_obj,
+                        get_operation_fn=get_operation_fn,
+                        get_resource_fn=get_resource_fn,
+                        timeout_seconds=timeout_seconds,
+                    )
+                return
+            except Exception as exc:
+                if _is_not_found_error(exc):
+                    logger.info("%s already deleted: %s", resource_kind, resource_name)
+                    return
+                if _is_transient_delete_precondition_error(exc) and attempt < max_attempts:
+                    delay = min(initial_backoff_seconds * attempt, 15.0)
+                    logger.info(
+                        "Transient FAILED_PRECONDITION deleting %s %s (attempt %d/%d); "
+                        "retrying in %.1fs while child resources finalize...",
+                        resource_kind,
+                        resource_name,
+                        attempt,
+                        max_attempts,
+                        delay,
+                    )
+                    time.sleep(delay)
+                    continue
+                raise
+
     # -- Template Lifecycle (Create / Get / List / Update / Delete) ----------
 
     def create_template(
@@ -451,7 +610,7 @@ class SandboxLifecycleManager:
         configuration.
         """
         parent = instance_name or self.instance_name or _infer_parent_instance(old_template_name)
-        self.delete_template(old_template_name)
+        self.delete_template(old_template_name, wait_for_completion=True)
         return self.create_template(
             display_name=display_name,
             kind=kind,
@@ -463,9 +622,26 @@ class SandboxLifecycleManager:
             instance_name=parent or None,
         )
 
-    def delete_template(self, template_name: str) -> None:
-        """Delete a ``SandboxEnvironmentTemplate``."""
-        self.sandboxes.templates.delete(name=template_name)
+    def delete_template(
+        self,
+        template_name: str,
+        *,
+        wait_for_completion: bool = True,
+    ) -> None:
+        """Delete a ``SandboxEnvironmentTemplate`` and wait for LRO completion by default."""
+        self._delete_with_retry(
+            self.sandboxes.templates.delete,
+            resource_name=template_name,
+            resource_kind="sandbox template",
+            namespace_obj=self.sandboxes.templates,
+            get_operation_fn=getattr(
+                self.sandboxes.templates,
+                "get_sandbox_environment_template_operation",
+                None,
+            ),
+            get_resource_fn=getattr(self.sandboxes.templates, "get", None),
+            wait_for_completion=wait_for_completion,
+        )
         logger.info("Deleted sandbox template: %s", template_name)
 
     # -- Sandbox Lifecycle (Create / Get / List / Pause / Resume / Snapshot / Delete) --
@@ -598,9 +774,22 @@ class SandboxLifecycleManager:
             f"and display_name {display_name!r} was not found via list_snapshots()."
         )
 
-    def delete_sandbox(self, sandbox_name: str) -> None:
+    def delete_sandbox(
+        self,
+        sandbox_name: str,
+        *,
+        wait_for_completion: bool = True,
+    ) -> None:
         """Delete a sandbox to stop billing (does NOT delete its backing template)."""
-        self.sandboxes.delete(name=sandbox_name)
+        self._delete_with_retry(
+            self.sandboxes.delete,
+            resource_name=sandbox_name,
+            resource_kind="sandbox",
+            namespace_obj=self.sandboxes,
+            get_operation_fn=getattr(self.sandboxes, "_get_sandbox_operation", None),
+            get_resource_fn=getattr(self.sandboxes, "get", None),
+            wait_for_completion=wait_for_completion,
+        )
         logger.info("Deleted sandbox: %s", sandbox_name)
 
     # -- Snapshot Lifecycle (List / Get / Delete) ----------------------------
@@ -617,9 +806,26 @@ class SandboxLifecycleManager:
         resource = self.sandboxes.snapshots.get(name=snapshot_name)
         return _summarize_snapshot(resource)
 
-    def delete_snapshot(self, snapshot_name: str) -> None:
+    def delete_snapshot(
+        self,
+        snapshot_name: str,
+        *,
+        wait_for_completion: bool = True,
+    ) -> None:
         """Delete a ``SandboxEnvironmentSnapshot`` prior to its TTL expiration."""
-        self.sandboxes.snapshots.delete(name=snapshot_name)
+        self._delete_with_retry(
+            self.sandboxes.snapshots.delete,
+            resource_name=snapshot_name,
+            resource_kind="snapshot",
+            namespace_obj=self.sandboxes.snapshots,
+            get_operation_fn=getattr(
+                self.sandboxes.snapshots,
+                "get_sandbox_snapshot_operation",
+                None,
+            ),
+            get_resource_fn=getattr(self.sandboxes.snapshots, "get", None),
+            wait_for_completion=wait_for_completion,
+        )
         logger.info("Deleted snapshot: %s", snapshot_name)
 
     # -- End-to-End Lifecycle Demo & Cleanup ---------------------------------
@@ -738,22 +944,23 @@ class SandboxLifecycleManager:
                 )
         finally:
             if not keep_resources:
+                # Delete strictly sequentially with LRO completion: sandboxes -> snapshots -> templates
                 for sb in (branched, sandbox):
                     if sb is not None:
                         try:
-                            self.delete_sandbox(sb.name)
+                            self.delete_sandbox(sb.name, wait_for_completion=True)
                             report["steps"].append({"step": "delete_sandbox", "name": sb.name})
                         except Exception as exc:
                             logger.warning("Cleanup delete_sandbox(%s) failed: %s", sb.name, exc)
                 if snapshot is not None:
                     try:
-                        self.delete_snapshot(snapshot.name)
+                        self.delete_snapshot(snapshot.name, wait_for_completion=True)
                         report["steps"].append({"step": "delete_snapshot", "name": snapshot.name})
                     except Exception as exc:
                         logger.warning("Cleanup delete_snapshot(%s) failed: %s", snapshot.name, exc)
                 if template is not None:
                     try:
-                        self.delete_template(template.name)
+                        self.delete_template(template.name, wait_for_completion=True)
                         report["steps"].append({"step": "delete_template", "name": template.name})
                     except Exception as exc:
                         logger.warning("Cleanup delete_template(%s) failed: %s", template.name, exc)
@@ -761,17 +968,17 @@ class SandboxLifecycleManager:
         return report
 
     def cleanup_all(self, *, include_templates: bool = False) -> dict[str, int]:
-        """Delete all sandboxes and snapshots (and optionally templates) under this instance."""
+        """Delete all sandboxes and snapshots (and optionally templates) sequentially."""
         deleted = {"sandboxes": 0, "snapshots": 0, "templates": 0}
         for sb in self.list_sandboxes():
-            self.delete_sandbox(sb.name)
+            self.delete_sandbox(sb.name, wait_for_completion=True)
             deleted["sandboxes"] += 1
         for snap in self.list_snapshots():
-            self.delete_snapshot(snap.name)
+            self.delete_snapshot(snap.name, wait_for_completion=True)
             deleted["snapshots"] += 1
         if include_templates:
             for tpl in self.list_templates():
-                self.delete_template(tpl.name)
+                self.delete_template(tpl.name, wait_for_completion=True)
                 deleted["templates"] += 1
         return deleted
 

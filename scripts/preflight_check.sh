@@ -6,8 +6,10 @@
 #   ./scripts/preflight_check.sh [--offline] [--env-file PATH]
 #
 # Validates local developer toolchain, Zero-Docker readiness, regional config
-# (Bangkok asia-southeast3 primary + Singapore asia-southeast1 Agent Platform +
-# us-central1 Skill Registry + global Eval), and (when online) gcloud auth,
+# (Bangkok asia-southeast3 first — falling back to Singapore asia-southeast1
+# only for Agent Platform services not yet in Bangkok, global for Agent
+# Registry standalone skills & Eval, and us-central1 for Vertex AI Skill
+# Registry), and (when online) gcloud auth, gcloud alpha availability,
 # Application Default Credentials (ADC), production project guardrails, and
 # required enabled GCP APIs.
 # =============================================================================
@@ -168,6 +170,12 @@ else
   warn "tar not found on PATH (needed for 'make pack-agent-source')."
 fi
 
+if command -v agents-cli >/dev/null 2>&1; then
+  pass "agents-cli detected ($(command -v agents-cli)) — optional for Labs 1-6"
+else
+  info "agents-cli not found on PATH (optional for Labs 1-6; install anytime with: uvx google-agents-cli setup)"
+fi
+
 # -----------------------------------------------------------------------------
 # 2. Environment File (.env) & Regional Sanity Checks
 # -----------------------------------------------------------------------------
@@ -210,29 +218,35 @@ BUILD_LOC="${BUILD_LOCATION:-${PRIMARY_REG}}"
 GKE_LOC="${GKE_LOCATION:-${PRIMARY_REG}}"
 AGENT_PLATFORM_LOC="${GOOGLE_CLOUD_LOCATION:-}"
 AGENT_REG_LOC="${AGENT_REGISTRY_LOCATION:-${PRIMARY_REG}}"
+AGENT_REG_SKILLS_LOC="${AGENT_REGISTRY_SKILLS_LOCATION:-global}"
 SKILL_REG_LOC="${SKILL_REGISTRY_LOCATION:-us-central1}"
 EVAL_LOC="${EVAL_LOCATION:-global}"
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-}"
 
-# Bangkok primary check
+# Bangkok-first default region check
 if [[ "${PRIMARY_REG}" == "asia-southeast3" ]]; then
-  pass "PRIMARY_REGION=${PRIMARY_REG} (Bangkok primary for Cloud Build, Artifact Registry, Agent Registry, Secret Manager, and Lab 8 GKE)"
+  pass "PRIMARY_REGION=${PRIMARY_REG} (Bangkok first — Cloud Build, Artifact Registry, Secret Manager, Agent Registry A2A/MCP, and Lab 8 GKE)"
 else
   info "PRIMARY_REGION=${PRIMARY_REG} (workshop default is Bangkok 'asia-southeast3')"
 fi
-info "Secondary/derived regional targets: AR_LOCATION=${AR_LOC}, BUILD_LOCATION=${BUILD_LOC}, AGENT_REGISTRY_LOCATION=${AGENT_REG_LOC}, GKE_LOCATION=${GKE_LOC}"
+info "Bangkok-first regional targets: AR_LOCATION=${AR_LOC} (verified for Singapore Runtime & BYOC Sandbox pulls), BUILD_LOCATION=${BUILD_LOC}, AGENT_REGISTRY_LOCATION=${AGENT_REG_LOC} (A2A/MCP), GKE_LOCATION=${GKE_LOC}"
+if [[ "${AGENT_REG_SKILLS_LOC}" == "global" ]]; then
+  pass "AGENT_REGISTRY_SKILLS_LOCATION=${AGENT_REG_SKILLS_LOC} (required fallback for 'gcloud alpha agent-registry skills' & ADK GCPSkillRegistry; AGENT_REGISTRY_LOCATION=${AGENT_REG_LOC} stays in Bangkok for A2A/MCP)"
+else
+  warn "AGENT_REGISTRY_SKILLS_LOCATION=${AGENT_REG_SKILLS_LOC} (recommended: 'global' — standalone Agent Registry skills are not yet supported in asia-southeast3)"
+fi
 
-# Agent Platform location check (Singapore asia-southeast1 secondary for Bangkok primary)
+# Agent Platform location check (Singapore asia-southeast1 fallback for services not yet available in Bangkok)
 if [[ -z "${AGENT_PLATFORM_LOC}" ]]; then
-  fail "GOOGLE_CLOUD_LOCATION is unset. Set GOOGLE_CLOUD_LOCATION=asia-southeast1 (Singapore — nearest supported Agent Platform region for Bangkok primary)."
+  fail "GOOGLE_CLOUD_LOCATION is unset. Set GOOGLE_CLOUD_LOCATION=asia-southeast1 (Singapore — nearest fallback for Agent Platform services not yet available in Bangkok)."
 elif [[ "${AGENT_PLATFORM_LOC}" == "asia-southeast3" ]]; then
-  fail "GOOGLE_CLOUD_LOCATION=asia-southeast3 is NOT yet supported for Agent Runtime / Managed Sandboxes. Keep PRIMARY_REGION=asia-southeast3 (Bangkok) and set GOOGLE_CLOUD_LOCATION=asia-southeast1 (Singapore)."
+  fail "GOOGLE_CLOUD_LOCATION=asia-southeast3 is NOT yet supported for Agent Runtime / Managed Sandboxes. Keep PRIMARY_REGION=asia-southeast3 (Bangkok) and fall back to GOOGLE_CLOUD_LOCATION=asia-southeast1 (Singapore)."
 elif [[ "${AGENT_PLATFORM_LOC}" == "asia-southeast2" || "${AGENT_PLATFORM_LOC}" == "australia-southeast2" || "${AGENT_PLATFORM_LOC}" == "northamerica-northeast2" ]]; then
-  fail "GOOGLE_CLOUD_LOCATION=${AGENT_PLATFORM_LOC} does NOT support Memory Bank (Lab 3). Use asia-southeast1 (Singapore), us-central1, or europe-west4."
+  fail "GOOGLE_CLOUD_LOCATION=${AGENT_PLATFORM_LOC} does NOT support Memory Bank (Lab 3). Fall back to asia-southeast1 (Singapore), us-central1, or europe-west4."
 elif [[ "${AGENT_PLATFORM_LOC}" == "global" ]]; then
   fail "GOOGLE_CLOUD_LOCATION=global does NOT support Agent Runtime deployment or CMEK. Set GOOGLE_CLOUD_LOCATION=asia-southeast1 (and keep EVAL_LOCATION=global)."
 elif [[ "${AGENT_PLATFORM_LOC}" == "asia-southeast1" ]]; then
-  pass "GOOGLE_CLOUD_LOCATION=${AGENT_PLATFORM_LOC} (Singapore — nearest supported Agent Platform region: Runtime, Sandboxes, Sessions, Memory Bank, Agent Gateway, Gemini 2.5 Flash)"
+  pass "GOOGLE_CLOUD_LOCATION=${AGENT_PLATFORM_LOC} (Singapore fallback for services not yet in Bangkok: Agent Runtime, Managed Sandboxes, Sessions, Memory Bank, Agent Gateway, Gemini 2.5 Flash)"
 else
   pass "GOOGLE_CLOUD_LOCATION=${AGENT_PLATFORM_LOC} (Agent Platform regional endpoint)"
 fi
@@ -310,6 +324,13 @@ else
   else
     GCLOUD_VER="$(gcloud version 2>/dev/null | head -n 1 || echo "gcloud")"
     pass "gcloud CLI detected (${GCLOUD_VER})"
+
+    if CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills --help </dev/null >/dev/null 2>&1; then
+      pass "gcloud alpha component available (supports 'gcloud alpha agent-registry skills' for Lab 4/6/7)"
+    else
+      warn "gcloud alpha component (or 'gcloud alpha agent-registry skills') is unavailable — needed for Lab 4/6/7 standalone Agent Registry skills."
+      info "Install or update with: gcloud components install alpha && gcloud components update"
+    fi
 
     ACTIVE_ACCT="$(gcloud auth list --filter='status:ACTIVE' --format='value(account)' 2>/dev/null | head -n 1 || true)"
     if [[ -n "${ACTIVE_ACCT}" ]]; then

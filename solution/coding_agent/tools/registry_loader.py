@@ -479,8 +479,10 @@ class SkillRegistryPublisher:
         description: str,
         local_path: str | Path,
     ) -> Any:
-        """Create a skill from a local directory (auto-zipped) or pre-validated ``.zip``.
+        """Create a skill from a validated local skill directory (``SKILL.md`` at root).
 
+        Vertex AI Skill Registry (``agentplatform.Client.skills.create``) zips the
+        validated skill directory directly and rejects ``.zip`` file paths.
         Handles both ``google-cloud-aiplatform >= 1.154.0`` (top-level ``skill_id=`` arg)
         and ``< 1.154.0`` (``skill_id`` nested inside ``config={}``).
         """
@@ -488,6 +490,12 @@ class SkillRegistryPublisher:
         resolved = Path(local_path).resolve()
         if not resolved.exists():
             raise FileNotFoundError(f"Skill path does not exist: {resolved}")
+        if not resolved.is_dir():
+            raise ValueError(
+                "Vertex AI Skill Registry `local_path` must be a skill directory containing "
+                f"`SKILL.md` at the directory root (not a `.zip` archive or file): {resolved}. "
+                "The `agentplatform` SDK zips the validated skill directory directly."
+            )
 
         try:
             return self.client.skills.create(
@@ -512,7 +520,12 @@ class SkillRegistryPublisher:
         description: str | None = None,
         local_path: str | Path | None = None,
     ) -> Any:
-        """Update an existing skill's metadata and/or upload a new skill payload revision."""
+        """Update an existing skill's metadata and/or upload a new skill directory revision.
+
+        When ``local_path`` is supplied, it must be a validated skill directory
+        (``SKILL.md`` at directory root); ``agentplatform`` zips the directory directly
+        and rejects ``.zip`` archives.
+        """
         validate_skill_id(skill_id)
         config: dict[str, Any] = {}
         if display_name is not None:
@@ -523,6 +536,12 @@ class SkillRegistryPublisher:
             resolved = Path(local_path).resolve()
             if not resolved.exists():
                 raise FileNotFoundError(f"Skill path does not exist: {resolved}")
+            if not resolved.is_dir():
+                raise ValueError(
+                    "Vertex AI Skill Registry `local_path` must be a skill directory containing "
+                    f"`SKILL.md` at the directory root (not a `.zip` archive or file): {resolved}. "
+                    "The `agentplatform` SDK zips the validated skill directory directly."
+                )
             config["local_path"] = str(resolved)
         if not config:
             raise ValueError("Specify at least one of display_name, description, or local_path.")

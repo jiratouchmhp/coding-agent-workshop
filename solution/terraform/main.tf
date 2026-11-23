@@ -151,6 +151,10 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
   project      = var.project_id
   region       = var.location
 
+  # Allow `terraform destroy` and `make cleanup` to tear down the engine cleanly
+  # after live attendee sessions or Memory Bank memories are created.
+  deletion_policy = "FORCE"
+
   spec {
     agent_framework = "google-adk"
 
@@ -250,9 +254,13 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
         value = local.resolved_sandbox_mode
       }
 
-      env {
-        name  = "SANDBOX_TEMPLATE_NAME"
-        value = var.sandbox_template_name
+      # Vertex AI rejects empty env var values with HTTP 400 (`Required field is not set`).
+      dynamic "env" {
+        for_each = var.sandbox_template_name != "" ? [1] : []
+        content {
+          name  = "SANDBOX_TEMPLATE_NAME"
+          value = var.sandbox_template_name
+        }
       }
 
       env {
@@ -270,14 +278,28 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
         value = tostring(var.enable_skill_registry)
       }
 
-      env {
-        name  = "SKILL_REGISTRY_LOCATION"
-        value = var.skill_registry_location
+      dynamic "env" {
+        for_each = var.skill_registry_location != "" ? [1] : []
+        content {
+          name  = "SKILL_REGISTRY_LOCATION"
+          value = var.skill_registry_location
+        }
       }
 
-      env {
-        name  = "AGENT_REGISTRY_LOCATION"
-        value = var.agent_registry_location
+      dynamic "env" {
+        for_each = var.agent_registry_location != "" ? [1] : []
+        content {
+          name  = "AGENT_REGISTRY_LOCATION"
+          value = var.agent_registry_location
+        }
+      }
+
+      dynamic "env" {
+        for_each = var.agent_registry_skills_location != "" ? [1] : []
+        content {
+          name  = "AGENT_REGISTRY_SKILLS_LOCATION"
+          value = var.agent_registry_skills_location
+        }
       }
 
       secret_env {

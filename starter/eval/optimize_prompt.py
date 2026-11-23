@@ -7,8 +7,8 @@ Core Lab 6 exercises (see ``workshop/06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md``):
    for human review.
 2. ``publish_updated_skill()``: Close the skill loop with zero container rebuild — re-validate
    all 16 atomic Skill Registry rules via ``scripts/package_registry_skill.py`` and hot-update
-   Vertex AI Skill Registry via ``client.skills.update(...)`` (or promote an immutable
-   Agent Registry ``v2`` revision).
+   Vertex AI Skill Registry via ``client.skills.update(...)`` passing the validated skill
+   directory path (or promote an immutable Agent Registry ``rev-2`` revision).
 
 Setup helpers (``fetch_negative_feedback()``, ``_attach_local_skill_for_gepa()``,
 ``build_adk_sampler_and_optimizer()``) are pre-filled so you can focus on the core
@@ -140,7 +140,7 @@ def fetch_negative_feedback(
 
     entries = list(
         client.feedback_entries.list(
-            name=runtime_name,
+            parent=runtime_name,
             config={
                 "filter": 'feedback_type="THUMBS_DOWN"',
                 "order_by": "create_time desc",
@@ -428,11 +428,13 @@ def publish_updated_skill(
     # 1. Resolve defaults via `_read_skill_metadata(skill_dir)` and run
     #    `scripts/package_registry_skill.py <skill_dir>` via `subprocess.run(...)`
     #    (`--dry-run` when `dry_run=True`, else `--output dist/<skill_id>.zip`), failing fast
-    #    if any of the 16 atomic rules fail.
+    #    if any of the 16 atomic rules fail (and producing the `.zip` for Agent Registry CLI).
     # 2. When `not dry_run`, set `os.environ["GOOGLE_GENAI_USE_ENTERPRISE"] = "TRUE"`,
     #    initialize `agentplatform.Client(project=project_id, location=skill_location)`, and call:
     #      `client.skills.update(name=f"projects/{project_id}/locations/{skill_location}/skills/{skill_id}",`
-    #      `config={"display_name": ..., "description": ..., "local_path": str(zip_path)})`
+    #      `config={"display_name": ..., "description": ..., "local_path": str(skill_dir.resolve())})`
+    #    IMPORTANT: Pass the validated skill directory (`str(skill_dir.resolve())`), NEVER `str(zip_path)` —
+    #    `agentplatform` zips the directory directly and raises `ValueError: Path is not a directory` on `.zip`.
     #    Updating the skill in Skill Registry takes effect with ZERO agent container rebuild!
     raise NotImplementedError(
         f"TODO(lab-6): Validate {skill_dir} and hot-update Skill Registry skill "
@@ -446,7 +448,7 @@ def _build_reference_commands(
     project_id: str,
     location: str,
     skill_location: str,
-    agent_registry_location: str,
+    agent_registry_skills_location: str = "global",
     runtime_name: str,
     skill_id: str,
 ) -> dict[str, Any]:
@@ -456,6 +458,7 @@ def _build_reference_commands(
         or f"projects/{proj}/locations/{location}/reasoningEngines/ENGINE_ID"
     )
     private_skill_id = skill_id if skill_id.startswith("private-") else f"private-{skill_id}"
+    skills_loc_expr = f"${{AGENT_REGISTRY_SKILLS_LOCATION:-{agent_registry_skills_location}}}"
     return {
         "working_directory": f"{track_name}/",
         "adk_optimize_cli": (
@@ -491,20 +494,48 @@ def _build_reference_commands(
             f"uv run python eval/optimize_prompt.py --publish-skill "
             f"--skill-dir skills_to_register/{skill_id} --skill-id {skill_id}"
         ),
-        "agent_registry_revision_create_v2": (
-            f"gcloud agent-registry skills revisions create v2 "
+        "agent_registry_skill_create": (
+            f"gcloud alpha agent-registry skills create {skill_id} "
+            f'--project={proj} --location="{skills_loc_expr}"'
+        ),
+        "agent_registry_revision_create_rev1": (
+            f"gcloud alpha agent-registry skills revisions create rev-1 "
             f"--skill={private_skill_id} --project={proj} "
-            f"--location={agent_registry_location} --payload=\"../dist/{skill_id}.zip\""
+            f'--location="{skills_loc_expr}" --payload="../dist/{skill_id}.zip"'
         ),
-        "agent_registry_revision_promote_v2": (
-            f"gcloud agent-registry skills update {private_skill_id} "
-            f"--project={proj} --location={agent_registry_location} "
-            f'--default-revision="projects/{proj}/locations/{agent_registry_location}/skills/{private_skill_id}/revisions/v2"'
+        "agent_registry_revision_create_rev2": (
+            f"gcloud alpha agent-registry skills revisions create rev-2 "
+            f"--skill={private_skill_id} --project={proj} "
+            f'--location="{skills_loc_expr}" --payload="../dist/{skill_id}.zip"'
         ),
-        "agent_registry_revision_rollback_v1": (
-            f"gcloud agent-registry skills update {private_skill_id} "
-            f"--project={proj} --location={agent_registry_location} "
-            f'--default-revision="projects/{proj}/locations/{agent_registry_location}/skills/{private_skill_id}/revisions/v1"'
+        "agent_registry_revision_describe_rev2": (
+            f"gcloud alpha agent-registry skills revisions describe rev-2 "
+            f"--skill={private_skill_id} --project={proj} "
+            f'--location="{skills_loc_expr}"'
+        ),
+        "agent_registry_scan_policy_note": (
+            "Under ENABLED_BLOCKING, promoting --default-revision fails with "
+            "FAILED_PRECONDITION until `revisions describe` shows "
+            "`scanResult.scanState: SUCCEEDED` (or pass "
+            "`--scanning-policy=enabled-nonblocking` when creating a rapid workshop demo skill)."
+        ),
+        "agent_registry_revision_promote_rev2": (
+            f"gcloud alpha agent-registry skills update {private_skill_id} "
+            f'--project={proj} --location="{skills_loc_expr}" '
+            f'--default-revision="projects/{proj}/locations/{skills_loc_expr}/skills/{private_skill_id}/revisions/rev-2"'
+        ),
+        "agent_registry_revision_rollback_rev1": (
+            f"gcloud alpha agent-registry skills update {private_skill_id} "
+            f'--project={proj} --location="{skills_loc_expr}" '
+            f'--default-revision="projects/{proj}/locations/{skills_loc_expr}/skills/{private_skill_id}/revisions/rev-1"'
+        ),
+        "agent_registry_cleanup": (
+            f"gcloud alpha agent-registry skills revisions delete rev-2 "
+            f'--skill={private_skill_id} --project={proj} --location="{skills_loc_expr}" --quiet && '
+            f"gcloud alpha agent-registry skills revisions delete rev-1 "
+            f'--skill={private_skill_id} --project={proj} --location="{skills_loc_expr}" --quiet && '
+            f"gcloud alpha agent-registry skills delete {private_skill_id} "
+            f'--project={proj} --location="{skills_loc_expr}" --quiet'
         ),
     }
 
@@ -548,7 +579,7 @@ def main(argv: list[str] | None = None) -> int:
     project_id = args.project or settings.google_cloud_project
     location = args.location or settings.google_cloud_location
     skill_location = settings.skill_registry_location or "us-central1"
-    agent_registry_location = settings.agent_registry_location or "asia-southeast3"
+    agent_registry_skills_location = settings.agent_registry_skills_location or "global"
     runtime_name = settings.reasoning_engine_name or os.environ.get("REASONING_ENGINE_NAME", "")
 
     sampler_path = (
@@ -591,7 +622,7 @@ def main(argv: list[str] | None = None) -> int:
         project_id=project_id,
         location=location,
         skill_location=skill_location,
-        agent_registry_location=agent_registry_location,
+        agent_registry_skills_location=agent_registry_skills_location,
         runtime_name=runtime_name,
         skill_id=args.skill_id,
     )

@@ -139,12 +139,15 @@ def parse_frontmatter(text: str) -> tuple[str, dict[str, Any], str]:
 
     try:
         import yaml  # type: ignore[import-untyped]
-
-        parsed = yaml.safe_load(raw_yaml)
-        if not isinstance(parsed, dict):
-            raise ValueError("YAML frontmatter must deserialize to a key-value mapping.")
     except ImportError:
         parsed = _parse_yaml_frontmatter_fallback(raw_yaml)
+    else:
+        try:
+            parsed = yaml.safe_load(raw_yaml)
+        except yaml.YAMLError as exc:
+            raise ValueError(f"Malformed YAML frontmatter: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise TypeError("YAML frontmatter must deserialize to a key-value mapping.")
 
     return raw_yaml, parsed, body
 
@@ -235,7 +238,7 @@ def validate_skill_dir(
     # 2. YAML frontmatter + Markdown body check
     try:
         raw_yaml, frontmatter, body = parse_frontmatter(text)
-    except Exception as exc:
+    except (ValueError, TypeError) as exc:
         report.errors.append(f"Invalid YAML frontmatter: {exc}")
         return report
 

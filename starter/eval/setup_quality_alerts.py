@@ -2,8 +2,10 @@
 
 Core Lab 6 exercise (see ``workshop/06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md``):
 - ``build_alert_policy_dict()``: Construct a Cloud Monitoring ``AlertPolicy`` dictionary
-  targeting ``aiplatform.googleapis.com/online_evaluator/scores`` with
-  ``COMPARISON_LT``, ``ALIGN_MEAN``, and ``ConditionCombinerType.OR``.
+  targeting ``resource.type="aiplatform.googleapis.com/OnlineEvaluator"`` and
+  ``aiplatform.googleapis.com/online_evaluator/scores`` (DELTA, DISTRIBUTION) with
+  ``COMPARISON_LT``, ``ALIGN_PERCENTILE_50`` (or ``ALIGN_DELTA`` + ``REDUCE_PERCENTILE_50``),
+  and ``ConditionCombinerType.OR``.
 
 Policy submission via ``google.cloud.monitoring_v3.AlertPolicyServiceClient``
 (``create_alert_policy()``) is pre-filled so you can focus on the policy structure.
@@ -27,6 +29,7 @@ from coding_agent.config import get_settings  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
+ONLINE_EVAL_RESOURCE_TYPE = "aiplatform.googleapis.com/OnlineEvaluator"
 ONLINE_EVAL_SCORES_METRIC = "aiplatform.googleapis.com/online_evaluator/scores"
 
 
@@ -37,7 +40,10 @@ def build_metric_filter(
     runtime_revision_id: str | None = None,
 ) -> str:
     """Build a Cloud Monitoring filter expression for ``online_evaluator/scores``."""
-    clauses = [f'metric.type="{ONLINE_EVAL_SCORES_METRIC}"']
+    clauses = [
+        f'resource.type="{ONLINE_EVAL_RESOURCE_TYPE}"',
+        f'metric.type="{ONLINE_EVAL_SCORES_METRIC}"',
+    ]
     if metric_name:
         clauses.append(f'metric.labels.evaluation_metric_name="{metric_name}"')
     if agent_resource_name:
@@ -60,8 +66,10 @@ def build_alert_policy_dict(
 ) -> dict[str, Any]:
     """Construct a ``google.cloud.monitoring_v3`` alert policy dict."""
     # TODO(lab-6): Build the AlertPolicy dictionary using `monitoring_v3.ComparisonType.COMPARISON_LT`,
-    # `monitoring_v3.Aggregation.Aligner.ALIGN_MEAN`, and
-    # `monitoring_v3.AlertPolicy.ConditionCombinerType.OR` (with string fallbacks if
+    # `monitoring_v3.Aggregation.Aligner.ALIGN_PERCENTILE_50` (note: `online_evaluator/scores`
+    # has kind=DELTA and value_type=DISTRIBUTION, so Cloud Monitoring rejects `ALIGN_MEAN` with
+    # HTTP 400; an alternative is `ALIGN_DELTA` + `cross_series_reducer=REDUCE_PERCENTILE_50`),
+    # and `monitoring_v3.AlertPolicy.ConditionCombinerType.OR` (with string fallbacks if
     # `google.cloud.monitoring_v3` is not imported during dry-run).
     # Use `build_metric_filter(...)`, `threshold_value=threshold`,
     # `duration={"seconds": duration_seconds}`, `alignment_period={"seconds": alignment_period_seconds}`,
@@ -103,7 +111,8 @@ def render_gcloud_policy_yaml(
         f"    duration: {duration_seconds}s",
         "    aggregations:",
         f"    - alignmentPeriod: {alignment_period_seconds}s",
-        "      perSeriesAligner: ALIGN_MEAN",
+        "      # DELTA/DISTRIBUTION metric: use ALIGN_PERCENTILE_50 (or ALIGN_DELTA + REDUCE_PERCENTILE_50)",
+        "      perSeriesAligner: ALIGN_PERCENTILE_50",
         "combiner: OR",
         "enabled: true",
     ]

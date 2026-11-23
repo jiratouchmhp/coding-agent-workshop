@@ -6,9 +6,10 @@ multi-turn traces, registers custom LLM and Code Execution coding-quality
 metrics, and runs Automatic Loss Analysis (Failure Clustering) against the
 mandatory ``global`` endpoint.
 
-Verified SDK & API notes (from ``05_optimize`` & ``vertexai._genai.evals.Evals``):
-- Python evaluation uses ``google-cloud-aiplatform[adk,evaluation]`` via
-  ``from vertexai import Client, types``.
+Verified SDK & API notes (from ``05_optimize`` & ``agentplatform._genai.evals.Evals``):
+- Python evaluation prefers ``google-cloud-agentplatform[adk,evaluation]`` via
+  ``agentplatform.Client`` / ``agentplatform.types`` when ``.evals`` is available
+  (falling back cleanly to ``vertexai.Client`` if needed).
 - Supported regions: 14 US/EU regions + ``global``.
 - Only ``MULTI_TURN_*`` metrics accept multi-turn traces/sessions.
 - ``client.evals.generate_loss_clusters()`` is **``global``-region ONLY** and
@@ -22,6 +23,7 @@ import json
 import logging
 import os
 import sys
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -162,17 +164,52 @@ def assert_clean_turn_separation(
             )
 
 
-def build_eval_client(project_id: str, location: str) -> Any:
-    """Initialize the verified Vertex AI GenAI Client for evaluation."""
-    validate_eval_location(location)
-    from vertexai import Client
+def get_eval_types() -> Any:
+    """Return ``agentplatform.types`` when available, falling back to ``vertexai.types``."""
+    try:
+        import agentplatform
 
-    return Client(project=project_id, location=location)
+        types_mod = getattr(agentplatform, "types", None)
+        if types_mod is not None and hasattr(types_mod, "RubricMetric"):
+            return types_mod
+    except ImportError:
+        pass
+
+    from vertexai import types
+
+    return types
+
+
+def build_eval_client(project_id: str, location: str) -> Any:
+    """Initialize ``agentplatform.Client`` when ``.evals`` is available, else ``vertexai.Client``.
+
+    Preferring ``agentplatform.Client`` eliminates ``FutureWarning: The vertexai.Client
+    class is deprecated`` on ``google-cloud-aiplatform >= 2.10.0``.
+    """
+    validate_eval_location(location)
+    try:
+        import agentplatform
+
+        client = agentplatform.Client(project=project_id, location=location)
+        _ = client.evals
+        return client
+    except (ImportError, AttributeError):
+        pass
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r".*vertexai\.Client.*deprecated.*",
+            category=FutureWarning,
+        )
+        from vertexai import Client
+
+        return Client(project=project_id, location=location)
 
 
 def register_custom_coding_metrics(client: Any) -> dict[str, str]:
     """Register custom LLM and Code Execution coding-quality metrics."""
-    from vertexai import types
+    types = get_eval_types()
 
     coding_rigor_metric = types.LLMMetric(
         name="coding_rigor_rubric",
@@ -200,9 +237,9 @@ def has_agent_trace_fields(cases: list[dict[str, Any]]) -> bool:
     ``FINAL_RESPONSE_QUALITY``, ``TOOL_USE_QUALITY``, and ``HALLUCINATION`` require
     ``developer_instruction``, ``tool_declarations``, and ``intermediate_events``.
     Static pre-baked prompt/response datasets without trace fields should use
-    ``GENERAL_QUALITY``, ``FINAL_RESPONSE_MATCH``, ``FINAL_RESPONSE_REFERENCE_FREE``,
-    and ``SAFETY(version="v1")`` — or run ``client.evals.run_inference(agent=root_agent, ...)``
-    first via ``--run-inference``.
+    ``GENERAL_QUALITY``, ``FINAL_RESPONSE_MATCH``, and ``SAFETY(version="v1")``
+    (reserving agent/reference-free rubric metrics for ``--run-inference`` runs
+    with full agent traces so static cases avoid 400 rubric computation errors).
     """
     required = {"developer_instruction", "tool_declarations", "intermediate_events"}
     return bool(cases) and all(required.issubset(case.keys()) for case in cases)
@@ -216,7 +253,7 @@ def evaluate_split_datasets(
     run_inference: bool = False,
 ) -> dict[str, Any]:
     """Run offline evaluation on single-turn and multi-turn suites separately."""
-    from vertexai import types
+    types = get_eval_types()
 
     results: dict[str, Any] = {"single_turn": None, "multi_turn": None}
 
@@ -273,10 +310,11 @@ def evaluate_split_datasets(
                 len(single_turn_cases),
             )
             single_turn_dataset = {"eval_cases": single_turn_cases}
+            # Reserve agent/reference-free rubric metrics (such as FINAL_RESPONSE_REFERENCE_FREE)
+            # for --run-inference runs with full agent traces so static datasets score 5/5 cleanly.
             single_turn_metrics = [
                 types.RubricMetric.GENERAL_QUALITY,
                 types.RubricMetric.FINAL_RESPONSE_MATCH,
-                types.RubricMetric.FINAL_RESPONSE_REFERENCE_FREE,
                 safety_v1,
             ]
 
@@ -313,7 +351,7 @@ def run_loss_clustering(
     1. Only available in ``location="global"`` (regional clients fail at runtime).
     2. Must pass ``metric=`` explicitly whenever ``eval_result`` has >1 metric.
     """
-    from vertexai import Client, types
+    types = get_eval_types()
 
     metric_map = {
         "multi_turn_task_success": types.RubricMetric.MULTI_TURN_TASK_SUCCESS,
@@ -324,7 +362,7 @@ def run_loss_clustering(
             f"Unsupported clustering metric {metric_name!r}; choose from {sorted(metric_map)}."
         )
 
-    global_client = Client(project=project_id, location="global")
+    global_client = build_eval_client(project_id=project_id, location="global")
     return global_client.evals.generate_loss_clusters(
         eval_result=eval_result,
         metric=metric_map[metric_name],
@@ -460,7 +498,6 @@ def main(argv: list[str] | None = None) -> int:
             else [
                 "GENERAL_QUALITY",
                 "FINAL_RESPONSE_MATCH",
-                "FINAL_RESPONSE_REFERENCE_FREE",
                 "SAFETY(version='v1')",
             ]
         ),

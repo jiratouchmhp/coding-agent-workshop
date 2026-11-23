@@ -6,11 +6,12 @@
 #   make TRACK=solution eval-offline
 #   make verify-lab LAB=1
 #
-# Regional defaults (Bangkok Primary + Singapore Agent Platform):
-#   PRIMARY_REGION / BUILD_LOCATION / AR_LOCATION / AGENT_REGISTRY_LOCATION = asia-southeast3
-#   GOOGLE_CLOUD_LOCATION (Agent Runtime, Sandboxes, Sessions, Memory Bank)  = asia-southeast1
-#   SKILL_REGISTRY_LOCATION                                                  = us-central1
-#   EVAL_LOCATION                                                            = global
+# Regional defaults (Bangkok first; fall back to Singapore / global / us-central1 only where required):
+#   PRIMARY_REGION / BUILD_LOCATION / AR_LOCATION / AGENT_REGISTRY_LOCATION = asia-southeast3 (Bangkok)
+#   GOOGLE_CLOUD_LOCATION (Agent Runtime, Sandboxes, Sessions, Memory Bank)  = asia-southeast1 (Singapore fallback)
+#   AGENT_REGISTRY_SKILLS_LOCATION (gcloud alpha agent-registry skills)      = global
+#   SKILL_REGISTRY_LOCATION (Vertex AI Skill Registry preview)               = us-central1
+#   EVAL_LOCATION (Gen AI Evaluation Service + loss clustering)              = global
 #
 # Zero-Docker First-Class Path:
 #   make test-sandbox-local && make push-sandbox        (Lab 2 — Cloud Build)
@@ -81,9 +82,11 @@ endef
 export _TEST_SANDBOX_LOCAL_PY
 
 define _TEST_AGENT_LOCAL_PY
+import http.client
 import json
 import urllib.request
 
+# 1. GET / -> HTTP 200 {"status":"ok"}
 with urllib.request.urlopen("http://127.0.0.1:18082/", timeout=5) as resp:
     assert resp.status == 200, f"Expected HTTP 200 from GET /, got {resp.status}"
     raw = resp.read().decode("utf-8")
@@ -92,6 +95,39 @@ with urllib.request.urlopen("http://127.0.0.1:18082/", timeout=5) as resp:
     print(
         f"[PASS] GET http://127.0.0.1:18082/ -> 200 "
         f"({json.dumps(payload, separators=(',', ':'))})"
+    )
+
+# 2. POST /api/reasoning_engine with BOTH `Content-Type: application/json` AND
+#    raw JSON bodies without `application/json` (mirrors Agent Runtime :query proxy
+#    and catches FastAPI 0.163+ strict content-type body-parsing regressions locally).
+query_body = json.dumps(
+    {"class_method": "list_sessions", "input": {"user_id": "local-smoke"}}
+).encode("utf-8")
+
+for label, headers in (
+    ("Content-Type: application/json", {"Content-Type": "application/json"}),
+    ("raw JSON without Content-Type header", {}),
+    ("raw JSON with Content-Type: text/plain", {"Content-Type": "text/plain"}),
+):
+    conn = http.client.HTTPConnection("127.0.0.1", 18082, timeout=30)
+    try:
+        conn.request("POST", "/api/reasoning_engine", body=query_body, headers=headers)
+        resp = conn.getresponse()
+        resp_body = resp.read().decode("utf-8", errors="replace")
+    finally:
+        conn.close()
+    assert resp.status == 200, (
+        f"POST /api/reasoning_engine ({label}) returned HTTP {resp.status} "
+        f"(expected 200; HTTP 422 indicates FastAPI strict content-type regression "
+        f"on QueryRequest — parse raw JSON via `request: Request`): {resp_body}"
+    )
+    parsed = json.loads(resp_body)
+    assert "output" in parsed, (
+        f"POST /api/reasoning_engine ({label}) missing 'output' key: {parsed!r}"
+    )
+    print(
+        f"[PASS] POST http://127.0.0.1:18082/api/reasoning_engine ({label}) -> 200 "
+        f"(keys={sorted(parsed.keys())})"
     )
 endef
 export _TEST_AGENT_LOCAL_PY
@@ -166,11 +202,13 @@ lint: ## Run ruff check and python3 -m py_compile across starter/, solution/, an
 	find starter solution scripts -name '*.py' -not -path '*/.venv/*' -print0 | xargs -0 env PYTHONPYCACHEPREFIX="$$PYCACHE_TMP" $(PYTHON) -m py_compile
 	@echo "==> Running ruff linter..."
 	@if command -v ruff >/dev/null 2>&1; then \
-		ruff check starter solution scripts; \
+		ruff check --config starter/pyproject.toml starter solution scripts; \
 	elif [ -x starter/.venv/bin/ruff ]; then \
-		starter/.venv/bin/ruff check starter solution scripts; \
+		starter/.venv/bin/ruff check --config starter/pyproject.toml starter solution scripts; \
+	elif [ -x solution/.venv/bin/ruff ]; then \
+		solution/.venv/bin/ruff check --config solution/pyproject.toml starter solution scripts; \
 	elif command -v uv >/dev/null 2>&1; then \
-		uv --directory starter run ruff check ../starter ../solution ../scripts; \
+		uv --directory starter run ruff check --config pyproject.toml ../starter ../solution ../scripts; \
 	else \
 		echo "WARNING: ruff not found on PATH; run 'make install' or 'make install-pip' to install dev tools."; \
 	fi
@@ -251,11 +289,16 @@ package-skill: ## Lab 4: Validate all 16 atomic Skill Registry rules and build s
 	@echo "==> Validating and packaging $(SKILL_DIR) -> $(SKILL_ZIP_OUT)..."
 	$(PYTHON) scripts/package_registry_skill.py "$(SKILL_DIR)" --output "$(SKILL_ZIP_OUT)"
 
-test-agent-local: ## Lab 5 (Zero-Docker): Smoke-test FastAPI Agent Runtime server (GET / -> 200)
+test-agent-local: ## Lab 5 (Zero-Docker): Smoke-test FastAPI Agent Runtime (GET / + POST /api/reasoning_engine)
 	@set -euo pipefail; \
 	AGENT_LOG=$$(mktemp); \
 	( \
 		cd "$(TRACK)"; \
+		unset GOOGLE_CLOUD_AGENT_ENGINE_ID REASONING_ENGINE_NAME REASONING_ENGINE_ID; \
+		export PYTHONDONTWRITEBYTECODE=1 \
+			SANDBOX_MODE=local \
+			ENABLE_MEMORY_BANK=false \
+			ENABLE_SKILL_REGISTRY=false; \
 		if command -v uv >/dev/null 2>&1 && ( [ -d .venv ] || uv run python -c "import uvicorn, fastapi" >/dev/null 2>&1 ); then \
 			exec uv run uvicorn main:app --host 127.0.0.1 --port 18082; \
 		elif [ -x .venv/bin/uvicorn ]; then \
@@ -296,7 +339,11 @@ test-agent-local: ## Lab 5 (Zero-Docker): Smoke-test FastAPI Agent Runtime serve
 		cat "$${AGENT_LOG}" >&2; \
 		exit 1; \
 	fi; \
-	$(PYTHON) - <<< "$$_TEST_AGENT_LOCAL_PY"
+	if ! $(PYTHON) - <<< "$$_TEST_AGENT_LOCAL_PY"; then \
+		echo "--- FastAPI uvicorn log ($(TRACK)/main.py) ---" >&2; \
+		cat "$${AGENT_LOG}" >&2; \
+		exit 1; \
+	fi
 
 pack-agent-source: ## Lab 5 (Zero-Docker & Zero-AR): Build source_code_spec tarball with level-0 Dockerfile
 	@set -euo pipefail; \

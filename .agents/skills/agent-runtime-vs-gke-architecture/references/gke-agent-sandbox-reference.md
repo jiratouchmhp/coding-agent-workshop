@@ -240,7 +240,7 @@ agent = LlmAgent(
 export PROJECT_ID=$(gcloud config get project)
 export PROJECT_NUMBER=$(gcloud projects describe "${PROJECT_ID}" --format="value(projectNumber)")
 export CLUSTER_NAME="agent-sandbox-cluster"
-export GKE_LOCATION="${GKE_LOCATION:-asia-southeast3}"  # Bangkok primary (Thailand PDPA / BoT compute residency)
+export GKE_LOCATION="${GKE_LOCATION:-asia-southeast3}"  # Bangkok default (Thailand PDPA / BoT compute residency)
 export ZONE="${ZONE:-asia-southeast3-a}"
 export SNAPSHOTS_BUCKET_NAME="agent-sandbox-snapshots-${PROJECT_ID}"
 export SNAPSHOT_NAMESPACE="pod-snapshots-ns"

@@ -25,7 +25,7 @@ Production reference for evaluating agents before production rollout or on histo
 - **Europe (7):** `europe-central2`, `europe-north1`, `europe-southwest1`, `europe-west1`, `europe-west4`, `europe-west8`, `europe-west9`
 - **Global (1):** `global` *(default endpoint for `agents-cli eval run/grade/submit`; required for `generate_loss_clusters` and `eval analyze`)*
 
-> **APAC Multi-Region Rule (`EVAL_LOCATION=global` vs. `GOOGLE_CLOUD_LOCATION=asia-southeast1`):** Gen AI Evaluation Service has **no regional APAC endpoints** (only the 14 US/EU regions + `global`). APAC teams running Agent Runtime, Managed Sandboxes, and Gemini models in **Singapore (`GOOGLE_CLOUD_LOCATION=asia-southeast1`)** (with primary infrastructure in Bangkok `asia-southeast3`) **must decouple `EVAL_LOCATION=global` from `GOOGLE_CLOUD_LOCATION=asia-southeast1`**. Initializing `vertexai.Client(project=..., location=EVAL_LOCATION)` with `location="global"` prevents `400 FAILED_PRECONDITION: Unsupported region` errors **and** allows both `client.evals.evaluate(...)` (plus scenario synthesis/simulation) **and** `client.evals.generate_loss_clusters(...)` (`global`-only) to succeed cleanly on the same client.
+> **Bangkok-First Regional Fallback Rule (`EVAL_LOCATION=global` vs. `GOOGLE_CLOUD_LOCATION=asia-southeast1`):** Aim for **Bangkok (`asia-southeast3`)** first wherever supported; fall back to **Singapore (`GOOGLE_CLOUD_LOCATION=asia-southeast1`)** only for Agent Runtime / Managed Sandboxes / Gemini (not yet launched in Bangkok), and decouple **`EVAL_LOCATION=global`** because Gen AI Evaluation Service has **no regional APAC endpoints** (only the 14 US/EU regions + `global`). Initializing **`agentplatform.Client(project=..., location="global")`** prevents `400 FAILED_PRECONDITION: Unsupported region` errors **and** allows both `client.evals.evaluate(...)` (plus scenario synthesis/simulation) **and** `client.evals.generate_loss_clusters(...)` (`global`-only) to succeed cleanly on the same client.
 
 > **Unsupported Region Error & Data-Residency Fallback:** Passing any other region (including `asia-southeast1` or `asia-southeast3`) fails with `400 FAILED_PRECONDITION: Unsupported region for Vertex Evaluation Service: <region>`. When strict in-country data residency prohibits using `global` or a US/EU evaluation endpoint, grade in-process via `agents-cli eval` local custom metrics (`custom_function`, default `execution: local`) — your Python function can call a compliant regional Gemini endpoint directly as a judge.
 
@@ -94,22 +94,25 @@ Four metric categories are supported across Console, SDK, and `agents-cli`:
 
 ## 4. Python SDK Workflow (`vertexai._genai.evals.Evals`, `google-cloud-aiplatform>=1.153.1`)
 
-> **SDK Naming & Interface Warning:** Evaluation docs refer to the **"Agent Platform SDK"** in prose, yet **every evaluation Python workflow installs `google-cloud-aiplatform[adk,evaluation]` and imports `from vertexai import Client, evals, types`** (uppercase `Client`). The GenAI Client (`Preview`) supersedes legacy GA `from vertexai.evaluation import EvalTask` (which lacks adaptive rubrics). Always pass **`dataset=`** to `client.evals.evaluate(...)` — ignore the `traces=` typo in high-level overview docs.
+> **SDK Migration & Static Dataset Metric Selection (`google-cloud-agentplatform==2.10.0`):**
+> 1. **`agentplatform.Client` Replaces `vertexai.Client`:** On `google-cloud-aiplatform==2.10.0` / `google-cloud-agentplatform==2.10.0`, `vertexai.Client(...)` emits `FutureWarning: The vertexai.Client class is deprecated. Please use agentplatform.Client instead.` Prefer **`agentplatform.Client(project=..., location=EVAL_LOCATION)`** (falling back to `vertexai.Client` only on older builds) alongside `from vertexai import types`. Always pass **`dataset=`** to `client.evals.evaluate(...)` — ignore the `traces=` typo in high-level overview docs.
+> 2. **Static Single-Turn Dataset Metric Selection:** For static prompt/response datasets without live agent traces or pre-generated `rubric_groups`, grade cleanly with **`GENERAL_QUALITY`**, **`FINAL_RESPONSE_MATCH`**, and **`SAFETY(version="v1")`**. Avoid applying `FINAL_RESPONSE_REFERENCE_FREE` to static cases lacking explicit `rubric_groups`, where the evaluator can return `400 INVALID_ARGUMENT: Rubric results could not be reliably computed`. Reserve `FINAL_RESPONSE_QUALITY`, `TOOL_USE_QUALITY`, and `HALLUCINATION` for trace-populated single-turn runs.
 
 ### Core Offline Evaluation, Rubric Generation, Batch Runs & Metric Registry CRUD
 
 ```python
-# pip install "google-cloud-aiplatform[adk,evaluation]"
+# pip install "google-cloud-agentplatform>=2.10.0" "google-cloud-aiplatform[adk,evaluation]"
 import os
-from vertexai import Client, types
+import agentplatform
+from vertexai import types
 
 PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "YOUR_PROJECT_ID")
-# Agent Runtime region: Singapore (asia-southeast1) — nearest supported Agent Platform region
+# Agent Runtime region: Singapore fallback (asia-southeast1 — not yet launched in Bangkok asia-southeast3)
 RUNTIME_LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION", "asia-southeast1")
-# Decouple Eval client location from APAC runtime region: `global` supports both evaluate() AND generate_loss_clusters()
+# Decouple Eval client location: `global` supports both evaluate() AND generate_loss_clusters()
 EVAL_LOCATION = os.environ.get("EVAL_LOCATION", "global")
 
-client = Client(project=PROJECT_ID, location=EVAL_LOCATION)
+client = agentplatform.Client(project=PROJECT_ID, location=EVAL_LOCATION)
 
 # 1. Synchronous offline evaluation (verified signature: dataset=, NOT traces=)
 result = client.evals.evaluate(

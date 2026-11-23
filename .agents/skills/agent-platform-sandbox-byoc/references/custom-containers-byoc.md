@@ -59,8 +59,11 @@ RUN groupadd --gid 1000 appuser \
     && mkdir -p /workspace /opt/sandbox_runner \
     && chown -R appuser:appuser /workspace /home/appuser
 
-# Mount runner read-only (root:root 0644) so untrusted commands cannot tamper with it
-COPY --chown=root:root --chmod=0644 runner.py /opt/sandbox_runner/runner.py
+# Mount runner read-only (root:root 0644) so untrusted commands cannot tamper with it.
+# CRITICAL: Do NOT use `COPY --chmod=0644` — Cloud Build (`gcloud builds submit --tag=...`)
+# runs the legacy Docker builder without BuildKit and fails with `the --chmod option requires BuildKit`.
+COPY --chown=root:root runner.py /opt/sandbox_runner/runner.py
+RUN chmod 0644 /opt/sandbox_runner/runner.py
 
 USER appuser
 WORKDIR /workspace
@@ -85,7 +88,7 @@ ENTRYPOINT ["python3", "/opt/sandbox_runner/runner.py"]
 
 ## 2. Artifact Registry, Vulnerability Scanning & Service Agent IAM
 
-> **APAC Multi-Region Topology (Bangkok Primary + Singapore Sandbox):** Managed Scale Sandboxes and Agent Runtime are live in **Singapore (`asia-southeast1`)** and are not yet available in **Bangkok (`asia-southeast3`)**. APAC teams using Bangkok as their primary region pair **`BUILD_LOCATION=asia-southeast3`** (remote Cloud Build) and **`AR_LOCATION=asia-southeast3`** (Artifact Registry in Bangkok) with **`GOOGLE_CLOUD_LOCATION=asia-southeast1`** (Managed Sandbox in Singapore). If strict same-region image pulls are preferred for startup latency or egress policy, host or mirror the Artifact Registry repository in `asia-southeast1` (`AR_LOCATION=asia-southeast1`).
+> **Bangkok-First Regional Strategy (`asia-southeast3` Default -> `asia-southeast1` Fallback Only Where Unavailable):** Aim for **Bangkok (`asia-southeast3`)** first for Cloud Build (`BUILD_LOCATION=asia-southeast3`) and Artifact Registry (`AR_LOCATION=asia-southeast3`). Fall back to **Singapore (`GOOGLE_CLOUD_LOCATION=asia-southeast1`)** only because Managed Scale Sandboxes and Agent Runtime are not yet launched in Bangkok. **Empirically verified:** Singapore BYOC Sandboxes pull cleanly from Bangkok Artifact Registry (`asia-southeast3-docker.pkg.dev`) — **no second Singapore AR repository is required**.
 
 ### Step 1: Create Artifact Registry Repo (Optional CMEK on AR Repo)
 
@@ -94,9 +97,9 @@ ENTRYPOINT ["python3", "/opt/sandbox_runner/runner.py"]
 ```bash
 export PROJECT_ID="YOUR_PROJECT_ID"
 export PROJECT_NUMBER="$(gcloud projects describe "${PROJECT_ID}" --format='value(projectNumber)')"
-export PRIMARY_REGION="${PRIMARY_REGION:-asia-southeast3}"               # Bangkok primary region
-export GOOGLE_CLOUD_LOCATION="${GOOGLE_CLOUD_LOCATION:-asia-southeast1}" # Singapore (nearest supported Agent Platform / Sandbox region)
-export AR_LOCATION="${AR_LOCATION:-${PRIMARY_REGION}}"                   # Bangkok primary AR (or asia-southeast1 for same-region pull)
+export PRIMARY_REGION="${PRIMARY_REGION:-asia-southeast3}"               # Bangkok default region
+export GOOGLE_CLOUD_LOCATION="${GOOGLE_CLOUD_LOCATION:-asia-southeast1}" # Singapore fallback (Managed Sandboxes not yet in Bangkok)
+export AR_LOCATION="${AR_LOCATION:-${PRIMARY_REGION}}"                   # Bangkok AR (empirically verified with SG BYOC Sandboxes!)
 export BUILD_LOCATION="${BUILD_LOCATION:-${PRIMARY_REGION}}"             # Bangkok remote Cloud Build (zero local Docker)
 export REPO_NAME="coding-agent-repo"
 
@@ -139,21 +142,21 @@ data "google_project" "current" {
 
 resource "google_artifact_registry_repository_iam_member" "sandbox_pull_reader" {
   project    = var.project_id
-  location   = var.ar_location # Default "asia-southeast3" (Bangkok primary AR; or "asia-southeast1" for same-region pull)
+  location   = var.ar_location # Default "asia-southeast3" (Bangkok AR — empirically verified with SG BYOC Sandboxes!)
   repository = var.artifact_registry_repo
   role       = "roles/artifactregistry.reader"
   member     = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-vertex-sandbox.iam.gserviceaccount.com"
 }
 ```
 
-### Step 3: Build, Push & Scan the BYOC Image (Zero-Docker Primary Path)
+### Step 3: Build, Push & Scan the BYOC Image (Zero-Docker Default Path)
 
-Use **Cloud Build (`gcloud builds submit --region=...`)** as the **primary zero-Docker path** — no local Docker daemon is required, and Cloud Build compiles `linux/amd64` images directly in your target build region (matching sandbox CPU architecture for snapshot compatibility). Local `docker build` / `docker push` is strictly optional. For rapid prototyping without building any image, use Managed Shell Sandbox (`SANDBOX_MODE=shell`) as a zero-build fast-track.
+Use **Cloud Build (`gcloud builds submit --region=...`)** as the **default zero-Docker path** — no local Docker daemon is required, and Cloud Build compiles `linux/amd64` images directly in Bangkok (`asia-southeast3`) matching sandbox CPU architecture for snapshot compatibility. Note that `gcloud builds submit --tag=...` runs Cloud Build's legacy Docker builder without BuildKit, so always use `COPY --chown=root:root` + `RUN chmod 0644` instead of `COPY --chmod=0644`. Local `docker build` / `docker push` is strictly optional. For rapid prototyping without building any image, use Managed Shell Sandbox (`SANDBOX_MODE=shell`) as a zero-build fast-track.
 
 ```bash
 export IMAGE_URI="${AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/coding-sandbox:v1"
 
-# Primary (Zero-Docker): Remote Cloud Build (e.g., BUILD_LOCATION=asia-southeast3 in Bangkok)
+# Default (Zero-Docker): Remote Cloud Build in Bangkok (BUILD_LOCATION=asia-southeast3 -> AR_LOCATION=asia-southeast3)
 gcloud builds submit ./sandbox_image \
     --region="${BUILD_LOCATION}" \
     --tag="${IMAGE_URI}" \
@@ -179,9 +182,9 @@ import os
 import agentplatform
 
 PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "YOUR_PROJECT_ID")
-# Managed Sandbox region: Singapore (asia-southeast1) — nearest supported Agent Platform region
+# Managed Sandbox region: Singapore fallback (asia-southeast1 — not yet launched in Bangkok asia-southeast3)
 SANDBOX_LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION", "asia-southeast1")
-# Artifact Registry region: Bangkok primary (asia-southeast3), or asia-southeast1 for same-region pull
+# Artifact Registry region: Bangkok default (asia-southeast3 — empirically verified pulling into SG BYOC Sandboxes!)
 AR_LOCATION = os.environ.get("AR_LOCATION", "asia-southeast3")
 IMAGE_URI = f"{AR_LOCATION}-docker.pkg.dev/{PROJECT_ID}/coding-agent-repo/coding-sandbox:v1"
 
@@ -248,7 +251,8 @@ Templates do **not** have a documented SDK in-place update method:
 
 | Symptom / Error | Root Cause | Fix |
 |---|---|---|
-| Image pull `PERMISSION_DENIED` / `403` during template or sandbox creation | `roles/artifactregistry.reader` granted to `gcp-sa-aiplatform-re` instead of `gcp-sa-vertex-sandbox`, wrong project number, or IAM bound in wrong `AR_LOCATION` | Bind `roles/artifactregistry.reader` on the AR repo in `${AR_LOCATION}` (e.g., `asia-southeast3` or `asia-southeast1`) to `service-PROJECT_NUMBER@gcp-sa-vertex-sandbox.iam.gserviceaccount.com`. |
+| `the --chmod option requires BuildKit` during `gcloud builds submit --tag=...` | Cloud Build's `--tag` shorthand invokes the legacy Docker builder without BuildKit enabled | Replace `COPY --chown=root:root --chmod=0644 ...` with `COPY --chown=root:root ...` followed by `RUN chmod 0644 ...`. |
+| Image pull `PERMISSION_DENIED` / `403` during template or sandbox creation | `roles/artifactregistry.reader` granted to `gcp-sa-aiplatform-re` instead of `gcp-sa-vertex-sandbox`, wrong project number, or IAM bound in wrong `AR_LOCATION` | Bind `roles/artifactregistry.reader` on the AR repo in `${AR_LOCATION}` (e.g., Bangkok `asia-southeast3`, verified working with Singapore BYOC Sandboxes) to `service-PROJECT_NUMBER@gcp-sa-vertex-sandbox.iam.gserviceaccount.com`. |
 | Sandbox reaches `STATE_TERMINATED` immediately on startup | Container entrypoint requires `root`, `sudo`, privileged syscalls blocked by gVisor, or crashes on missing env vars | Smoke-test `runner.py` locally with pure Python first (zero Docker), and optionally run `docker run --rm --cap-drop=ALL --security-opt=no-new-privileges`; verify `USER appuser` and read-only runner permissions. |
 | API rejects `custom_container_environment` or `egress_control_config` fields | Client initialized without `v1beta1` | Pass `http_options={"api_version": "v1beta1"}` to `agentplatform.Client(...)`. |
 | First cold-start sandbox takes >30 seconds | Initial cold provisioning of unprovisioned capacity takes up to **2 minutes** | Reuse one `SandboxEnvironmentTemplate` so pre-warmed pools serve subsequent sandboxes in seconds. |

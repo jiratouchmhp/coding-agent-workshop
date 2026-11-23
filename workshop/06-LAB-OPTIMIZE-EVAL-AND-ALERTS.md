@@ -17,7 +17,7 @@ By the end of this lab, you will close the production quality flywheel for your 
 3. **Run 2-Step Simulated User Evaluations** (`starter/eval/run_simulated_eval.py` and `agents-cli eval dataset synthesize`) to stress-test multi-turn debugging, tool errors, and prompt-injection refusal personas before touching production traffic.
 4. **Diagnose Failure Clusters** using **Automatic Loss Analysis** in the Cloud Console (`view-results`), `vertexai.evals` (`client.evals.generate_loss_clusters`), and `agents-cli eval analyze` across the official 13-pattern Task Success and Tool Use taxonomies.
 5. **Configure Online Evaluation Monitors & Quality Alerts** (`starter/eval/setup_online_monitor.py` and `starter/eval/setup_quality_alerts.py` via `google.cloud.monitoring_v3` and `gcloud monitoring policies create`) to catch production quality drift automatically.
-6. **Close the Dual-Track Optimization Flywheel** (`starter/eval/optimize_prompt.py`, `adk optimize`, `agents-cli eval optimize`, and Example Store): promote **root prompt fixes** with a **canary traffic split** (`v1beta1` `trafficSplitManual`), and close the **domain skill loop** with **zero agent container rebuild** by hot-updating Vertex AI Skill Registry (`client.skills.update`) or promoting an immutable **Agent Registry `v2` skill revision** (`--default-revision`).
+6. **Close the Dual-Track Optimization Flywheel** (`starter/eval/optimize_prompt.py`, `adk optimize`, `agents-cli eval optimize`, and Example Store): promote **root prompt fixes** with a **canary traffic split** (`v1beta1` `trafficSplitManual`), and close the **domain skill loop** with **zero agent container rebuild** by hot-updating Vertex AI Skill Registry (`client.skills.update` with a skill directory path) or promoting an immutable **Agent Registry `rev-2` skill revision** (`gcloud alpha agent-registry skills update ... --default-revision` in `global`, with 1-command rollback to `rev-1`).
 
 ---
 
@@ -69,7 +69,7 @@ flowchart LR
         Clusters["Failure Clusters<br/>(generate_loss_clusters / eval analyze)"]
         Opt["Prompt & Skill Optimization<br/>(GEPA / SimplePromptOptimizer /<br/>agents-cli eval optimize / Example Store)"]
         Canary["Track A — Root Prompt:<br/>Rebuild + Canary Rollout<br/>(eval compare -> trafficSplitManual)"]
-        SkillHot["Track B — Domain Skills (ZERO Redeploy):<br/>Re-validate 16 ZIP Checks -> Skill Registry<br/>client.skills.update / Agent Registry v2 Rev"]
+        SkillHot["Track B — Domain Skills (ZERO Redeploy):<br/>Re-validate 16 ZIP Checks -> Skill Registry<br/>client.skills.update (DIR) / Agent Registry rev-2 (global)"]
     end
 
     Agent -->|"Spans + Events"| Trace
@@ -117,21 +117,21 @@ cd starter && uv sync
 ```
 
 > [!IMPORTANT]
-> **APAC Regional Pairing — `EVAL_LOCATION=global` + `GOOGLE_CLOUD_LOCATION=asia-southeast1` (Singapore):**
-> Managed Gen AI Evaluation Service currently supports **14 US/EU regions + `global`**:
+> **Bangkok-First Regional Strategy — Why Eval Uses `EVAL_LOCATION=global` & Runtime Falls Back to `asia-southeast1`:**
+> We default to **Bangkok (`asia-southeast3`)** wherever supported, fall back to **Singapore (`asia-southeast1`)** only for Agent Platform Runtime/Sandboxes (not yet launched in Bangkok), and use **`global`** here because Managed Gen AI Evaluation Service supports **14 US/EU regions + `global`**:
 > - **US (7):** `us-central1`, `us-east1`, `us-east4`, `us-east5`, `us-south1`, `us-west1`, `us-west4`
 > - **Europe (7):** `europe-central2`, `europe-north1`, `europe-southwest1`, `europe-west1`, `europe-west4`, `europe-west8`, `europe-west9`
-> - **Global (1):** **`global`** *(default for this workshop's APAC Bangkok/Singapore cohorts AND for `agents-cli eval run/grade/submit`; `generate_loss_clusters` / `agents-cli eval analyze` are **`global`-only**!)*
+> - **Global (1):** **`global`** *(GCP-mandated APAC-ready location AND default for `agents-cli eval run/grade/submit`; `generate_loss_clusters` / `agents-cli eval analyze` are **`global`-only**!)*
 >
 > Calling the evaluation service with `asia-southeast1` or `asia-southeast3` returns `400 FAILED_PRECONDITION: Unsupported region for Vertex Evaluation Service`. Keeping **`EVAL_LOCATION=global`** alongside **`GOOGLE_CLOUD_LOCATION=asia-southeast1`** in `.env` means:
-> 1. Offline eval (`make eval-offline`), 2-step simulated user eval (`make eval-simulated`), and `generate_loss_clusters` all work seamlessly from Bangkok/Singapore in the **same `global` client** with zero `Unsupported region` errors!
-> 2. `setup_online_monitor.py --verify-runtime` inspects your deployed `ReasoningEngine` in **`GOOGLE_CLOUD_LOCATION=asia-southeast1`** (Singapore) while validating evaluation configuration against **`EVAL_LOCATION=global`** — avoiding both "Unsupported region" and "ReasoningEngine not found in global" errors.
+> 1. Offline eval (`make eval-offline`), 2-step simulated user eval (`make eval-simulated`), and `generate_loss_clusters` all work seamlessly from APAC in the **same `global` client** with zero `Unsupported region` errors!
+> 2. `setup_online_monitor.py --verify-runtime` inspects your deployed `ReasoningEngine` in **`GOOGLE_CLOUD_LOCATION=asia-southeast1`** (Singapore fallback) while validating evaluation configuration against **`EVAL_LOCATION=global`** — avoiding both "Unsupported region" and "ReasoningEngine not found in global" errors.
 >
 > *(If your organization has strict regional data residency outside these 14 regions + `global`, run local custom Python metrics — `custom_function`, `execution: local` — in `agents-cli eval` to grade in-process.)*
 
 > [!NOTE]
-> **SDK Namespace Transparency (`vertexai` vs. `agentplatform`):**
-> Although official documentation prose refers to the "Agent Platform SDK," all published Python evaluation snippets currently use **`google-cloud-aiplatform[adk,evaluation]`** with `from vertexai import Client, evals, types` (not `import agentplatform`). Meanwhile, runtime management, sandboxes, sessions, memory bank, and feedback use `agentplatform.Client` (`google-cloud-agentplatform>=2.0.1`). Our [`starter/eval/`](../starter/eval/) scripts follow this verified split explicitly.
+> **SDK Namespace Migration (`agentplatform.Client` vs. `vertexai.Client`):**
+> On `google-cloud-agentplatform==2.10.0` / `google-cloud-aiplatform==2.10.0`, instantiating legacy `vertexai.Client(...)` emits `FutureWarning: The vertexai.Client class is deprecated. Please use agentplatform.Client instead.` Prefer **`agentplatform.Client(project=..., location="global")`** (with a clean fallback to `vertexai.Client` only on older builds) for evaluation, runtime management, sandboxes, sessions, memory bank, and feedback alike.
 
 ---
 
@@ -248,13 +248,14 @@ Therefore, our 8 coding-agent evaluation cases are **explicitly split** into two
 - **[`starter/eval/datasets/coding_agent_eval.jsonl`](../starter/eval/datasets/coding_agent_eval.jsonl)**: Combined 8-case JSONL dataset automatically partitioned by `run_offline_eval.py --jsonl-dataset` into single-turn vs. multi-turn suites before calling the API.
 - **[`starter/eval/eval_config.yaml`](../starter/eval/eval_config.yaml)**: Declarative `agents-cli eval --config` configuration selecting metrics and custom criteria cleanly.
 
-Open [`starter/eval/run_offline_eval.py`](../starter/eval/run_offline_eval.py). Setup helpers **`build_eval_client()`** (initializing `vertexai.Client` targeting `EVAL_LOCATION`, default **`global`** for Bangkok/Singapore cohorts — APAC-ready and compatible with `generate_loss_clusters` in the same client; US/EU cohorts can alternatively use `us-central1` or `europe-west4`) and **`register_custom_coding_metrics()`** (registering custom LLM metric `coding_rigor_rubric` via `types.LLMMetric` and custom Code metric `multi_turn_has_turns` via `types.CodeExecutionMetric`) are **pre-filled** out of the box (shown below for reference). Complete the **2 `# TODO(lab-6)` functions** in **`evaluate_split_datasets()`** and **`run_loss_clustering()`**:
+Open [`starter/eval/run_offline_eval.py`](../starter/eval/run_offline_eval.py). Setup helpers **`build_eval_client()`** (initializing `agentplatform.Client` — with fallback to `vertexai.Client` — targeting `EVAL_LOCATION`, default **`global`**, which is APAC-ready and compatible with `generate_loss_clusters` in the same client; US/EU cohorts can alternatively use `us-central1` or `europe-west4`) and **`register_custom_coding_metrics()`** (registering custom LLM metric `coding_rigor_rubric` via `types.LLMMetric` and custom Code metric `multi_turn_has_turns` via `types.CodeExecutionMetric`) are **pre-filled** out of the box (shown below for reference). Complete the **2 `# TODO(lab-6)` functions** in **`evaluate_split_datasets()`** and **`run_loss_clustering()`**:
 
-1. *(Pre-filled helper reference — `build_eval_client()` & `register_custom_coding_metrics()`)* **Initialize `vertexai.Client` and register custom LLM (`types.LLMMetric`) / Code (`types.CodeExecutionMetric`) metrics via `client.evals.create_evaluation_metric(...)`:**
+1. *(Pre-filled helper reference — `build_eval_client()` & `register_custom_coding_metrics()`)* **Initialize `agentplatform.Client` (avoiding the `vertexai.Client` `FutureWarning`) and register custom LLM (`types.LLMMetric`) / Code (`types.CodeExecutionMetric`) metrics via `client.evals.create_evaluation_metric(...)`:**
    ```python
-   from vertexai import Client, types
+   import agentplatform
+   from vertexai import types
 
-   client = Client(project=project_id, location=location)
+   client = agentplatform.Client(project=project_id, location=location)
 
    coding_rigor_metric = types.LLMMetric(
        name="coding_rigor_rubric",
@@ -286,7 +287,10 @@ Open [`starter/eval/run_offline_eval.py`](../starter/eval/run_offline_eval.py). 
    )
    code_metric_path = client.evals.create_evaluation_metric(metric=verify_turns_metric)
    ```
-2. **Implement `# TODO(lab-6)` in `evaluate_split_datasets()` and `run_loss_clustering()`:** Run `client.evals.evaluate(...)` separately for single-turn and multi-turn datasets using the 4 predefined single-turn metrics with `SAFETY(version="v1")` pinned (when running live trace inference via `--run-inference` or trace-populated cases; static prompt/response datasets fall back to `GENERAL_QUALITY`, `FINAL_RESPONSE_MATCH`, `FINAL_RESPONSE_REFERENCE_FREE`, and `SAFETY(version="v1")`) plus the 3 `multi_turn_*` metrics for multi-turn session datasets, and wire `run_loss_clustering()` (`location="global"`) for failure clustering in Part 4:
+2. **Implement `# TODO(lab-6)` in `evaluate_split_datasets()` and `run_loss_clustering()`:** Run `client.evals.evaluate(...)` separately for single-turn and multi-turn datasets:
+   - **Live trace inference (`--run-inference` or trace-populated cases):** Use the 4 predefined agent metrics (`FINAL_RESPONSE_QUALITY`, `TOOL_USE_QUALITY`, `HALLUCINATION`, `SAFETY(version="v1")`).
+   - **Static prompt/response single-turn datasets (default offline check):** Use the clean static metric set **`GENERAL_QUALITY`**, **`FINAL_RESPONSE_MATCH`**, and **`SAFETY(version="v1")`** — avoid running `FINAL_RESPONSE_REFERENCE_FREE` on static cases lacking pre-generated `rubric_groups` (such as `sandbox_command_execution`), where the evaluator can return `400 INVALID_ARGUMENT: Rubric results could not be reliably computed`.
+   - **Multi-turn session datasets:** Use strictly the 3 `multi_turn_*` metrics (`MULTI_TURN_TASK_SUCCESS`, `MULTI_TURN_TOOL_USE_QUALITY`, `MULTI_TURN_TRAJECTORY_QUALITY`), and wire `run_loss_clustering()` (`location="global"`) for failure clustering in Part 4:
    ```python
    eval_result = client.evals.evaluate(
        dataset=eval_dataset,
@@ -380,10 +384,11 @@ The **2-Step User Simulation** workflow solves this:
 Open [`starter/eval/run_simulated_eval.py`](../starter/eval/run_simulated_eval.py) and complete the **2 `# TODO(lab-6)` functions** (`generate_scenarios()` and `run_user_simulation()`; downstream `grade_simulated_traces()` and `cluster_simulation_failures()` helpers are **pre-filled**):
 
 ```python
-from vertexai import Client, types
+import agentplatform
+from vertexai import types
 from coding_agent.agent import root_agent
 
-client = Client(project=project_id, location=location)
+client = agentplatform.Client(project=project_id, location=location)
 
 # Step 1: Extract AgentInfo and synthesize multi-turn coding/adversarial personas
 agent_info = types.evals.AgentInfo.load_from_agent(agent=root_agent)
@@ -475,13 +480,14 @@ Raw aggregate averages hide systemic engineering bugs (for example, a 0.78 Task 
 In `starter/eval/run_offline_eval.py` (`# TODO(lab-6)` in `run_loss_clustering()`) — and already pre-filled in `starter/eval/run_simulated_eval.py` (`cluster_simulation_failures()`) — Automatic Loss Analysis runs over your evaluation result using a **`global`** client and an explicit **`metric=`**:
 
 ```python
-from vertexai import Client, types
+import agentplatform
+from vertexai import types
 
 # Interactive summary table + expandable per-case rubric verdicts (Colab/Jupyter)
 sim_eval_result.show()
 
 # Automatic Loss Analysis MUST use location="global" AND an explicit metric= for multi-metric results
-global_client = Client(project=project_id, location="global")
+global_client = agentplatform.Client(project=project_id, location="global")
 loss_clusters = global_client.evals.generate_loss_clusters(
     eval_result=sim_eval_result,
     metric=types.RubricMetric.MULTI_TURN_TASK_SUCCESS,  # Or MULTI_TURN_TOOL_USE_QUALITY
@@ -516,7 +522,7 @@ Automatic Loss Analysis classifies failures into two verified 13-pattern taxonom
 | Low `multi_turn_trajectory_quality` | Clarify tool ordering and eliminate redundant `ReadFile` / `Execute` loops. |
 | Low `multi_turn_tool_use_quality` (`Incorrect Parameter Mapping`, `Omission of Required Tool Call`) | Rewrite tool docstrings & parameter schemas; set `tool_config` (`mode="ANY"`) if thinking mode skips required tool calls. |
 | Low `hallucination` (`Hallucination of Missing Information`) | Constrain instructions to cite only verified tool outputs; check whether sandbox tools truncate output (`max_output_chars`). |
-| Domain skill gap (`Constraint Violation`, missed OWASP check, missing `file:line` citation in `secure-code-review`) | Optimize `skills_to_register/secure-code-review/SKILL.md` (manually or via `GEPARootAgentOptimizer`), re-validate 16 ZIP checks, and hot-update **Skill Registry (`client.skills.update`)** or promote an immutable **Agent Registry `v2` revision** — **zero agent container rebuild required** (Section 6.4). |
+| Domain skill gap (`Constraint Violation`, missed OWASP check, missing `file:line` citation in `secure-code-review`) | Optimize `skills_to_register/secure-code-review/SKILL.md` (manually or via `GEPARootAgentOptimizer`), re-validate 16 ZIP checks, and hot-update **Skill Registry (`client.skills.update` with directory path)** or promote an immutable **Agent Registry `rev-2` revision** (`gcloud alpha agent-registry skills --location=global`) — **zero agent container rebuild required** (Section 6.4). |
 | Flaky / noisy judge scores | Pin agent `temperature=0` or enable multi-sample judge voting (`judge_model_sampling_count: 3`). **Never** lower thresholds or delete flaky cases. |
 
 ---
@@ -569,6 +575,11 @@ Online Monitors export two verified Cloud Monitoring metric descriptors under mo
 
 Open [`starter/eval/setup_quality_alerts.py`](../starter/eval/setup_quality_alerts.py) and complete `# TODO(lab-6)` in **`build_alert_policy_dict()`** using `google.cloud.monitoring_v3` (`create_alert_policy()` is **pre-filled**):
 
+> [!CAUTION]
+> **Two Verified Cloud Monitoring HTTP 400 Traps on `online_evaluator/scores`:**
+> 1. **Mandatory `resource.type` Restriction:** Omitting `resource.type="aiplatform.googleapis.com/OnlineEvaluator"` from the filter fails with HTTP 400 (`must specify a restriction on "resource.type" in the filter`).
+> 2. **DELTA / DISTRIBUTION Rejects `ALIGN_MEAN`:** Because `aiplatform.googleapis.com/online_evaluator/scores` has metric kind `DELTA` and value type `DISTRIBUTION`, passing `ALIGN_MEAN` fails with HTTP 400 (`The aligner cannot be applied to metrics with kind DELTA and value type DISTRIBUTION`). Always use **`ALIGN_PERCENTILE_50`** (or `ALIGN_DELTA` + `REDUCE_PERCENTILE_50`)!
+
 ```python
 from google.cloud import monitoring_v3
 
@@ -579,10 +590,11 @@ policy = {
     "display_name": "Coding Agent Quality Drift — Task Success",
     "conditions": [
         {
-            "display_name": "Online Task Success < 0.80",
+            "display_name": "Online Task Success (p50) < 0.80",
             "condition_threshold": {
                 "filter": (
-                    'metric.type="aiplatform.googleapis.com/online_evaluator/scores"'
+                    'resource.type="aiplatform.googleapis.com/OnlineEvaluator"'
+                    ' AND metric.type="aiplatform.googleapis.com/online_evaluator/scores"'
                     ' AND metric.labels.evaluation_metric_name="task_success"'
                     f' AND metric.labels.agent_resource_name="{reasoning_engine_name}"'
                 ),
@@ -592,7 +604,8 @@ policy = {
                 "aggregations": [
                     {
                         "alignment_period": {"seconds": 60},
-                        "per_series_aligner": monitoring_v3.Aggregation.Aligner.ALIGN_MEAN,
+                        # CRITICAL: DELTA/DISTRIBUTION rejects ALIGN_MEAN (HTTP 400); use ALIGN_PERCENTILE_50!
+                        "per_series_aligner": monitoring_v3.Aggregation.Aligner.ALIGN_PERCENTILE_50,
                     }
                 ],
             },
@@ -617,20 +630,21 @@ cd starter && uv run python eval/setup_quality_alerts.py
 #### Equivalent `gcloud` CLI Deployment (`policy.yaml`)
 
 ```yaml
-# policy.yaml — alerts if mean Task Success drops below 0.80 for 30 minutes
+# policy.yaml — alerts if median (p50) Task Success drops below 0.80 for 30 minutes
 displayName: "Low Task Success Score"
 conditions:
-- displayName: "Task Success < 0.8"
+- displayName: "Task Success (p50) < 0.8"
   conditionThreshold:
     filter: >
-      metric.type="aiplatform.googleapis.com/online_evaluator/scores"
+      resource.type="aiplatform.googleapis.com/OnlineEvaluator"
+      AND metric.type="aiplatform.googleapis.com/online_evaluator/scores"
       AND metric.labels.evaluation_metric_name="task_success"
     comparison: COMPARISON_LT
     thresholdValue: 0.8
     duration: 1800s
     aggregations:
     - alignmentPeriod: 60s
-      perSeriesAligner: ALIGN_MEAN
+      perSeriesAligner: ALIGN_PERCENTILE_50
 combiner: OR
 enabled: true
 # Omit notificationChannels (or uncheck "Use notification channels" in Console)
@@ -660,9 +674,9 @@ Now feed your **Failure Clusters** (Part 4) and **Feedback Service** negative en
 
 ### 6.2 Implement & Run `starter/eval/optimize_prompt.py` + `agents-cli eval optimize`
 
-Open [`starter/eval/optimize_prompt.py`](../starter/eval/optimize_prompt.py). Setup helpers **`fetch_negative_feedback()`** (pulling recent `THUMBS_DOWN` entries from the Feedback Service via `client.feedback_entries.list(...)`), **`_attach_local_skill_for_gepa()`** (loading local skills via `from google.adk.skills import load_skill_from_dir` for `GEPARootAgentOptimizer`), **`_extract_optimized_skills()`** (preserving original YAML frontmatter), and **`build_adk_sampler_and_optimizer()`** (wiring `LocalEvalSampler`, `LocalEvalSetsManager`, and `SimplePromptOptimizer` / `GEPARootAgentPromptOptimizer` / `GEPARootAgentOptimizer`) are **pre-filled** out of the box. Complete the **2 `# TODO(lab-6)` functions**:
+Open [`starter/eval/optimize_prompt.py`](../starter/eval/optimize_prompt.py). Setup helpers **`fetch_negative_feedback()`** (pulling recent `THUMBS_DOWN` entries from the Feedback Service via `client.feedback_entries.list(parent=runtime_name, ...)` — note `parent=`, **not** `name=`, in `agentplatform==2.10.0`), **`_attach_local_skill_for_gepa()`** (loading local skills via `from google.adk.skills import load_skill_from_dir` for `GEPARootAgentOptimizer`), **`_extract_optimized_skills()`** (preserving original YAML frontmatter), and **`build_adk_sampler_and_optimizer()`** (wiring `LocalEvalSampler`, `LocalEvalSetsManager`, and `SimplePromptOptimizer` / `GEPARootAgentPromptOptimizer` / `GEPARootAgentOptimizer`) are **pre-filled** out of the box. Complete the **2 `# TODO(lab-6)` functions**:
 1. **`run_prompt_optimization()`:** Verify `root_agent`'s instruction via `_extract_root_instruction()`, attach your local skill directory (`--skill-dir skills_to_register/secure-code-review`) via `_attach_local_skill_for_gepa()` when `--optimizer gepa-skills` is chosen, invoke `build_adk_sampler_and_optimizer()` and await `optimizer.optimize(target_agent, sampler)` without mutating your original `root_agent`, extract frontmatter-preserved skill instructions via `_extract_optimized_skills()`, and return unified diffs so `main()` writes candidate outputs to `artifacts/optimized_instruction.txt` and `artifacts/optimized_skills/secure-code-review/SKILL.md`.
-2. **`publish_updated_skill()` (`--publish-skill`):** Re-validate all 16 atomic Skill Registry rules via `scripts/package_registry_skill.py` and hot-update Vertex AI Skill Registry via `client.skills.update(...)` with zero agent container rebuild.
+2. **`publish_updated_skill()` (`--publish-skill`):** Re-validate all 16 atomic Skill Registry rules via `scripts/package_registry_skill.py` and hot-update Vertex AI Skill Registry via `client.skills.update(...)` passing the **validated skill directory path** (`str(skill_dir.resolve())` — **never** the `.zip` path!) with zero agent container rebuild.
 
 > [!IMPORTANT]
 > **Two Source-Verified ADK `GEPARootAgentOptimizer` Gotchas:**
@@ -781,7 +795,7 @@ When Failure Clusters or `THUMBS_DOWN` feedback point to a **domain skill gap** 
      --skill-dir skills_to_register/secure-code-review \
      --skill-id secure-code-review
    ```
-   Under the hood, `publish_updated_skill()` invokes the verified `agentplatform` SDK `UpdateSkill` LRO (or REST `PATCH .../v1beta1/projects/${GOOGLE_CLOUD_PROJECT}/locations/${SKILL_REGISTRY_LOCATION}/skills/secure-code-review?updateMask=displayName,description,zippedFilesystem`):
+   Under the hood, `publish_updated_skill()` invokes the verified `agentplatform` SDK `UpdateSkill` LRO (or REST `PATCH .../v1beta1/projects/${GOOGLE_CLOUD_PROJECT}/locations/${SKILL_REGISTRY_LOCATION}/skills/secure-code-review?updateMask=displayName,description,zippedFilesystem`). **CRITICAL:** `agentplatform==2.10.0` (`get_zipped_filesystem_payload`) zips `local_path` internally and raises `ValueError: Path is not a directory` if given a `.zip` file — always pass the validated skill **directory**:
    ```python
    import agentplatform
 
@@ -791,42 +805,49 @@ When Failure Clusters or `THUMBS_DOWN` feedback point to a **domain skill gap** 
        config={
            "display_name": "Secure Code Review",
            "description": "Enterprise OWASP static security audit workflow (updated via Lab 6 eval flywheel).",
-           "local_path": "dist/secure-code-review.zip",
+           "local_path": "skills_to_register/secure-code-review",  # DIRECTORY path only (never .zip!)
        },
    )
    print("Updated skill:", updated.name)
    ```
 
-3. **Path B2 (Governed / Optional Lab 7 — Immutable Revisions & Instant Rollback): Promote `v2` in Agent Registry:**
-   If your enterprise registers standalone skills in **Agent Registry (`agentregistry.googleapis.com/v1`)** (see [Optional Lab 7 Part A](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md#part-a-standalone-skill-security-scanning--lifecycle-governance-agentregistrygoogleapiscomv1)), publish an immutable `v2` revision, let automated `ENABLED_BLOCKING` security scanning verify it, and flip `--default-revision`:
+3. **Path B2 (Governed / Optional Lab 7 — Immutable Revisions & Instant Rollback): Promote `rev-2` in Agent Registry (`--location=global`):**
+   If your enterprise registers standalone skills in **Agent Registry** (see [Optional Lab 7 Part A](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md#part-a-standalone-skill-security-scanning--lifecycle-governance-agentregistrygoogleapiscomv1)), use **`gcloud alpha agent-registry skills`** with **`--location=global`** (A2A/MCP stays in Bangkok `asia-southeast3`, while standalone skills run in `global`), publish an immutable **`rev-2`** revision (avoid 2-char `v2`), wait for automated `ENABLED_BLOCKING` security scanning to complete, and then flip `--default-revision`.
+   > **Pending-Scan Timing Rule:** Under `ENABLED_BLOCKING`, immediately running `skills update --default-revision=.../revisions/rev-2` right after `revisions create rev-2` returns **`FAILED_PRECONDITION: cannot set default revision to a revision with pending scan results when scanning policy is ENABLED_BLOCKING`**. Poll `revisions describe rev-2` until `scanResult.scanState` is `SUCCEEDED` with zero findings before promoting — or create workshop demo skills with `--scanning-policy=enabled-nonblocking` to skip the blocking wait.
    ```bash
-   export AGENT_REGISTRY_LOCATION="${AGENT_REGISTRY_LOCATION:-asia-southeast3}"  # Bangkok primary Agent Registry region
+   export AGENT_REGISTRY_SKILLS_LOCATION="${AGENT_REGISTRY_SKILLS_LOCATION:-global}"
 
-   # 1. Upload immutable v2 skill revision (triggers automated LLM security scan if ENABLED_BLOCKING)
-   gcloud agent-registry skills revisions create v2 \
+   # 1. Upload immutable rev-2 skill revision (triggers async LLM security scan under ENABLED_BLOCKING)
+   gcloud alpha agent-registry skills revisions create rev-2 \
      --skill=private-secure-code-review \
      --project="${GOOGLE_CLOUD_PROJECT}" \
-     --location="${AGENT_REGISTRY_LOCATION}" \
+     --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
      --payload="dist/secure-code-review.zip"
 
-   # 2. Verify scan status succeeded with zero findings (ENABLED_BLOCKING rejects promotion with FAILED_PRECONDITION otherwise!)
-   gcloud agent-registry skills revisions describe v2 \
+   # 2. Poll scan status until scanResult.scanState == SUCCEEDED with zero findings
+   #    (Calling `skills update --default-revision` while the scan is still pending fails with:
+   #     FAILED_PRECONDITION: cannot set default revision to a revision with pending scan results
+   #     when scanning policy is ENABLED_BLOCKING. Use --scanning-policy=enabled-nonblocking on
+   #     `skills create` for rapid workshop demos.)
+   gcloud alpha agent-registry skills revisions describe rev-2 \
      --skill=private-secure-code-review \
      --project="${GOOGLE_CLOUD_PROJECT}" \
-     --location="${AGENT_REGISTRY_LOCATION}"
+     --location="${AGENT_REGISTRY_SKILLS_LOCATION}"
 
-   # 3. Promote v2 as the default serving revision (zero agent container rebuild!)
-   gcloud agent-registry skills update private-secure-code-review \
+   # 3. Promote rev-2 as the default serving revision (zero agent container rebuild!)
+   gcloud alpha agent-registry skills update private-secure-code-review \
      --project="${GOOGLE_CLOUD_PROJECT}" \
-     --location="${AGENT_REGISTRY_LOCATION}" \
-     --default-revision="projects/${GOOGLE_CLOUD_PROJECT}/locations/${AGENT_REGISTRY_LOCATION}/skills/private-secure-code-review/revisions/v2"
+     --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
+     --default-revision="projects/${GOOGLE_CLOUD_PROJECT}/locations/${AGENT_REGISTRY_SKILLS_LOCATION}/skills/private-secure-code-review/revisions/rev-2"
 
    # 4. Watch Online Monitor scores (`aiplatform.googleapis.com/online_evaluator/scores`);
-   #    if Quality Alerts fire after promotion, roll back to v1 in one command:
-   # gcloud agent-registry skills update private-secure-code-review \
+   #    if Quality Alerts fire after promotion, roll back to rev-1 in one command:
+   # gcloud alpha agent-registry skills update private-secure-code-review \
    #   --project="${GOOGLE_CLOUD_PROJECT}" \
-   #   --location="${AGENT_REGISTRY_LOCATION}" \
-   #   --default-revision="projects/${GOOGLE_CLOUD_PROJECT}/locations/${AGENT_REGISTRY_LOCATION}/skills/private-secure-code-review/revisions/v1"
+   #   --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
+   #   --default-revision="projects/${GOOGLE_CLOUD_PROJECT}/locations/${AGENT_REGISTRY_SKILLS_LOCATION}/skills/private-secure-code-review/revisions/rev-1"
+   #
+   # 5. Teardown rule: delete child revisions (`revisions delete rev-2`, `rev-1`) BEFORE `skills delete`!
    ```
 
 ---
@@ -847,7 +868,7 @@ Confirm all six checkpoints pass before choosing your next track:
 - [ ] **Simulated Eval & Loss Clustering:** `starter/eval/run_simulated_eval.py` completes 2-step scenario synthesis + multi-turn simulation and produces loss cluster diagnostics.
 - [ ] **Online Monitor & Quality Alerts:** Online Monitor configuration is validated (and created in Console), and `starter/eval/setup_quality_alerts.py` emits/creates a valid `aiplatform.googleapis.com/online_evaluator/scores` alert policy.
 - [ ] **Root Prompt Optimization Flywheel:** `starter/eval/optimize_prompt.py` produces a candidate instruction diff ready for `agents-cli eval compare` and canary rollout.
-- [ ] **Skill Optimization & Registry Hot-Update Loop:** `starter/eval/optimize_prompt.py` supports `--optimizer gepa-skills` (loading local `SkillToolset.skills` with preserved YAML frontmatter) and `--publish-skill --dry-run` (`client.skills.update` + Agent Registry `v2` revision rollout/rollback commands).
+- [ ] **Skill Optimization & Registry Hot-Update Loop:** `starter/eval/optimize_prompt.py` supports `--optimizer gepa-skills` (loading local `SkillToolset.skills` with preserved YAML frontmatter) and `--publish-skill --dry-run` (`client.skills.update` with directory `local_path` + `gcloud alpha agent-registry skills` `rev-2`/`rev-1` rollout/rollback commands in `global`).
 
 > **Time-Box Fallback:** If you hit rate limits or run short on time, inspect or run the complete reference scripts directly from [`solution/eval/`](../solution/eval/) (`run_offline_eval.py`, `run_simulated_eval.py`, `setup_online_monitor.py`, `setup_quality_alerts.py`, `optimize_prompt.py`).
 
@@ -887,7 +908,7 @@ Confirm all six checkpoints pass before choosing your next track:
 
 Choose your path based on your schedule and enterprise security goals:
 
-- **Full-Day / Security Track:** [Lab 7 (Optional): Enterprise Security & Governance Hardening](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md) — Add Agent Registry `ENABLED_BLOCKING` skill scanning (Bangkok `asia-southeast3`), Semantic Governance NLC policies & Model Armor, SPIFFE `AGENT_IDENTITY` + Agent Gateway Terraform upgrade (Singapore `asia-southeast1`), multi-tenant Session/Memory IAM Conditions, CMEK/VPC-SC, and WORM/SIEM/SCC SecOps.
+- **Full-Day / Security Track:** [Lab 7 (Optional): Enterprise Security & Governance Hardening](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md) — Add Agent Registry `ENABLED_BLOCKING` skill scanning (`gcloud alpha agent-registry skills --location=global`, while A2A/MCP stays in Bangkok `asia-southeast3`), Semantic Governance NLC policies & Model Armor, SPIFFE `AGENT_IDENTITY` + Agent Gateway Terraform upgrade (Singapore `asia-southeast1` fallback), multi-tenant Session/Memory IAM Conditions, CMEK/VPC-SC, and WORM/SIEM/SCC SecOps.
 - **Short on Time / Half-Day Fast-Track (Skip Lab 7 cleanly):** [Lab 8: Architecture & Limitations Deep-Dive — Agent Runtime vs. Self-Hosted GKE](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) — Skipping Optional Lab 7 leaves Labs 1–6 100% working and green!
 
 > [!TIP]

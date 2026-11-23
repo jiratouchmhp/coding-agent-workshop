@@ -92,12 +92,13 @@ import datetime, agentplatform
 client = agentplatform.Client(project="PROJECT_ID", location="asia-southeast1")
 runtime_name = "projects/PROJECT_ID/locations/asia-southeast1/reasoningEngines/AGENT_ENGINE_ID"
 
-# LRO return-shape guard: handle both session_op.response.name and session_op.name across SDK builds
+# Verified for google-cloud-agentplatform==2.10.0:
+# - `session_id` MUST be passed inside `config={}` (CreateRuntimeSessionConfig), NOT as a top-level kwarg.
+# - LRO return-shape guard: handle both session_op.response.name and session_op.name across SDK builds.
 session_op = client.sessions.create(
     name=runtime_name,
     user_id="user-123",
-    session_id="custom-session-1",
-    config={"ttl": f"{10 * 86400}s"},
+    config={"ttl": f"{10 * 86400}s", "session_id": "custom-session-1"},
 )
 session_name = session_op.response.name if hasattr(session_op, "response") else session_op.name
 
@@ -105,8 +106,8 @@ session_name = session_op.response.name if hasattr(session_op, "response") else 
 for s in client.sessions.list(name=runtime_name, config={"filter": "user_id=user-123"}):
     print(s.name)
 
-# Get, append standard Content OR raw_event, list events, delete
-session = client.sessions.get(name=session_name, user_id="user-123")
+# Get (sessions.get(*, name: str, config=None) does NOT accept user_id=), append Content OR raw_event, list, delete
+session = client.sessions.get(name=session_name)
 client.sessions.events.append(
     name=session_name,
     author="user",
@@ -148,10 +149,11 @@ client.sessions.delete(name=session_name)
 - **Embedding Model:** Defaults to **`text-embedding-005`** (multilingual alternatives: `gemini-embedding-2`, `gemini-embedding-001`, `text-multilingual-embedding-002`).
   - **CRITICAL TRAP 1:** `gemini-embedding-2` ONLY accepts `global`, `us`, or `eu` in its model resource name—NOT regional locations like `asia-southeast1` or `us-central1`.
   - **CRITICAL TRAP 2:** The embedding model can **only be changed before the first memory is stored**.
-- **Verified Upstream SDK Key Discrepancies:**
+- **Verified `agentplatform==2.10.0` SDK Key & Namespace Rules:**
   1. `client.memory_banks.create(managed_semantic_memory_config={...})` uses **`"unstructured_memory_configs"`**, whereas `client.runtimes.update(name=..., config={"context_spec": {"memory_bank_config": {...}}})` uses **`"customization_configs"`**.
-  2. Granular TTL dict uses `"granular_ttl": {...}`, whereas class-based SDK uses `TtlConfig(granular_ttl_config=GranularTtlConfig(...))`.
-  3. Revision TTL appears as `"memory_revision_default_ttl"` in setup configs and `"revision_ttl"` in revision/request configs.
+  2. Granular TTL uses **`"granular_ttl_config": {...}`** in BOTH dict configs and `TtlConfig(granular_ttl_config=GranularTtlConfig(...))` — passing `"granular_ttl"` raises Pydantic `ValidationError (extra_forbidden)` in `google-cloud-agentplatform==2.10.0`!
+  3. All memory operations live under **`client.memory_banks.memories.*`** (`client.memories` does not exist in `agentplatform==2.10.0`).
+  4. Revision TTL appears as `"memory_revision_default_ttl"` in setup configs and `"revision_ttl"` in revision/request configs.
 
 ### Create & Update Customized Memory Bank
 
@@ -168,7 +170,7 @@ memory_cfg = {
         "embedding_model": "projects/PROJECT_ID/locations/asia-southeast1/publishers/google/models/text-embedding-005"  # Use "global"/"us"/"eu" if switching to gemini-embedding-2
     },
     "ttl_config": {
-        "granular_ttl": {
+        "granular_ttl_config": {
             "create_ttl": f"{90 * 86400}s",
             "generate_created_ttl": f"{90 * 86400}s",
             "generate_updated_ttl": f"{90 * 86400}s",

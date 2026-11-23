@@ -11,8 +11,8 @@ Google Cloud exposes **two separate skill registry surfaces** (both in Preview).
 | Dimension | Vertex AI / Agent Platform **Skill Registry** | **Agent Registry** Standalone Skills |
 |---|---|---|
 | **REST Endpoint** | `https://LOCATION-aiplatform.googleapis.com/v1beta1/projects/PROJECT_ID/locations/LOCATION/skills` | `https://agentregistry.googleapis.com/v1/projects/PROJECT_ID/locations/LOCATION/skills` |
-| **CLI / SDK Surface** | Python `import agentplatform` (`google-cloud-aiplatform`), Node.js `@google-cloud/agentplatform`, REST `v1beta1` | `gcloud agent-registry skills ...`, `gcloud agent-registry skills revisions ...`, `gcloud agent-registry findings ...`, REST `v1` |
-| **Supported Locations** | `us-central1` (Iowa), `europe-west4` (Netherlands), `us-east5` (Columbus, Ohio) (`SKILL_REGISTRY_LOCATION`) | `global`, multi-regions (`us`, `eu`), or regional (`asia-southeast3` Bangkok primary, `asia-southeast1`, `us-central1`, etc.) |
+| **CLI / SDK Surface** | Python `import agentplatform` (`google-cloud-aiplatform`, directory-only `local_path`), Node.js `@google-cloud/agentplatform`, REST `v1beta1` | **`gcloud alpha agent-registry skills ...`**, `revisions ...`, `findings ...`, REST `v1` *(alpha-only CLI; 2-step create without `--payload` -> `revisions create rev-1`)* |
+| **Supported Locations** | `us-central1` (Iowa), `europe-west4` (Netherlands), `us-east5` (Columbus, Ohio) (`SKILL_REGISTRY_LOCATION`) | **`global`** (`AGENT_REGISTRY_SKILLS_LOCATION=global`; standalone skills currently time out in `asia-southeast3`, whereas A2A/MCP discovery stays in Bangkok `asia-southeast3`) |
 | **Compressed ZIP Max** | **10 MB** | **1 MB** |
 | **Uncompressed Max** | **500 MB** total | **10 MB** total & **1 MB** per individual file (when scanning is enabled) |
 | **Skill ID Rules** | `SKILL_ID` 1–63 chars (`[a-z0-9-]`), starts with letter, ends with letter/number, **cannot start with `gcp-`**. Immutable; delete locks reuse for at least 24h (see §3). | Registry auto-assigns default `private` publisher and prepends **`private-`** (`private-SKILL_ID`). Must use `private-SKILL_ID` on all subsequent operations. |
@@ -110,7 +110,7 @@ BASE64_ZIPPED_BODY=$(base64 -w 0 -i /tmp/skill.zip)
 
 ## 5. Exact SDK & REST CRUD Reference (`v1beta1`)
 
-> **Import Trap:** Skill Registry Python SDK uses **`import agentplatform`** provided by `google-cloud-aiplatform` (NOT `import vertexai`). Pay close attention to the **`google-cloud-aiplatform >= 1.154.0`** `skill_id` signature change!
+> **Import & Directory-Only `local_path` Trap:** Skill Registry Python SDK uses **`import agentplatform`** provided by `google-cloud-aiplatform` (NOT `import vertexai`). Pay close attention to TWO critical SDK rules: (1) **`local_path` MUST be a directory path — NEVER a `.zip` file!** In `agentplatform==2.10.0`, `get_zipped_filesystem_payload(local_path)` zips the directory internally and raises `ValueError: Path is not a directory` if passed a `.zip`. (Use `.zip` only for raw REST `zippedFilesystem` and `gcloud alpha agent-registry skills revisions create --payload=...`.) (2) **`google-cloud-aiplatform >= 1.154.0`** accepts `skill_id` as a top-level keyword arg.
 
 ### Python (`google-cloud-aiplatform`)
 
@@ -129,7 +129,7 @@ skill = client.skills.create(
     display_name="Secure Code Review",
     description="Audits Python/Go patches for security anti-patterns and OWASP issues.",
     config={
-        # Accepts local directory (auto-zipped) OR pre-zipped .zip file path
+        # MUST be a local skill DIRECTORY (SDK zips it internally; passing a .zip raises ValueError!)
         "local_path": "./skills/secure-code-review",
     },
 )
@@ -142,13 +142,13 @@ print(skill.name)
 #     config={"skill_id": "secure-code-review", "local_path": "./skills/secure-code-review"},
 # )
 
-# --- UPDATE (creates a new immutable revision when local_path is supplied) ---
+# --- UPDATE (creates a new immutable revision when local_path directory is supplied) ---
 updated = client.skills.update(
     name="projects/PROJECT_ID/locations/us-central1/skills/secure-code-review",
     config={
         "display_name": "Secure Code Review v2",
         "description": "Updated OWASP + secret-scanning guidance.",
-        "local_path": "./skills/secure-code-review",  # Optional
+        "local_path": "./skills/secure-code-review",  # Optional DIRECTORY path (never .zip!)
     },
 )
 
@@ -273,11 +273,12 @@ curl -H "Authorization: Bearer ${TOKEN}" "${BASE}/operations/${OPERATION_ID}"
 | `TypeError` on `client.skills.create(skill_id=...)` | Installed `google-cloud-aiplatform < 1.154.0` | Upgrade `google-cloud-aiplatform>=1.154.0` or pass `"skill_id"` inside `config={...}` |
 | `ALREADY_EXISTS` after deleting & recreating same `SKILL_ID` | Deleted `SKILL_ID` is locked (24h–permanent reservation) | Use `client.skills.update(...)` for revisions or pick a new `SKILL_ID` |
 | `INVALID_ARGUMENT` on `skillId=gcp-my-skill` | `gcp-` prefix is reserved for Google-managed skills | Rename without `gcp-` prefix (`[a-z][a-z0-9-]*[a-z0-9]`, <= 63 chars) |
+| `ValueError: Path is not a directory` in `client.skills.create` / `.update` | Passed a `.zip` file to `config["local_path"]` | Always pass the validated skill **directory** path (`agentplatform==2.10.0` zips the directory internally); reserve `.zip` for REST `zippedFilesystem` and `gcloud alpha agent-registry skills revisions create --payload=...` |
 | Unsupported region error | Skill Registry only exists in 3 regions | Use `us-central1`, `europe-west4`, or `us-east5` |
 
 ### Concrete Verification Steps
 1. Run `python3 scripts/package_registry_skill.py <skill_dir> --dry-run` and confirm **16/16 checks PASS**.
-2. Upload via `client.skills.create(...)` (or REST `POST` + poll `GetOperation` until `"done": true` with no `"error"`).
+2. Upload via `client.skills.create(..., config={"local_path": "<skill_dir>"})` (directory only — or REST `POST` with base64 ZIP + poll `GetOperation` until `"done": true` with no `"error"`).
 3. Run `client.skills.list()` twice: verify your custom skill appears with `"state": "ACTIVE"` and verify `gcp-skill-registry` appears on the second call.
 4. Run `client.skills.retrieve(query="<intent>", config={"top_k": 3})` and confirm your skill ranks in `retrieved_skills`.
-5. **Closed-Loop Optimize Flywheel (Zero Agent Container Rebuild):** When offline/online evals or `GEPARootAgentOptimizer` improve `SKILL.md`, preserve its YAML frontmatter, re-run `package_registry_skill.py`, and publish live via `client.skills.update(...)` (Vertex AI Skill Registry) or `gcloud agent-registry skills revisions create v2` + `skills update --default-revision=.../revisions/v2` (Agent Registry — gated by `ENABLED_BLOCKING` scanning with 1-command rollback to `v1`).
+5. **Closed-Loop Optimize Flywheel (Zero Agent Container Rebuild):** When offline/online evals or `GEPARootAgentOptimizer` improve `SKILL.md`, preserve its YAML frontmatter, re-run `package_registry_skill.py`, and publish live via `client.skills.update(..., config={"local_path": "<skill_dir>"})` (Vertex AI Skill Registry — directory only!) or `gcloud alpha agent-registry skills revisions create rev-2 --skill=private-<id> --location=global --payload=<zip>` + `gcloud alpha agent-registry skills update private-<id> --location=global --default-revision=.../revisions/rev-2` (Agent Registry — gated by `ENABLED_BLOCKING` scanning with 1-command rollback to `rev-1`; delete child revisions before `skills delete`).

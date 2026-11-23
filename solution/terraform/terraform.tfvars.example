@@ -7,18 +7,19 @@
 
 project_id     = "your-gcp-project-id"
 project_number = "123456789012"
-# Singapore — nearest supported Agent Runtime region for Bangkok (asia-southeast3) primary teams:
+# Aim for Bangkok (asia-southeast3) first; fall back to Singapore (asia-southeast1) for Agent Runtime (not yet in Bangkok):
 location        = "asia-southeast1"
 repository_name = "coding-agent-repo"
 display_name    = "coding_agent_byoc_tf"
-# Bangkok AR primary (or use asia-southeast1-docker.pkg.dev/... for strict same-region runtime/sandbox pulls):
-agent_image_uri         = "asia-southeast3-docker.pkg.dev/your-gcp-project-id/coding-agent-repo/coding-agent:v1"
-sandbox_image_uri       = "asia-southeast3-docker.pkg.dev/your-gcp-project-id/coding-agent-repo/coding-sandbox:v1"
-sandbox_template_name   = ""
-sandbox_mode            = "" # Empty auto-selects "byoc" when sandbox_template_name is set, else "shell"
-model_name              = "gemini-2.5-flash"
-api_key_value           = "replace-with-workshop-placeholder-value"
-enable_memory_bank      = false
-enable_skill_registry   = false
-skill_registry_location = "us-central1"     # Vertex AI Skill Registry Preview: us-central1 | europe-west4 | us-east5
-agent_registry_location = "asia-southeast3" # Agent Registry standalone skills & scanning (Bangkok primary)
+# Bangkok AR (asia-southeast3-docker.pkg.dev) is verified working for both Singapore Agent Runtime and Singapore BYOC Sandboxes (no second Singapore AR repo needed):
+agent_image_uri                = "asia-southeast3-docker.pkg.dev/your-gcp-project-id/coding-agent-repo/coding-agent:v1"
+sandbox_image_uri              = "asia-southeast3-docker.pkg.dev/your-gcp-project-id/coding-agent-repo/coding-sandbox:v1"
+sandbox_template_name          = ""
+sandbox_mode                   = "" # Empty auto-selects "byoc" when sandbox_template_name is set, else "shell"
+model_name                     = "gemini-2.5-flash"
+api_key_value                  = "replace-with-workshop-placeholder-value"
+enable_memory_bank             = false
+enable_skill_registry          = false
+skill_registry_location        = "us-central1"     # Vertex AI Skill Registry Preview (GCP-mandated: us-central1 | europe-west4 | us-east5)
+agent_registry_location        = "asia-southeast3" # Agent Registry A2A/MCP discovery (Bangkok first)
+agent_registry_skills_location = "global"          # Agent Registry standalone skills (falls back to global; times out in asia-southeast3)

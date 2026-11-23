@@ -79,8 +79,8 @@ flowchart TD
 ```
 
 > [!IMPORTANT]
-> **Real-World APAC Residency Trigger — Bangkok (`asia-southeast3`) for Thailand PDPA & Bank of Thailand (BoT):**
-> While **Singapore (`asia-southeast1`)** is the nearest officially supported region for managed **Agent Runtime** and **Managed Sandboxes**, regulated financial institutions, telecoms, and public-sector teams in Thailand subject to **Thailand PDPA** or **Bank of Thailand (BoT)** strict in-country compute and workspace-data residency rules often cannot execute proprietary source code or hold customer-adjacent repositories outside Thailand. **Self-Hosted GKE + GKE Agent Sandbox in Bangkok (`GKE_LOCATION=asia-southeast3`)** gives those teams an immediate, fully supported production path — keeping ADK orchestrators, gVisor/microVM sandboxes, Artifact Registry images (`asia-southeast3-docker.pkg.dev`), Cloud Build (`asia-southeast3`), Secret Manager, and Hyperdisk/Filestore volumes 100% inside Bangkok (`asia-southeast3`) until managed Agent Runtime launches locally in Bangkok! Once Agent Runtime arrives in `asia-southeast3`, identical ADK 2.0 code migrates smoothly back to managed serverless if desired.
+> **Real-World APAC Residency Trigger — Bangkok (`asia-southeast3`) First for Thailand PDPA & Bank of Thailand (BoT):**
+> Throughout this workshop, we target **Bangkok (`asia-southeast3`) first** and fall back to **Singapore (`asia-southeast1`)** only because managed **Agent Runtime** and **Managed Sandboxes** are not yet launched in Bangkok. For regulated financial institutions, telecoms, and public-sector teams in Thailand subject to **Thailand PDPA** or **Bank of Thailand (BoT)** strict in-country compute and workspace-data residency rules, executing proprietary source code or holding customer-adjacent repositories outside Thailand may not be permitted. **Self-Hosted GKE + GKE Agent Sandbox in Bangkok (`GKE_LOCATION=asia-southeast3`)** gives those teams an immediate, fully supported production path — keeping ADK orchestrators, gVisor/microVM sandboxes, Artifact Registry images (`asia-southeast3-docker.pkg.dev`), Cloud Build (`asia-southeast3`), Secret Manager, and Hyperdisk/Filestore volumes 100% inside Bangkok (`asia-southeast3`) until managed Agent Runtime launches locally in Bangkok! Once Agent Runtime arrives in `asia-southeast3`, identical ADK 2.0 code migrates smoothly back to managed serverless if desired.
 
 ---
 
@@ -216,7 +216,7 @@ Open the four comparison-track files under [`starter/gke_reference/`](../starter
 If your facilitator provisioned a GKE demo cluster with a gVisor node pool (`--sandbox=type=gvisor`) — for example in **Bangkok (`GKE_LOCATION=asia-southeast3`)** for strict Thailand PDPA / Bank of Thailand compute residency — you can deploy the reference overlay directly:
 
 ```bash
-# Example cluster credentials target (Bangkok primary GKE region):
+# Example cluster credentials target (Bangkok default GKE region):
 # export GKE_LOCATION="${GKE_LOCATION:-asia-southeast3}"
 # gcloud container clusters get-credentials coding-agent-gke --region="${GKE_LOCATION}" --project="${GOOGLE_CLOUD_PROJECT}"
 

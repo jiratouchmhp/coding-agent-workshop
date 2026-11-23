@@ -202,7 +202,7 @@ PSC-I and PSC-E make sandboxes VPC-SC compliant (and can also be used without a 
 
 ```bash
 # 1. Provision AI Platform service identity (if not already present)
-gcloud beta services identity create \
+gcloud alpha services identity create \
     --service=aiplatform.googleapis.com \
     --project=PROJECT_ID
 

@@ -33,9 +33,10 @@ pip install --upgrade "google-adk[a2a,agent-identity,mcp]>=2.0.0" "google-cloud-
 gcloud components update && gcloud components install alpha
 gcloud auth application-default login
 export GOOGLE_CLOUD_PROJECT="GOVERNANCE_PROJECT_ID"
-export AGENT_REGISTRY_LOCATION="asia-southeast3"   # Bangkok primary (standalone skills, scanning, A2A/MCP discovery)
-export GOOGLE_CLOUD_LOCATION="asia-southeast1"     # Singapore (Agent Runtime, Agent Gateway & Gemini 2.5 Flash)
-export SKILL_REGISTRY_LOCATION="us-central1"       # Vertex AI Skill Registry Preview (3 regions only: us-central1, europe-west4, us-east5)
+export AGENT_REGISTRY_LOCATION="asia-southeast3"         # Bangkok default (A2A/MCP discovery)
+export AGENT_REGISTRY_SKILLS_LOCATION="global"           # Standalone skills (`gcloud alpha agent-registry skills`; asia-southeast3 currently times out)
+export GOOGLE_CLOUD_LOCATION="asia-southeast1"           # Singapore fallback (Agent Runtime, Agent Gateway & Gemini 2.5 Flash — not yet in Bangkok)
+export SKILL_REGISTRY_LOCATION="us-central1"             # Vertex AI Skill Registry Preview (3 regions only: us-central1, europe-west4, us-east5)
 ```
 
 ---
@@ -70,7 +71,7 @@ What do you need to do?
 | Feature | Vertex AI Skill Registry (`aiplatform.../v1beta1`) | Agent Registry Standalone Skills (`agentregistry.../v1`) |
 |---|---|---|
 | **Max ZIP / Unzipped** | **10 MB** compressed / **500 MB** total | **1 MB** compressed / **10 MB** total & **1 MB**/file (when scanned) |
-| **Locations** | `us-central1`, `europe-west4`, `us-east5` (`SKILL_REGISTRY_LOCATION`) | `global`, `us`, `eu`, or regional (`asia-southeast3` Bangkok primary, `asia-southeast1`, `us-central1`, ...) |
+| **Locations** | `us-central1`, `europe-west4`, `us-east5` (`SKILL_REGISTRY_LOCATION`; `local_path` MUST be a directory, never `.zip`) | **`global`** (`AGENT_REGISTRY_SKILLS_LOCATION=global`, `gcloud alpha agent-registry skills`; standalone skills currently time out in `asia-southeast3`, while A2A/MCP stays in Bangkok `asia-southeast3`) |
 | **Skill ID Behavior** | `SKILL_ID` immutable (no `gcp-` prefix; 24h+ reuse lockout) | Auto-prepends **`private-`** (`private-SKILL_ID`) on all user skills |
 | **Security & Scanning** | Async 16-check ZIP/`SKILL.md` validation; project IAM | Auto LLM scanning (`ENABLED_BLOCKING`), `Finding` triage, Org Policy, resource IAM |
 | **Built-in Skills** | `gcp-skill-registry` (async first-call ingestion quirk) | Google-managed `FIRST_PARTY` skills (`cloud.google.com`, `github.com/google/skills`) |
@@ -110,23 +111,45 @@ python3 scripts/package_registry_skill.py solution/skills_to_register/secure-cod
 python3 scripts/package_registry_skill.py ./skills/secure-code-review --agent-registry -o /tmp/skill.zip
 ```
 
-### 2. Register a Standalone Skill & Check Scan Findings (Agent Registry)
+### 2. Register a Standalone Skill & Check Scan Findings (Agent Registry — `gcloud alpha`, `--location=global`)
 ```bash
-# AGENT_REGISTRY_LOCATION defaults to Bangkok primary (asia-southeast3)
-gcloud agent-registry skills create secure-code-review \
-  --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_LOCATION}" \
+# Verified live (`gcloud 588.0.0 alpha`):
+# - Standalone skills are alpha-only (`gcloud alpha agent-registry skills`) and run in `--location=global`
+#   (A2A/MCP stays in Bangkok `asia-southeast3`; standalone skills currently time out in `asia-southeast3`).
+# - 2-step flow: omit `--payload` on `skills create` (CLI bug drops `--payload` -> HTTP 400 `source is required`),
+#   then upload `rev-1` (2-char `v1` fails format validation). Delete child revisions BEFORE `skills delete`!
+export AGENT_REGISTRY_SKILLS_LOCATION="${AGENT_REGISTRY_SKILLS_LOCATION:-global}"
+
+# Step 1: Create bare skill shell (auto-prefixes `private-`)
+# Production default is `--scanning-policy=enabled-blocking` (for rapid workshop demos that skip
+# waiting on async LLM scans, pass `--scanning-policy=enabled-nonblocking`).
+gcloud alpha agent-registry skills create secure-code-review \
+  --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
   --display-name="Secure Code Review" --description="Audits patches for security issues." \
-  --target-state=disabled --scanning-policy=enabled-blocking --payload="/tmp/skill.zip"
+  --target-state=disabled --scanning-policy=enabled-blocking
 
-# Poll scan state (use private- prefix on all subsequent commands!)
-gcloud agent-registry skills revisions describe REV_ID \
-  --skill=private-secure-code-review --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_LOCATION}"
+# Step 2: Upload validated ZIP as revision `rev-1`
+gcloud alpha agent-registry skills revisions create rev-1 \
+  --skill=private-secure-code-review \
+  --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
+  --payload="/tmp/skill.zip"
 
-# Promote & activate once scanState=SUCCEEDED with 0 findings (set --default-revision for ADK GCPSkillRegistry)
-gcloud agent-registry skills update private-secure-code-review \
-  --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_LOCATION}" \
-  --default-revision="projects/${GOOGLE_CLOUD_PROJECT}/locations/${AGENT_REGISTRY_LOCATION}/skills/private-secure-code-review/revisions/REV_ID" \
+# Poll scan state BEFORE calling `skills update --default-revision`!
+# Under ENABLED_BLOCKING, immediate promotion fails with:
+#   FAILED_PRECONDITION: cannot set default revision to a revision with pending scan results
+#   when scanning policy is ENABLED_BLOCKING
+gcloud alpha agent-registry skills revisions describe rev-1 \
+  --skill=private-secure-code-review --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_SKILLS_LOCATION}"
+
+# Promote & activate once scanResult.scanState=SUCCEEDED with 0 findings (set --default-revision for ADK GCPSkillRegistry)
+gcloud alpha agent-registry skills update private-secure-code-review \
+  --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
+  --default-revision="projects/${GOOGLE_CLOUD_PROJECT}/locations/${AGENT_REGISTRY_SKILLS_LOCATION}/skills/private-secure-code-review/revisions/rev-1" \
   --target-state=ACTIVE
+
+# Clean teardown order: delete child revision(s) BEFORE deleting the skill (no `--force` flag in CLI)
+# gcloud alpha agent-registry skills revisions delete rev-1 --skill=private-secure-code-review --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_SKILLS_LOCATION}" --quiet
+# gcloud alpha agent-registry skills delete private-secure-code-review --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_SKILLS_LOCATION}" --quiet
 ```
 
 ### 3. Consume Skill Registry + Agent Registry in ADK Python
@@ -141,12 +164,13 @@ from google.adk.integrations.skill_registry import GCPSkillRegistry
 from google.adk.tools.skill_toolset import SkillToolset
 
 project_id = os.environ["GOOGLE_CLOUD_PROJECT"]
-registry_location = os.environ.get("AGENT_REGISTRY_LOCATION", "asia-southeast3")  # Bangkok primary Agent Registry
+registry_location = os.environ.get("AGENT_REGISTRY_LOCATION", "asia-southeast3")  # Bangkok default for A2A/MCP discovery
+skills_location = os.environ.get("AGENT_REGISTRY_SKILLS_LOCATION", "global")      # global required for standalone skills (asia-southeast3 times out)
 
 # 1. Dynamic skills via GCPSkillRegistry + SkillToolset
 skill_toolset = SkillToolset(
     skills=[],  # Optional local fallback skills (take precedence on name collision)
-    registry=GCPSkillRegistry(project_id=project_id, location=registry_location),
+    registry=GCPSkillRegistry(project_id=project_id, location=skills_location),
 )
 
 # 2. Governed MCP toolsets (Auth Manager) & remote A2A subagents (httpx.Auth)

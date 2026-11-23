@@ -21,7 +21,7 @@ By the end of this lab, you will be able to:
 ## Quick-Run TL;DR (Classroom Fast Path)
 
 - **Focused Exercises (High-Signal TODOs):** `registry_loader.py` (`build_skill_registry_toolset`, `build_agent_registry_integrations`, `create_skill`) and `agent.py` (`_build_optional_skill_toolset`) — *(search/list/update/auth helpers pre-filled!)*
-- **Key Commands (Zero Local Docker — `us-central1` Skill Registry + `asia-southeast3` Agent Registry):**
+- **Key Commands (Zero Local Docker — Bangkok `asia-southeast3` Agent Registry A2A/MCP + `us-central1` Vertex AI Skill Registry + `global` Standalone Skills):**
   ```bash
   make package-skill                                        # Validates all 16 atomic Skill Registry ZIP/SKILL.md checks -> dist/secure-code-review.zip
   (cd starter && uv run python -m coding_agent.tools.registry_loader offline-check)
@@ -46,11 +46,11 @@ If you are running on the **3.5-hour Half-Day Fast-Track**, Lab 4 is already str
 
 ```mermaid
 flowchart LR
-    SkillDir["starter/skills_to_register/secure-code-review/"] -->|"scripts/package_registry_skill.py (16 Atomic Checks)"| Zip["Validated skill.zip"]
+    SkillDir["starter/skills_to_register/secure-code-review/"] -->|"scripts/package_registry_skill.py (16 Checks)"| Zip["Validated skill.zip (Agent Registry & REST)"]
+    SkillDir -->|"client.skills.create(config={local_path: DIR}) (us-central1)"| SkillReg["Vertex AI Skill Registry (aiplatform v1beta1, 3-region Preview; SDK zips DIR)"]
+    Zip -.->|"gcloud alpha agent-registry skills revisions create rev-1 (--location=global)"| StandaloneReg["Agent Registry Standalone Skills (global)"]
 
-    Zip -->|"agentplatform.Client.skills.create (us-central1)"| SkillReg["Vertex AI Skill Registry (aiplatform v1beta1, 3-region Preview, <=10MB ZIP)"]
-
-    subgraph Runtime["Feature-Complete Local Coding Agent (Ready to Deploy ONCE in Lab 5 to asia-southeast1)"]
+    subgraph Runtime["Feature-Complete Local Coding Agent (Deploy ONCE in Lab 5 -> asia-southeast1 Fallback)"]
         Toolset["SkillToolset (list/search/load/run_skill_script)"]
         ADKSkillReg["GCPSkillRegistry (with Air-Gapped Local Fallback)"]
         SandboxEnv["AgentPlatformSandboxEnvironment (Reused from Lab 2 in asia-southeast1!)"]
@@ -60,13 +60,15 @@ flowchart LR
     end
 
     ADKSkillReg -.->|"Dynamic Discovery & Caching"| SkillReg
-    ADKAgentReg -.->|"Discover MCP / A2A Catalog (asia-southeast3)"| AgentReg["Agent Registry (Bangkok asia-southeast3)"]
+    ADKAgentReg -.->|"Discover MCP / A2A Catalog (Bangkok asia-southeast3)"| AgentReg["Agent Registry A2A/MCP Catalog (Bangkok asia-southeast3)"]
 ```
 
 > [!NOTE]
-> **Verified Multi-Region Split — Vertex AI Skill Registry (`us-central1`) vs. Agent Registry (`asia-southeast3` Bangkok):**
-> - **Vertex AI / Agent Platform Skill Registry (`aiplatform.googleapis.com/v1beta1`, Part B):** Developer-facing skill catalog via `agentplatform.Client.skills.*` (`<= 10 MB` ZIP, `<= 500 MB` unzipped; includes built-in `gcp-skill-registry`). Preview is **strictly 3 regions: `us-central1`, `europe-west4`, and `us-east5`** (not yet in `asia-southeast3` or `asia-southeast1`), so keep **`SKILL_REGISTRY_LOCATION=us-central1`** explicitly in `.env` while running Agent Runtime & Sandboxes in Singapore (`asia-southeast1`).
-> - **Agent Registry Discovery & Standalone Skills (`agentregistry.googleapis.com`, Part C & Optional Lab 7):** Supports **`AGENT_REGISTRY_LOCATION=asia-southeast3` (Bangkok!)** directly for MCP server/A2A catalog discovery (`AgentRegistry` in Part C) and enterprise standalone skill governance (`gcloud agent-registry skills ...` adding automatic `private-*` prefixing, `<= 1 MB` ZIP limits, automated LLM security scanning `ENABLED_BLOCKING`, `Finding` triage, lifecycle states, and Custom Org Policies — see [Lab 7 (Optional): Enterprise Security & Governance Hardening](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md)).
+> **Verified Bangkok-First Regional Split — Three Distinct Registry Endpoints:**
+> We aim for **Bangkok (`asia-southeast3`) first** wherever supported, and only fall back to GCP-mandated locations where required:
+> - **Agent Registry A2A/MCP Discovery (`agentregistry.googleapis.com`, Part C):** Runs natively in **Bangkok (`AGENT_REGISTRY_LOCATION=asia-southeast3`)** — verified live for `gcloud agent-registry agents list --location=asia-southeast3` and ADK `AgentRegistry(location="asia-southeast3")`.
+> - **Vertex AI / Agent Platform Skill Registry (`aiplatform.googleapis.com/v1beta1`, Part B):** Developer-facing skill catalog via `agentplatform.Client.skills.*` (`<= 10 MB` ZIP, `<= 500 MB` unzipped; includes built-in `gcp-skill-registry`). Preview is **strictly 3 regions: `us-central1`, `europe-west4`, and `us-east5`** (not yet in Bangkok or Singapore), so keep **`SKILL_REGISTRY_LOCATION=us-central1`** explicitly in `.env`.
+> - **Agent Registry Standalone Skills (`gcloud alpha agent-registry skills`, Part B.3 & Optional Lab 7):** Enterprise standalone skill governance (automatic `private-*` prefixing, `<= 1 MB` ZIP limits, `ENABLED_BLOCKING` LLM security scanning, `Finding` triage, revision lifecycle, and Custom Org Policies). Standalone skills currently **time out in `asia-southeast3`** and are empirically verified working end-to-end in **`--location=global`** (`AGENT_REGISTRY_SKILLS_LOCATION=global`).
 
 ---
 
@@ -131,9 +133,10 @@ export SKILL_ID="secure-code-review"
 ```
 
 > [!CAUTION]
-> **Two Critical Skill Registry Quirks:**
-> 1. **Built-in `gcp-skill-registry` First-Call Ingestion Quirk:** The Skill Registry begins ingesting the built-in `gcp-skill-registry` skill asynchronously **on your very first API call** to the service. Consequently, **your first `list()` response will NOT include `gcp-skill-registry`** — issue a **second** `list()` call to see it appear! Built-in `gcp-*` skills cannot be deleted.
-> 2. **`SKILL_ID` Immutability & Reuse Lockout:** `SKILL_ID` (1–63 chars `[a-z0-9-]`, starts with a letter, ends with letter/digit, cannot start with `gcp-`) becomes the skill's folder name when attached to an agent. Official docs warn that deleting a skill reserves its `SKILL_ID` for **at least 24 hours** (and Create docs warn permanently reserved) — **never delete and immediately recreate with the same `SKILL_ID` during a workshop!** (If you need a fresh ID during testing, append a suffix like `secure-code-review-v2`.)
+> **Three Critical Skill Registry Quirks (`agentplatform==2.10.0`):**
+> 1. **`local_path` MUST Be a Directory Path — NEVER a `.zip` File!** `agentplatform.Client.skills.create()` / `.update()` (`get_zipped_filesystem_payload(local_path)`) **zips the directory internally** and immediately raises `ValueError: Path is not a directory` if passed `dist/secure-code-review.zip`. Pass the validated **skill directory** (`starter/skills_to_register/secure-code-review`) to the Python SDK; use `dist/secure-code-review.zip` from `make package-skill` for REST `zippedFilesystem` uploads and `gcloud alpha agent-registry skills revisions create --payload=...`.
+> 2. **Built-in `gcp-skill-registry` First-Call Ingestion Quirk:** The Skill Registry begins ingesting the built-in `gcp-skill-registry` skill asynchronously **on your very first API call** to the service. Consequently, **your first `list()` response will NOT include `gcp-skill-registry`** — issue a **second** `list()` call to see it appear! Built-in `gcp-*` skills cannot be deleted.
+> 3. **`SKILL_ID` Immutability & Reuse Lockout:** `SKILL_ID` (1–63 chars `[a-z0-9-]`, starts with a letter, ends with letter/digit, cannot start with `gcp-`) becomes the skill's folder name when attached to an agent. Official docs warn that deleting a skill reserves its `SKILL_ID` for **at least 24 hours** (and Create docs warn permanently reserved) — **never delete and immediately recreate with the same `SKILL_ID` during a workshop!** (If you need a fresh ID during testing, append a suffix like `secure-code-review-v2`.)
 
 Publish and inspect via Python (`agentplatform.Client.skills`, provided by `google-cloud-aiplatform`):
 
@@ -150,7 +153,7 @@ client = agentplatform.Client(
 first_list = [s.name for s in client.skills.list()]
 print("Call #1 skills (gcp-skill-registry not yet present on first project call):", first_list)
 
-# 2. Upload validated skill
+# 2. Upload validated skill DIRECTORY (NEVER pass a .zip file — the SDK zips the directory internally!)
 # SDK version note:
 #   google-cloud-aiplatform >= 1.154.0 accepts skill_id as a top-level argument.
 #   google-cloud-aiplatform < 1.154.0 passes {"skill_id": ..., "local_path": ...} inside config={}.
@@ -176,18 +179,70 @@ for item in retrieved.retrieved_skills:
 
 ### Step B2: Smoke-Test Semantic Retrieval via `registry_loader.py` CLI
 
-Once you complete `SkillRegistryPublisher.create_skill()` in Part C below (`list_skills()`, `update_skill()`, and `search_skills()` are already pre-filled), you can publish, list (with `--warmup` for the `gcp-skill-registry` quirk), and search skills directly from the CLI:
+Once you complete `SkillRegistryPublisher.create_skill()` in Part C below (`list_skills()`, `update_skill()`, and `search_skills()` are already pre-filled), you can publish (passing the **skill directory**, never `.zip`), list (with `--warmup` for the `gcp-skill-registry` quirk), and search skills directly from the CLI:
 
 ```bash
 cd starter
+uv run python -m coding_agent.tools.registry_loader publish-skill \
+  --skill-id secure-code-review \
+  --display-name "Secure Code Review" \
+  --description "Enterprise OWASP static security audit checklist." \
+  --path skills_to_register/secure-code-review
 uv run python -m coding_agent.tools.registry_loader list-skills --warmup
 uv run python -m coding_agent.tools.registry_loader search-skills \
   --query "audit Python code for OWASP injection flaws" \
   --top-k 3
 ```
 
+### Step B3 (Optional CLI Preview): Agent Registry Standalone Skills (`gcloud alpha` in `--location=global`)
+
+Whereas Vertex AI Skill Registry (`us-central1`) takes a directory via the Python SDK, **Agent Registry Standalone Skills** consume the validated `dist/secure-code-review.zip` built by `make package-skill` via the **`gcloud alpha agent-registry skills`** CLI.
+
+> [!WARNING]
+> **Empirically Verified `gcloud` Alpha Standalone Skills Rules (`gcloud 588.0.0`):**
+> 1. **Alpha-Only CLI Surface:** Only `gcloud alpha agent-registry skills ...` exists (`gcloud agent-registry skills` fails with `Invalid choice`). Ensure `gcloud components install alpha` is installed.
+> 2. **`--location=global` Required for Standalone Skills:** While A2A/MCP discovery (`gcloud agent-registry agents list`) works in Bangkok (`--location=asia-southeast3`), `gcloud alpha agent-registry skills create/list --location=asia-southeast3` currently times out — always pass **`--location="${AGENT_REGISTRY_SKILLS_LOCATION:-global}"`**.
+> 3. **2-Step Create + Revision Upload (Never `--payload` on `skills create`):** In `gcloud 588.0.0 alpha`, passing `--payload` to `skills create` drops the payload from the JSON body (`400 source is required`), and 2-char revision IDs like `v1` fail format validation. Create the bare skill shell first, then upload `rev-1` (or `v1-0-0`) with `revisions create --payload=...`.
+> 4. **Wait for Async Scan Under `ENABLED_BLOCKING` Before `--default-revision`:** Under the default `ENABLED_BLOCKING` scanning policy, immediately running `skills update --default-revision=...` right after `revisions create` returns **`FAILED_PRECONDITION: cannot set default revision to a revision with pending scan results when scanning policy is ENABLED_BLOCKING`**. Poll `revisions describe rev-1` until `scanResult.scanState` is `SUCCEEDED` with zero findings before promoting — or pass **`--scanning-policy=enabled-nonblocking`** on `skills create` for rapid workshop demos.
+> 5. **Delete Revisions Before Deleting the Skill:** `skills delete` has no `--force` flag and fails `FAILED_PRECONDITION` (`cannot_delete_skill_with_revisions`) until every child revision is deleted first.
+
+```bash
+export AGENT_REGISTRY_SKILLS_LOCATION="${AGENT_REGISTRY_SKILLS_LOCATION:-global}"
+
+# 1. Step 1: Create the bare skill shell WITHOUT --payload (Agent Registry auto-prefixes `private-`)
+#    (Defaults to ENABLED_BLOCKING; pass `--scanning-policy=enabled-nonblocking` for rapid workshop demos)
+gcloud alpha agent-registry skills create secure-code-review \
+  --project="${GOOGLE_CLOUD_PROJECT}" \
+  --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
+  --display-name="Secure Code Review" \
+  --description="Enterprise OWASP static security audit checklist."
+
+# 2. Step 2: Upload the validated ZIP bundle as revision `rev-1` (avoid 2-char `v1`)
+gcloud alpha agent-registry skills revisions create rev-1 \
+  --skill=private-secure-code-review \
+  --project="${GOOGLE_CLOUD_PROJECT}" \
+  --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
+  --payload="dist/secure-code-review.zip"
+
+# 3. Poll revision scan status before setting --default-revision (required under ENABLED_BLOCKING;
+#    immediate promotion returns FAILED_PRECONDITION while scan results are pending):
+gcloud alpha agent-registry skills revisions describe rev-1 \
+  --skill=private-secure-code-review \
+  --project="${GOOGLE_CLOUD_PROJECT}" \
+  --location="${AGENT_REGISTRY_SKILLS_LOCATION}"
+
+# 4. Clean teardown order: delete child revision(s) BEFORE deleting the parent skill
+# gcloud alpha agent-registry skills revisions delete rev-1 \
+#   --skill=private-secure-code-review \
+#   --project="${GOOGLE_CLOUD_PROJECT}" \
+#   --location="${AGENT_REGISTRY_SKILLS_LOCATION}" --quiet
+# gcloud alpha agent-registry skills delete private-secure-code-review \
+#   --project="${GOOGLE_CLOUD_PROJECT}" \
+#   --location="${AGENT_REGISTRY_SKILLS_LOCATION}" --quiet
+```
+
 > [!NOTE]
-> **Agent Registry Standalone Skill Scanning (`ENABLED_BLOCKING`) & Lifecycle Governance (Optional Lab 7):** Ready to enforce automated LLM security scanning (`ENABLED_BLOCKING`), `Finding` triage, `private-*` revision promotion (`DRAFT` -> `ACTIVE` -> `DEPRECATED` -> `DECOMMISSIONED`), and Custom Org Policies blocking `scanningConfig.policy == "DISABLED"`? That enterprise governance workflow lives in [Lab 7 (Optional): Enterprise Security & Governance Hardening](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md).
+> **Agent Registry Standalone Skill Scanning (`ENABLED_BLOCKING`) & Lifecycle Governance (Optional Lab 7):** Ready to enforce automated LLM security scanning (`ENABLED_BLOCKING`), `Finding` triage, `private-*` revision promotion (`rev-1` -> `rev-2`), and Custom Org Policies blocking `scanningConfig.policy == "DISABLED"`? That enterprise governance workflow lives in [Lab 7 (Optional): Enterprise Security & Governance Hardening](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md).
 
 ---
 
@@ -209,7 +264,7 @@ Open [`starter/coding_agent/tools/registry_loader.py`](../starter/coding_agent/t
 `SkillToolset` (ADK Python 2.0+) implements **3-level Progressive Disclosure** (L1 metadata -> L2 `SKILL.md` instructions via `load_skill` -> L3 `references/`/`assets/`/`scripts/` via `load_skill_resource` and `run_skill_script`), exposing up to 6 built-in tools: `list_skills`, `search_skills` (added when `registry=` is supplied), `load_skill`, `unload_skill`, `load_skill_resource`, and `run_skill_script`.
 
 Key verified rules to implement in `build_skill_registry_toolset()`:
-1. **Keyword-Only Constructor:** `GCPSkillRegistry(project_id=..., location=...)` (ADK Python 2.0+; falls back to `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` and raises `ValueError` if missing).
+1. **Keyword-Only Constructor & `global` Standalone Skills Location:** `GCPSkillRegistry(project_id=..., location=...)` (ADK Python 2.0+; falls back to `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` and raises `ValueError` if missing). Always pass `location=settings.agent_registry_skills_location` (`"global"` from `AGENT_REGISTRY_SKILLS_LOCATION`) — **never** `settings.agent_registry_location` (`"asia-southeast3"`), which is strictly for A2A/MCP discovery and times out on standalone skill endpoints.
 2. **Endpoint & Seamless Local Fallback:** Latest `google/adk-python` `main` (`gcp_skill_registry.py`) calls `https://agentregistry.googleapis.com/v1alpha` (overridable via `AGENT_REGISTRY_ENDPOINT`) and automatically strips `x-goog-*` headers across 302 GCS signed-URL redirects. Passing `local_skill_dirs=[...secure-code-review]` ensures `secure-code-review` is always available locally out of the box (and automatically pulls remote Agent Registry revisions once promoted in [Lab 7 (Optional)](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md)).
 3. **Reuse Lab 2's BYOC Sandbox (`environment=sandbox_env`):** Passing your active `AgentPlatformSandboxEnvironment` from Lab 2 directly into `SkillToolset(environment=active_environment)` guarantees that `run_skill_script` executes inside the exact same gVisor-isolated BYOC sandbox as `EnvironmentToolset`!
 4. **Collision Prevention & Session Caching:** Local skills in `skills=[...]` automatically shadow registry skills with identical names; `load_skill` caches unpacked skill instructions in session state (`_adk_activated_skill_{agent_name}`).
@@ -263,9 +318,9 @@ def build_skill_registry_toolset(
     )
 ```
 
-### Step C3: Implement `build_agent_registry_integrations()` (`AgentRegistry` in Bangkok `asia-southeast3` + Auth Providers)
+### Step C3: Implement `build_agent_registry_integrations()` (`AgentRegistry` A2A/MCP Discovery in Bangkok `asia-southeast3` + Auth Providers)
 
-`AgentRegistry` (ADK Python 2.0+) discovers registered A2A sub-agents, MCP servers, and endpoints in your primary Bangkok region (**`AGENT_REGISTRY_LOCATION=asia-southeast3`**) using either short relative names (`"agents/AGENT_ID"`, `"mcpServers/SERVER_ID"`) or full resource names. Wire all **three verified authentication patterns** cleanly:
+`AgentRegistry` (ADK Python 2.0+) discovers registered A2A sub-agents, MCP servers, and endpoints in our default Bangkok region (**`AGENT_REGISTRY_LOCATION=asia-southeast3`** — verified working live for A2A/MCP catalog discovery, separate from `global` standalone skills) using either short relative names (`"agents/AGENT_ID"`, `"mcpServers/SERVER_ID"`) or full resource names. Wire all **three verified authentication patterns** cleanly:
 
 ```python
 import google.auth
@@ -295,7 +350,7 @@ class GoogleApiAuth(httpx.Auth):
 
 def build_agent_registry_integrations(
     project_id: str,
-    location: str = "asia-southeast3",  # Bangkok primary region (AGENT_REGISTRY_LOCATION)
+    location: str = "asia-southeast3",  # Bangkok default for A2A/MCP discovery (AGENT_REGISTRY_LOCATION)
     mcp_server_name: str | None = None,
     remote_a2a_agent_name: str | None = None,
     continue_uri: str | None = None,
@@ -343,7 +398,7 @@ def build_agent_registry_integrations(
 > [!WARNING]
 > **Single-Parent Reuse Gotcha for `RemoteA2aAgent`:** An ADK `RemoteA2aAgent` instance can only have **one parent orchestrator** at a time. Fetch it once at startup and call **`remote_agent.clone()`** whenever attaching it to multiple `LlmAgent(sub_agents=[remote_agent.clone()])` instances!
 
-Complete `# TODO(lab-4)` inside `_build_optional_skill_toolset()` in [`starter/coding_agent/agent.py`](../starter/coding_agent/agent.py) to wire your `build_skill_registry_toolset()` helper (when `ENABLE_SKILL_REGISTRY=true`) with `environment=active_environment` so the Coding Agent discovers `secure-code-review` dynamically on demand and executes any skill scripts inside Lab 2's sandbox.
+Complete `# TODO(lab-4)` inside `_build_optional_skill_toolset()` in [`starter/coding_agent/agent.py`](../starter/coding_agent/agent.py) to wire your `build_skill_registry_toolset()` helper (when `ENABLE_SKILL_REGISTRY=true`) with `location=settings.agent_registry_skills_location` (`"global"`) and `environment=active_environment` so the Coding Agent discovers `secure-code-review` dynamically on demand and executes any skill scripts inside Lab 2's sandbox.
 
 Test your local fallback and Agent Registry catalog discovery offline/live:
 

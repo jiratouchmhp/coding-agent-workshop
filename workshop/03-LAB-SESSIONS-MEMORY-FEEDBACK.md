@@ -81,7 +81,7 @@ Ensure your environment variables (including Lab 2's lightweight standalone `REA
 source .env
 export GOOGLE_GENAI_USE_ENTERPRISE="TRUE"   # MANDATORY for Feedback Service & ADK enterprise features
 export GOOGLE_CLOUD_PROJECT="${GOOGLE_CLOUD_PROJECT}"
-export GOOGLE_CLOUD_LOCATION="${GOOGLE_CLOUD_LOCATION:-asia-southeast1}"  # Singapore — nearest supported Agent Platform region
+export GOOGLE_CLOUD_LOCATION="${GOOGLE_CLOUD_LOCATION:-asia-southeast1}"  # Singapore fallback (Sessions/Memory/Feedback not yet in Bangkok asia-southeast3)
 ```
 
 Verify required APIs are enabled:
@@ -100,7 +100,7 @@ gcloud services enable \
 > **Reusing Lab 2's Standalone `REASONING_ENGINE_NAME` (Zero Code Deploy Required):**
 > - Per the official [Managed Sessions](https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/sessions) and [Memory Bank](https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/memory-bank) documentation, both services run **standalone** on an empty parent `reasoningEngines` instance (`client.runtimes.create()` — ~3 seconds, **zero agent code deployment** required!). Reuse the `REASONING_ENGINE_NAME` you created in [Lab 2](./02-LAB-CUSTOM-SANDBOX-BYOC.md) right here (or create one if you haven't yet via `client.runtimes.create(config={"display_name": "Workshop State Store"})`).
 > - **Telemetry & Feedback Lifecycle:** In Lab 3 you wire and smoke-test your OTel callbacks (`before_tool_callback` / `after_tool_callback`) and `FeedbackClient` against your local agent and standalone instance; they automatically correlate with live Cloud Trace spans, Cloud Logging, and Online Evaluation Monitors once you deploy the complete agent in [Lab 5](./05-LAB-DEPLOY-RUNTIME-TERRAFORM.md) and evaluate it in [Lab 6](./06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md).
-> - **Locations & Enterprise Encryption:** In our Bangkok/Singapore regional topology, Managed Sessions, Memory Bank, Feedback Service, and Agent Runtime all run cleanly in **Singapore (`GOOGLE_CLOUD_LOCATION=asia-southeast1`)** — all officially live with zero restrictions (not yet launched in Bangkok `asia-southeast3`). Sessions and Memory Bank also support multi-region (`us`, `eu`) and `global` *(exception: Memory Bank is NOT available in `asia-southeast2`, `australia-southeast2`, or `northamerica-northeast2`)*. For CMEK and VPC-SC hardening, see [Lab 7 (Optional): Enterprise Security & Governance Hardening](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md).
+> - **Locations & Enterprise Encryption:** Following our **Bangkok-first (`asia-southeast3`)** strategy, we fall back to **Singapore (`GOOGLE_CLOUD_LOCATION=asia-southeast1`)** here only because Managed Sessions, Memory Bank, Feedback Service, and Agent Runtime are not yet launched in Bangkok (all four are officially live in `asia-southeast1` with zero restrictions). Sessions and Memory Bank also support multi-region (`us`, `eu`) and `global` *(exception: Memory Bank is NOT available in `asia-southeast2`, `australia-southeast2`, or `northamerica-northeast2`)*. For CMEK and VPC-SC hardening, see [Lab 7 (Optional): Enterprise Security & Governance Hardening](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md).
 
 ---
 
@@ -176,21 +176,26 @@ class SessionLifecycleManager:
         ttl_days: int = 10,
     ) -> str:
         """Create a managed session and return its canonical resource name."""
-        kwargs = {
-            "name": self._runtime_name,
-            "user_id": user_id,
-            "config": {"ttl": f"{ttl_days * 24 * 60 * 60}s"},
-        }
+        # Verified for google-cloud-agentplatform==2.10.0:
+        # `session_id` MUST go inside `config={}` (CreateRuntimeSessionConfig),
+        # NOT as a top-level kwarg to `client.sessions.create()`.
+        config: dict[str, object] = {"ttl": f"{ttl_days * 24 * 60 * 60}s"}
         if session_id:
-            kwargs["session_id"] = session_id
+            config["session_id"] = session_id
 
-        session_op = self._client.sessions.create(**kwargs)
+        session_op = self._client.sessions.create(
+            name=self._runtime_name,
+            user_id=user_id,
+            config=config,
+        )
         # Verified SDK gotcha: some SDK flows return an LRO (.response.name),
         # while others return the Session object directly (.name). Handle both!
         return session_op.response.name if hasattr(session_op, "response") else session_op.name
 
-    def get_session(self, session_name: str, user_id: str):
-        return self._client.sessions.get(name=session_name, user_id=user_id)
+    def get_session(self, session_name: str):
+        # Verified for google-cloud-agentplatform==2.10.0:
+        # sessions.get(*, name: str, config=None) does NOT accept user_id=.
+        return self._client.sessions.get(name=session_name)
 
     def list_sessions(self, user_id: str) -> list:
         # Note: SDK defaults to create_time desc and does not expose order_by;
@@ -242,9 +247,10 @@ class SessionLifecycleManager:
 ```
 
 > [!NOTE]
-> **Verified Upstream Doc Bugs to Avoid:**
-> 1. One ADK Managed Sessions doc snippet writes `client.runtimes.update(resource_name=...)` — the verified parameter name across the SDK is **`name=`**.
-> 2. The REST tab for "Append an event to a session" in `sessions/manage-with-api` accidentally copy-pastes the `POST .../sessions` create payload — use `client.sessions.events.append(...)` in Python.
+> **Verified `agentplatform==2.10.0` SDK & Upstream Doc Quirks to Avoid:**
+> 1. **`sessions.create` & `sessions.get` Signatures:** In `google-cloud-agentplatform==2.10.0`, passing `session_id=` as a top-level kwarg to `client.sessions.create()` raises `TypeError` — pass it inside `config={"session_id": ...}`. Likewise, `client.sessions.get(name=...)` accepts only `name` and optional `config` (no `user_id=` kwarg).
+> 2. **`name=` vs. `resource_name=`:** One ADK Managed Sessions doc snippet writes `client.runtimes.update(resource_name=...)` — the verified parameter name across the SDK is **`name=`**.
+> 3. **REST `appendEvent` Doc Bug:** The REST tab for "Append an event to a session" in `sessions/manage-with-api` accidentally copy-pastes the `POST .../sessions` create payload — use `client.sessions.events.append(...)` in Python.
 
 > [!NOTE]
 > **Multi-Tenant Isolation, CMEK & VPC-SC (Optional Lab 7):** For multi-tenant `sessionUserId` IAM Conditions (`roles/aiplatform.sessionViewer` / `sessionEditor` / `sessionUser`), `ListSessions` proxy limits, and CMEK/VPC-SC encryption controls, see [Lab 7 (Optional): Enterprise Security & Governance Hardening](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md).
@@ -269,9 +275,10 @@ Open [`starter/coding_agent/memory/memory_bank_manager.py`](../starter/coding_ag
 Key platform defaults and rules already wired into the pre-filled `MemoryBankManager.configure_memory_bank(...)` and `build_managed_semantic_memory_config(...)` helpers:
 - **Generation LLM Default:** **`gemini-3.5-flash`** (effective June 29, 2026; older instances default to `gemini-2.5-flash`).
 - **Embedding Model Default:** **`text-embedding-005`** (multilingual option: `gemini-embedding-2`, which ONLY accepts `global`, `us`, or `eu` in its model resource name — **NOT** regional paths like `asia-southeast1` or `us-central1`). **Critical:** The embedding model can **only be changed before storing the first memory**!
-- **Verified SDK Config Key Divergence:**
-  - `client.memory_banks.create(managed_semantic_memory_config={...})` uses **`"unstructured_memory_configs"`** and `"granular_ttl"` / `"memory_revision_default_ttl"`.
-  - `client.runtimes.update(name=..., config={"context_spec": {"memory_bank_config": {...}}})` uses **`"customization_configs"`** (instead of `"unstructured_memory_configs"`).
+- **Verified `agentplatform==2.10.0` SDK Config & Namespace Rules:**
+  - Always use **`"granular_ttl_config"`** inside `ttl_config` (both in dict configs and `TtlConfig(granular_ttl_config=...)`). Passing `"granular_ttl"` raises Pydantic `ValidationError: extra_forbidden` in `google-cloud-agentplatform==2.10.0`.
+  - All memory operations live under **`client.memory_banks.memories.*`** (`generate`, `retrieve`, `revisions.list`, `rollback`, `purge`, `delete`) — `client.memories` does **not** exist in `agentplatform==2.10.0`.
+  - `client.memory_banks.create(managed_semantic_memory_config={...})` uses **`"unstructured_memory_configs"`**, whereas `client.runtimes.update(name=..., config={"context_spec": {"memory_bank_config": {...}}})` uses **`"customization_configs"`**.
 
 ```python
 managed_semantic_memory_config = {
@@ -279,10 +286,10 @@ managed_semantic_memory_config = {
         "model": f"projects/{project_id}/locations/global/publishers/google/models/gemini-3.5-flash"
     },
     "similarity_search_config": {
-        "embedding_model": f"projects/{project_id}/locations/{location}/publishers/google/models/text-embedding-005"  # e.g., asia-southeast1 (Singapore)
+        "embedding_model": f"projects/{project_id}/locations/{location}/publishers/google/models/text-embedding-005"  # e.g., asia-southeast1 (Singapore fallback)
     },
     "ttl_config": {
-        "granular_ttl": {
+        "granular_ttl_config": {
             "create_ttl": f"{90 * 24 * 60 * 60}s",
             "generate_created_ttl": f"{90 * 24 * 60 * 60}s",
             "generate_updated_ttl": f"{90 * 24 * 60 * 60}s",
@@ -661,9 +668,12 @@ class FeedbackClient:
         )
 
     def list_session_feedback(self, session_id: str) -> list:
+        # Verified for google-cloud-agentplatform==2.10.0:
+        # feedback_entries.list(*, parent: str, config=None) uses `parent=`,
+        # whereas feedback_entries.create() and delete() take `name=`.
         return list(
             self._client.feedback_entries.list(
-                name=self._runtime_name,
+                parent=self._runtime_name,
                 config={
                     "filter": f'session_id="{session_id}"',
                     "order_by": "create_time desc",

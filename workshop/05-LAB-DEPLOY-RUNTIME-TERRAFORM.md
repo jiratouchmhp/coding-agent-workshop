@@ -14,7 +14,7 @@
 >
 > | Zero-Docker Path | Workflow Commands | Local Docker? | Artifact Registry Push? | Best For |
 > |---|---|:---:|:---:|---|
-> | **Path 1 (Primary — Declarative Production IaC)** | `make test-agent-local` (pure-Python FastAPI localhost smoke test) → `make push-agent` (Cloud Build `--region=asia-southeast3` → Bangkok AR) → `make tf-apply` (Terraform `container_spec` → Singapore `asia-southeast1`) | **No** | Yes *(Bangkok `asia-southeast3`, or optional `asia-southeast1`)* | Production CI/CD, Terraform IAM `depends_on`, Secret Manager & repeatable promotions |
+> | **Path 1 (Default — Declarative Production IaC)** | `make test-agent-local` (pure-Python FastAPI localhost smoke test) → `make push-agent` (Cloud Build `--region=asia-southeast3` → Bangkok AR) → `make tf-apply` (Terraform `container_spec` → Singapore `asia-southeast1` fallback) | **No** | Yes *(Bangkok `asia-southeast3` — empirically verified with Singapore Agent Runtime; no second AR repo needed!)* | Production CI/CD, Terraform IAM `depends_on`, Secret Manager & repeatable promotions |
 > | **Path 2 (Zero-Docker AND Zero-AR Push)** | `make test-agent-local` → `make pack-agent-source` (level-0 `coding_agent_source.tar.gz`, <= 8 MB) → Terraform `source_code_spec` + empty `image_spec {}` | **No** | **No!** *(Agent Runtime builds remotely from `./Dockerfile`)* | Teams wanting declarative Terraform IaC without managing a separate Artifact Registry image push step |
 > | **Path 3 (Rapid Imperative Dev)** | `agents-cli deploy --region asia-southeast1` | **No** | Handled remotely | Fastest single-command dev prototyping (see Part A ordering rule before mixing with Terraform!) |
 
@@ -36,7 +36,7 @@ By the end of this lab, you will be able to:
 - **Focused Exercises (High-Signal TODOs):** `starter/main.py` (`get_runtime_app`, `query_endpoint`, `stream_query_endpoint`) + `starter/terraform/main.tf` (5 focused uncomment blocks: `roles/aiplatform.memoryUser`, dual service-agent AR bindings, `container_spec`, runtime `env` & `secret_env`, and IAM `depends_on`) — *(Dockerfile, variables & outputs pre-filled!)*
 - **Key Commands (Zero Local Docker — Choose `push-agent` OR Zero-AR `pack-agent-source`):**
   ```bash
-  make test-agent-local                                     # Pure-Python FastAPI localhost smoke test (GET / -> 200; zero Docker!)
+  make test-agent-local                                     # Pure-Python FastAPI smoke test (GET / + POST /api/reasoning_engine; zero Docker!)
   make push-agent                                           # Remote Cloud Build (--region=asia-southeast3) — OR: make pack-agent-source (zero AR!)
   make tf-plan && make tf-apply                             # Declarative deploy to Singapore (asia-southeast1) with IAM depends_on
   make verify-lab LAB=5
@@ -64,11 +64,11 @@ flowchart LR
 
     TF -->|"depends_on IAM"| IAM["Service Agent & Runtime SA IAM"]
     TF -->|"secret_env"| SM["Secret Manager (asia-southeast3)"]
-    IAM -->|"gcp-sa-aiplatform-re (AR Reader)"| AR["Artifact Registry (Bangkok asia-southeast3)<br/>Built via Cloud Build --region=asia-southeast3"]
-    IAM -->|"gcp-sa-vertex-sandbox (AR Reader)"| SandboxAR["Artifact Registry (Sandbox Image)"]
+    IAM -->|"gcp-sa-aiplatform-re (AR Reader — Pull from Bangkok AR)"| AR["Artifact Registry (Bangkok asia-southeast3)<br/>Built via Cloud Build --region=asia-southeast3"]
+    IAM -->|"gcp-sa-vertex-sandbox (AR Reader)"| SandboxAR["Artifact Registry (Bangkok asia-southeast3 Sandbox Image)"]
     IAM -->|"gcp-sa-aiplatform (Secret Accessor / Cross-Project AR)"| SM
 
-    CLI --> Runtime["Agent Runtime (ReasoningEngine — Singapore asia-southeast1)"]
+    CLI --> Runtime["Agent Runtime (ReasoningEngine — Singapore asia-southeast1 Fallback)"]
     TF -->|"container_spec OR source_code_spec"| Runtime
     AR -->|"container_spec.image_uri"| Runtime
 
@@ -95,11 +95,11 @@ agents-cli info
 
 Verify the following values in `.env`:
 - `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_PROJECT_NUMBER`
-- `GOOGLE_CLOUD_LOCATION` (**`asia-southeast1`** — Singapore, nearest supported Agent Runtime region)
-- `PRIMARY_REGION`, `AR_LOCATION`, `BUILD_LOCATION`, and `AGENT_REGISTRY_LOCATION` (**`asia-southeast3`** — Bangkok primary build, Artifact Registry & Agent Registry region; optionally set `AR_LOCATION=asia-southeast1` for strict same-region AR pulls)
+- `PRIMARY_REGION`, `AR_LOCATION`, `BUILD_LOCATION`, and `AGENT_REGISTRY_LOCATION` (**`asia-southeast3`** — Bangkok default for Artifact Registry, Cloud Build, Secret Manager & Agent Registry A2A/MCP discovery; **empirically verified:** Bangkok AR pulls cleanly into Singapore Agent Runtime and Singapore BYOC Sandboxes, so no second AR repo is needed!)
+- `GOOGLE_CLOUD_LOCATION` (**`asia-southeast1`** — Singapore fallback used only because Agent Runtime & Managed Sandboxes are not yet launched in Bangkok)
 - `SANDBOX_IMAGE_URI` (`asia-southeast3-docker.pkg.dev/.../coding-agent-repo/coding-sandbox:v1`) and `SANDBOX_TEMPLATE_NAME` (from Lab 2, or `SANDBOX_MODE=shell`)
 - `ENABLE_TELEMETRY_CALLBACKS`, `ENABLE_MEMORY_BANK`, and your Lab 2/3 standalone `REASONING_ENGINE_NAME` (in `asia-southeast1`)
-- `ENABLE_SKILL_REGISTRY`, `SKILL_REGISTRY_LOCATION` (**`us-central1`** — 3-region Preview), and `AGENT_REGISTRY_LOCATION` (**`asia-southeast3`** — Bangkok)
+- `ENABLE_SKILL_REGISTRY`, `SKILL_REGISTRY_LOCATION` (**`us-central1`** — 3-region Preview), `AGENT_REGISTRY_LOCATION` (**`asia-southeast3`** — Bangkok A2A/MCP), and `AGENT_REGISTRY_SKILLS_LOCATION` (**`global`** — standalone skills)
 - `AGENT_IMAGE_URI` (built and pushed remotely via Cloud Build `--region=asia-southeast3` in Step B0 below — zero local Docker!)
 
 > [!IMPORTANT]
@@ -195,7 +195,16 @@ Before running `terraform plan` or `terraform apply` with Path 1 (`container_spe
        from coding_agent.agent import app as adk_app
        from coding_agent.agent import root_agent
 
-       from agentplatform.frameworks import AdkApp
+       try:
+           from agentplatform.frameworks import AdkApp
+       except ImportError:
+           from vertexai.agent_engines import AdkApp
+
+       # Defensive guard: `AdkApp.set_up()` checks `"GOOGLE_CLOUD_AGENT_ENGINE_ID" in os.environ`
+       # (truthy even on `""`), which would raise `ValueError: agent_engine_id is required for
+       # VertexAiMemoryBankService.` during local smoke tests when exported as an empty string.
+       if not os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID", "").strip():
+           os.environ.pop("GOOGLE_CLOUD_AGENT_ENGINE_ID", None)
 
        init_params = inspect.signature(AdkApp.__init__).parameters
        if "app" in init_params:
@@ -211,32 +220,50 @@ Before running `terraform plan` or `terraform apply` with Path 1 (`container_spe
        if callable(setup_fn):
            setup_fn()
        return runtime_app
+   ```
 
+   > [!WARNING]
+   > **FastAPI `0.163.1` Strict Content-Type Gotcha on `:query` Proxy Requests:**
+   > When Vertex AI Agent Runtime proxies `:query` / `:streamQuery` calls to `POST /api/reasoning_engine` and `POST /api/stream_reasoning_engine`, declaring `request: QueryRequest` directly causes FastAPI `0.163.1`'s strict content-type body parser to hand Pydantic a raw JSON string, failing live `:query` calls with **HTTP 400/422** (`model_attributes_type: Input should be a valid dictionary or object to extract fields from`). Both `starter/main.py` and `solution/main.py` pre-fill `await _parse_query_request(request)` (reading raw `await request.body()`, unwrapping once if double-encoded, and validating via `QueryRequest.model_validate(...)`) — call it directly from both endpoints!
 
+   ```python
    @app.post("/api/reasoning_engine")
-   async def query_endpoint(request: QueryRequest) -> responses.JSONResponse:
+   async def query_endpoint(request: Request) -> responses.JSONResponse:
+       """Serve unary and async ``class_method`` invocations (``:query``)."""
+       query_req = await _parse_query_request(request)
        runtime_app = get_runtime_app()
-       method = _resolve_public_method(runtime_app, request.class_method)
+       method = _resolve_public_method(runtime_app, query_req.class_method)
        if method is None:
            return responses.JSONResponse(
                status_code=400,
-               content={"error": f"Method {request.class_method!r} not found on agent"},
+               content={"error": f"Method {query_req.class_method!r} not found on agent"},
            )
-       output = await _invoke_method(method, request.input or {})
-       return responses.JSONResponse(content=encoders.jsonable_encoder({"output": output}))
+
+       output = await _invoke_method(method, query_req.input or {})
+       try:
+           serialized = encoders.jsonable_encoder({"output": output})
+       except ValueError:
+           logger.exception("Failed to JSON-encode unary response for %s", query_req.class_method)
+           raise
+       return responses.JSONResponse(content=serialized)
 
 
    @app.post("/api/stream_reasoning_engine")
-   async def stream_query_endpoint(request: QueryRequest) -> responses.StreamingResponse:
+   async def stream_query_endpoint(request: Request) -> responses.StreamingResponse:
+       """Serve streaming ``class_method`` invocations (``:streamQuery?alt=sse``) as NDJSON."""
+       query_req = await _parse_query_request(request)
        runtime_app = get_runtime_app()
-       method = _resolve_public_method(runtime_app, request.class_method)
+       method = _resolve_public_method(runtime_app, query_req.class_method)
        if method is None:
            return responses.StreamingResponse(
-               content=iter([json.dumps({"error": f"Method {request.class_method!r} not found"}) + "\n"]),
+               content=iter(
+                   [json.dumps({"error": f"Method {query_req.class_method!r} not found"}) + "\n"]
+               ),
                status_code=400,
                media_type="application/json",
            )
-       output = await _invoke_method(method, request.input or {})
+
+       output = await _invoke_method(method, query_req.input or {})
        return responses.StreamingResponse(
            content=_ndjson_stream(output),
            media_type="application/json",
@@ -248,11 +275,13 @@ Before running `terraform plan` or `terraform apply` with Path 1 (`container_spe
    ```bash
    source .env
 
-   # 1. Pure-Python local FastAPI/Uvicorn smoke test (verifies the GET / -> 200 {"status":"ok"} liveness/readiness contract — ZERO Docker!)
+   # 1. Pure-Python local FastAPI/Uvicorn smoke test (verifies BOTH GET / -> 200 {"status":"ok"}
+   #    AND POST /api/reasoning_engine with and without Content-Type: application/json — ZERO Docker!)
    make test-agent-local
 
-   # 2. Configure Bangkok (asia-southeast3) primary Artifact Registry & Cloud Build regions
-   #    (Optional: set AR_LOCATION="asia-southeast1" if you prefer strict same-region AR pulls into Singapore Agent Runtime)
+   # 2. Aim for Bangkok (asia-southeast3) first for Artifact Registry & Cloud Build.
+   #    Empirically verified: Singapore (asia-southeast1) Agent Runtime pulls cleanly from
+   #    Bangkok Artifact Registry (`asia-southeast3-docker.pkg.dev`) — no second AR repo needed!
    export AR_LOCATION="${AR_LOCATION:-asia-southeast3}"
    export BUILD_LOCATION="${BUILD_LOCATION:-asia-southeast3}"
 
@@ -277,7 +306,7 @@ Before running `terraform plan` or `terraform apply` with Path 1 (`container_spe
 
 Review the files in `starter/terraform/`:
 - [`starter/terraform/versions.tf`](../starter/terraform/versions.tf) — Terraform and Google provider constraints (`hashicorp/google >= 6.0.0` and `hashicorp/google-beta >= 6.0.0`, required for `spec.container_spec`; note upstream `use-terraform` docs still print `>= 5.28.0`)
-- [`starter/terraform/variables.tf`](../starter/terraform/variables.tf) — Input variables (`project_id`, `project_number`, `location` defaulting to `asia-southeast1` Singapore, `repository_name`, `agent_image_uri` & `sandbox_image_uri` in Bangkok `asia-southeast3-docker.pkg.dev` or optional `asia-southeast1-docker.pkg.dev`, `sandbox_template_name`, `api_key_value`, plus optional Lab 3/4 feature variables `enable_memory_bank`, `enable_skill_registry`, `skill_registry_location` defaulting to `us-central1`, and `agent_registry_location` defaulting to `asia-southeast3`)
+- [`starter/terraform/variables.tf`](../starter/terraform/variables.tf) — Input variables (`project_id`, `project_number`, `location` defaulting to `asia-southeast1` Singapore fallback, `repository_name`, `agent_image_uri` & `sandbox_image_uri` in Bangkok `asia-southeast3-docker.pkg.dev`, `sandbox_template_name`, `api_key_value`, plus optional Lab 3/4 feature variables `enable_memory_bank`, `enable_skill_registry`, `skill_registry_location` defaulting to `us-central1`, `agent_registry_location` defaulting to `asia-southeast3`, and `agent_registry_skills_location` defaulting to `global`)
 - [`starter/terraform/main.tf`](../starter/terraform/main.tf) — Service accounts, Secret Manager, dual service agent IAM bindings, and `google_vertex_ai_reasoning_engine` (contains `# TODO(lab-5)` markers)
 - [`starter/terraform/outputs.tf`](../starter/terraform/outputs.tf) — Exports `reasoning_engine_id`, `reasoning_engine_resource_name`, and `agent_runtime_service_account`
 - [`starter/terraform/terraform.tfvars.example`](../starter/terraform/terraform.tfvars.example) — Sample variables template
@@ -386,7 +415,7 @@ resource "google_project_iam_member" "sandbox_service_agent_ar_reader" {
 
 #### 2. `google_vertex_ai_reasoning_engine` — Option 1: BYOC Prebuilt Container (`container_spec`)
 
-Wire `class_methods`, `container_spec`, `deployment_spec` (with telemetry env vars and `secret_env`), `service_account` (or `identity_type = "AGENT_IDENTITY"`), and **`depends_on`**:
+Wire `deletion_policy = "FORCE"` (prevents `terraform destroy` HTTP 400 failures once child sessions/memories exist), `class_methods`, `container_spec`, `deployment_spec` (with telemetry env vars and `secret_env`), `service_account` (or `identity_type = "AGENT_IDENTITY"`), and **`depends_on`**:
 
 ```hcl
 locals {
@@ -414,6 +443,9 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
   description  = "Enterprise ADK Coding Agent deployed declaratively with Terraform BYOC container_spec"
   project      = var.project_id
   region       = var.location
+  # Prevents `terraform destroy` from failing with HTTP 400 ("The ReasoningEngine contains
+  # child resources: sessions") once live sessions or memories exist on the runtime.
+  deletion_policy = "FORCE"
 
   spec {
     agent_framework = "google-adk"
@@ -451,9 +483,15 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
         name  = "SANDBOX_MODE"
         value = local.resolved_sandbox_mode
       }
-      env {
-        name  = "SANDBOX_TEMPLATE_NAME"
-        value = var.sandbox_template_name
+      # CRITICAL: Vertex AI rejects empty-string env values with HTTP 400
+      # (`reasoning_engine.spec.deployment_spec.env[...].value: Required field is not set`).
+      # Always gate optional variables like SANDBOX_TEMPLATE_NAME behind `dynamic "env"`.
+      dynamic "env" {
+        for_each = var.sandbox_template_name != "" ? [1] : []
+        content {
+          name  = "SANDBOX_TEMPLATE_NAME"
+          value = var.sandbox_template_name
+        }
       }
       env {
         name  = "SANDBOX_SERVICE_ACCOUNT_EMAIL"
@@ -469,13 +507,26 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
         name  = "ENABLE_SKILL_REGISTRY"
         value = tostring(var.enable_skill_registry)
       }
-      env {
-        name  = "SKILL_REGISTRY_LOCATION"
-        value = var.skill_registry_location # Default "us-central1" (3-region Preview)
+      dynamic "env" {
+        for_each = var.skill_registry_location != "" ? [1] : []
+        content {
+          name  = "SKILL_REGISTRY_LOCATION"
+          value = var.skill_registry_location # Default "us-central1" (3-region Preview)
+        }
       }
-      env {
-        name  = "AGENT_REGISTRY_LOCATION"
-        value = var.agent_registry_location # Default "asia-southeast3" (Bangkok primary)
+      dynamic "env" {
+        for_each = var.agent_registry_location != "" ? [1] : []
+        content {
+          name  = "AGENT_REGISTRY_LOCATION"
+          value = var.agent_registry_location # Default "asia-southeast3" (Bangkok A2A/MCP discovery)
+        }
+      }
+      dynamic "env" {
+        for_each = var.agent_registry_skills_location != "" ? [1] : []
+        content {
+          name  = "AGENT_REGISTRY_SKILLS_LOCATION"
+          value = var.agent_registry_skills_location # Default "global" (standalone skills)
+        }
       }
       secret_env {
         name = "CODING_AGENT_API_KEY"
@@ -567,7 +618,7 @@ output "agent_runtime_service_account" {
 
 ### Step B4: Plan, Apply, and Smoke-Test Your Deployed Agent
 
-1. Create your `terraform.tfvars` from the template (using Singapore `asia-southeast1` for Agent Runtime and Bangkok `asia-southeast3` for primary AR/Agent Registry):
+1. Create your `terraform.tfvars` from the template (Bangkok `asia-southeast3` default for AR & Agent Registry A2A/MCP, falling back to Singapore `asia-southeast1` only for Agent Runtime):
 
    ```bash
    cp starter/terraform/terraform.tfvars.example starter/terraform/terraform.tfvars
@@ -577,19 +628,20 @@ output "agent_runtime_service_account" {
    ```hcl
    project_id              = "YOUR_PROJECT_ID"
    project_number          = "YOUR_PROJECT_NUMBER"
-   location                = "asia-southeast1"  # Singapore — nearest supported Agent Runtime region
+   location                = "asia-southeast1"  # Singapore fallback (Agent Runtime not yet in Bangkok asia-southeast3)
    repository_name         = "coding-agent-repo"
    display_name            = "coding_agent_byoc_tf"
    agent_image_uri         = "asia-southeast3-docker.pkg.dev/YOUR_PROJECT_ID/coding-agent-repo/coding-agent:v1"
    sandbox_image_uri       = "asia-southeast3-docker.pkg.dev/YOUR_PROJECT_ID/coding-agent-repo/coding-sandbox:v1"
-   sandbox_template_name   = ""                 # Paste Lab 2 template name, or leave empty for SANDBOX_MODE=shell
+   sandbox_template_name   = ""                 # Paste Lab 2 template name, or leave empty for SANDBOX_MODE=shell (omitted via dynamic "env")
    sandbox_mode            = ""                 # Empty auto-selects "byoc" when sandbox_template_name is set, else "shell"
    model_name              = "gemini-2.5-flash"
    api_key_value           = "replace-with-workshop-placeholder-value"
    enable_memory_bank      = false
    enable_skill_registry   = false
-   skill_registry_location = "us-central1"      # 3-region Vertex AI Skill Registry Preview
-   agent_registry_location = "asia-southeast3"  # Bangkok primary Agent Registry region
+   skill_registry_location        = "us-central1"      # 3-region Vertex AI Skill Registry Preview
+   agent_registry_location        = "asia-southeast3"  # Bangkok default for A2A/MCP discovery
+   agent_registry_skills_location = "global"           # Standalone Agent Registry skills (`gcloud alpha`)
    ```
 
 2. Format, validate, and plan:

@@ -23,7 +23,7 @@ Declarative Infrastructure-as-Code (IaC) reference for provisioning **Gemini Ent
 > 2. **Path 2 (`source_code_spec` + empty `image_spec {}` tarball):** Inline-pack a level-0 `.tar.gz` (`<= 8 MB`) containing `./Dockerfile` — Agent Runtime invokes Cloud Build automatically (**zero local Docker AND zero manual Artifact Registry push**).
 > 3. **Imperative CLI (`agents-cli deploy`):** Remote Cloud Build/deploy alternative when not managing the instance in Terraform.
 
-> **APAC Regional Split (Bangkok Primary + Singapore Agent Runtime):** Agent Runtime (`google_vertex_ai_reasoning_engine`), Managed Sandboxes, Managed Sessions, Memory Bank, Agent Gateway, and Gemini 2.5 Flash are officially live in **Singapore (`GOOGLE_CLOUD_LOCATION=asia-southeast1`)** and are not yet available in **Bangkok (`asia-southeast3`)**. APAC teams standardizing on Bangkok as their primary region keep **Cloud Build (`BUILD_LOCATION=asia-southeast3`)**, **Artifact Registry (`AR_LOCATION=asia-southeast3`, or `asia-southeast1` if strict same-region pull is preferred)**, **Secret Manager** (regional `asia-southeast3` or automatic replication), and **Agent Registry (`AGENT_REGISTRY_LOCATION=asia-southeast3`)** in Bangkok while targeting **`region = "asia-southeast1"`** on `google_vertex_ai_reasoning_engine`. Keep `var.location` (Runtime region) decoupled from `var.ar_location` and `var.agent_registry_location` in Terraform.
+> **Bangkok-First Regional Strategy (`asia-southeast3` Default -> `asia-southeast1` Fallback Only Where Unavailable):** Aim for **Bangkok (`asia-southeast3`)** first for **Cloud Build (`BUILD_LOCATION=asia-southeast3`)**, **Artifact Registry (`AR_LOCATION=asia-southeast3`)**, **Secret Manager**, and **Agent Registry A2A/MCP discovery (`AGENT_REGISTRY_LOCATION=asia-southeast3`; standalone skills use `global`)**. Fall back to **Singapore (`GOOGLE_CLOUD_LOCATION=asia-southeast1`)** only because Agent Runtime (`google_vertex_ai_reasoning_engine`), Managed Sandboxes, Managed Sessions, Memory Bank, Agent Gateway, and Gemini 2.5 Flash are not yet launched in Bangkok. **Empirically verified:** Singapore Agent Runtime (and Singapore BYOC Sandboxes) pull cleanly from Bangkok Artifact Registry (`asia-southeast3-docker.pkg.dev`) — **no second Singapore AR repository is required**. Keep `var.location` (Runtime region) decoupled from `var.ar_location` and `var.agent_registry_location` in Terraform.
 
 ---
 
@@ -49,9 +49,9 @@ Use `container_spec` when you need custom system libraries, deterministic supply
 Smoke-test the FastAPI runtime locally without Docker (`uvicorn main:app --host 127.0.0.1 --port 8080 && curl -sf http://127.0.0.1:8080/`), then build and push remotely via **Cloud Build** (local Docker is strictly optional):
 
 ```bash
-export PRIMARY_REGION="${PRIMARY_REGION:-asia-southeast3}"       # Bangkok primary region
-export LOCATION="${GOOGLE_CLOUD_LOCATION:-asia-southeast1}"      # Singapore (nearest supported Agent Runtime region)
-export AR_LOCATION="${AR_LOCATION:-${PRIMARY_REGION}}"           # Bangkok primary AR (or asia-southeast1 for same-region pull)
+export PRIMARY_REGION="${PRIMARY_REGION:-asia-southeast3}"       # Bangkok default region
+export LOCATION="${GOOGLE_CLOUD_LOCATION:-asia-southeast1}"      # Singapore fallback (Agent Runtime not yet in Bangkok)
+export AR_LOCATION="${AR_LOCATION:-${PRIMARY_REGION}}"           # Bangkok AR (empirically verified with SG Agent Runtime & Sandboxes!)
 export BUILD_LOCATION="${BUILD_LOCATION:-${PRIMARY_REGION}}"     # Bangkok remote Cloud Build (zero local Docker)
 export IMAGE_URI="${AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/agent-image:${IMAGE_TAG}"
 
@@ -102,13 +102,13 @@ variable "project_number" {
 variable "location" {
   type        = string
   default     = "asia-southeast1"
-  description = "Region for Agent Runtime deployment (Singapore asia-southeast1 default — nearest supported Agent Platform region)"
+  description = "Region for Agent Runtime deployment (Singapore asia-southeast1 fallback — Agent Runtime not yet in Bangkok)"
 }
 
 variable "ar_location" {
   type        = string
   default     = "asia-southeast3"
-  description = "Region for Artifact Registry repo (Bangkok asia-southeast3 primary default; or asia-southeast1 for strict same-region pulls)"
+  description = "Region for Artifact Registry repo (Bangkok asia-southeast3 default — empirically verified with SG Agent Runtime & Sandboxes)"
 }
 
 variable "repository_name" {
@@ -202,11 +202,12 @@ resource "google_secret_manager_secret_iam_member" "platform_service_agent_secre
 
 # 4. Agent Runtime Resource
 resource "google_vertex_ai_reasoning_engine" "byoc_agent" {
-  provider     = google-beta
-  display_name = "byoc_agent_tf"
-  description  = "BYOC agent deployed via Terraform with dual service-agent IAM ordering"
-  project      = var.project_id
-  region       = var.location # MUST be `region`, NOT `location` (upstream doc typo on line 467)
+  provider        = google-beta
+  display_name    = "byoc_agent_tf"
+  description     = "BYOC agent deployed via Terraform with dual service-agent IAM ordering"
+  project         = var.project_id
+  region          = var.location # MUST be `region`, NOT `location` (upstream doc typo on line 467)
+  deletion_policy = "FORCE"      # Prevents HTTP 400 child-sessions failure on `terraform destroy`
 
   spec {
     agent_framework = "google-adk"
@@ -235,6 +236,16 @@ resource "google_vertex_ai_reasoning_engine" "byoc_agent" {
         name  = "GOOGLE_GENAI_USE_ENTERPRISE"
         value = "TRUE"
       }
+      # CRITICAL TRAP: Vertex AI rejects empty-string `env { value = "" }` with HTTP 400
+      # (`reasoning_engine.spec.deployment_spec.env[N].value: Required field is not set`).
+      # Always gate optional env vars (such as SANDBOX_TEMPLATE_NAME) with `dynamic "env"`:
+      dynamic "env" {
+        for_each = var.sandbox_template_name != "" ? [var.sandbox_template_name] : []
+        content {
+          name  = "SANDBOX_TEMPLATE_NAME"
+          value = env.value
+        }
+      }
       secret_env {
         name = "API_KEY"
         secret_ref {
@@ -254,6 +265,8 @@ resource "google_vertex_ai_reasoning_engine" "byoc_agent" {
   ]
 }
 ```
+
+> **CRITICAL Empty-String `env` Trap (HTTP 400 on `terraform apply`):** Never emit an unconditional `env { name = "..."; value = var.optional_var }` when `var.optional_var` can default to `""`. Vertex AI validates every `deployment_spec.env` entry and aborts `ReasoningEngine` creation with `Error 400: reasoning_engine.spec.deployment_spec.env[N].value: Required field is not set`. Always wrap optional env vars in `dynamic "env"` with `for_each = var.optional_var != "" ? [var.optional_var] : []`!
 
 ### `terraform/outputs.tf` (Safe Short-ID Extraction & Dynamic SPIFFE Principal)
 
@@ -317,9 +330,10 @@ tar -tzvf ../terraform/agent_source.tar.gz | head -n 10
 
 ```hcl
 resource "google_vertex_ai_reasoning_engine" "dockerfile_agent" {
-  display_name = "dockerfile_agent_tf"
-  project      = var.project_id
-  region       = var.location
+  display_name    = "dockerfile_agent_tf"
+  project         = var.project_id
+  region          = var.location
+  deletion_policy = "FORCE" # Prevents HTTP 400 child-sessions failure on `terraform destroy`
 
   spec {
     agent_framework = "google-adk"
@@ -388,10 +402,10 @@ resource "google_project_iam_member" "ar_agw_cross_project_binding" {
   member   = "serviceAccount:service-${each.value}@gcp-sa-aiplatform.iam.gserviceaccount.com"
 }
 
-# Register runtime endpoint in Agent Registry (Bangkok primary default: asia-southeast3)
+# Register runtime endpoint in Agent Registry (Bangkok default for A2A/MCP: asia-southeast3; standalone skills use global)
 resource "google_agent_registry_service" "runtime_agent_entry" {
   project      = "AGENT_GATEWAY_PROJECT_ID"
-  location     = "asia-southeast3" # Or var.agent_registry_location (Bangkok primary; decoupled from Runtime var.location)
+  location     = "asia-southeast3" # Or var.agent_registry_location (Bangkok default for A2A/MCP; decoupled from Runtime var.location)
   service_id   = "runtime-agent-svc"
   display_name = "Runtime Agent Service"
   endpoint_spec { no_spec {} }
@@ -455,7 +469,7 @@ gcloud network-services agent-gateways describe GW_NAME \
 - **Private Service Connect Interface (PSC-I):**
   - Requires minimum `/28` subnet per project; supports RFC 1918 and non-RFC 1918 EXCEPT `100.64.0.0/20`, `192.0.0.0/24`, `192.0.2.0/24`, `198.18.0.0/15`, `198.51.100.0/24`, `203.0.113.0/24`, `240.0.0.0/4`.
   - **Immutable:** Changing an existing PSC-I requires recreating the Agent Runtime resource.
-  - **Shared VPC:** Grant service project's `gcp-sa-aiplatform` `roles/compute.networkUser` on the host project; place the network attachment in the **service project** (recommended) and grant `roles/compute.networkAdmin` (or custom role with `compute.networkAttachments.{get,update}`, `compute.regionOperations.get`). If placed in the host project, enable `aiplatform.googleapis.com` and create its service identity via `gcloud beta services identity create --service=aiplatform.googleapis.com --project=HOST_PROJECT`.
+  - **Shared VPC:** Grant service project's `gcp-sa-aiplatform` `roles/compute.networkUser` on the host project; place the network attachment in the **service project** (recommended) and grant `roles/compute.networkAdmin` (or custom role with `compute.networkAttachments.{get,update}`, `compute.regionOperations.get`). If placed in the host project, enable `aiplatform.googleapis.com` and create its service identity via `gcloud alpha services identity create --service=aiplatform.googleapis.com --project=HOST_PROJECT`.
   - **Internet egress with PSC-I / VPC-SC:** PSC-I routes traffic into your VPC with no default internet path; configure a proxy VM + Cloud NAT inside the VPC if outbound internet is required.
 - **VPC-SC Perimeter Ingress Rules for `gcp-sa-aiplatform-re`:**
   - Source / Git / Dockerfile: ingress to `artifactregistry.googleapis.com`.
@@ -487,12 +501,15 @@ curl -X POST \
   -d '{"class_method":"async_stream_query","input":{"user_id":"tf_smoke_test","message":"Hello"}}' \
   "https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/reasoningEngines/${REASONING_ENGINE_ID}:streamQuery?alt=sse"
 
-# Teardown
+# Teardown (requires `deletion_policy = "FORCE"` on google_vertex_ai_reasoning_engine
+# if live sessions/memories were created, otherwise destroy fails with HTTP 400 child resources)
 terraform destroy -var="project_id=${PROJECT_ID}" -var="project_number=${PROJECT_NUMBER}"
 ```
 
 | Error / Symptom | Root Cause | Fix |
 |---|---|---|
+| `Error 400: The ReasoningEngine contains child resources: sessions` on `terraform destroy` | `google_vertex_ai_reasoning_engine` omits `deletion_policy = "FORCE"` and live `:query` / `create_session` calls created child sessions or memories | Set `deletion_policy = "FORCE"` on `google_vertex_ai_reasoning_engine` (supported by both `hashicorp/google` and `hashicorp/google-beta`); for an already-applied state, apply that attribute first or delete child sessions / call `client.runtimes.delete(name=..., force=True)` |
+| `Error 400: deployment_spec.env[N].value: Required field is not set` | Unconditional `env { value = var.optional_var }` emitted an empty string `""` | Gate optional env vars behind `dynamic "env" { for_each = var.optional_var != "" ? [var.optional_var] : [] ... }` |
 | `IMAGE_PULL_BACKOFF` on first apply | Missing `roles/artifactregistry.reader` on `gcp-sa-aiplatform-re` (or `gcp-sa-aiplatform` cross-project) or missing `depends_on` | Add IAM resource(s) and wire into `depends_on` on `google_vertex_ai_reasoning_engine` |
 | `Unsupported block type: container_spec` | Cached `hashicorp/google` 5.x provider | Pin `version = ">= 6.0.0"` in `required_providers` and run `terraform init -upgrade` |
 | `Unsupported argument: location` | Copied upstream doc typo | Replace `location = var.location` with `region = var.location` |

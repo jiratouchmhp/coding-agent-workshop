@@ -275,6 +275,16 @@ def _build_agentplatform_client(project_id: str, location: str) -> Any:
     return agentplatform.Client(project=project_id, location=location)
 
 
+def _normalize_ttl_config(ttl_config: dict[str, Any]) -> dict[str, Any]:
+    """Normalize legacy ``granular_ttl`` keys to SDK 2.10+ ``granular_ttl_config``."""
+    normalized = dict(ttl_config)
+    if "granular_ttl" in normalized and "granular_ttl_config" not in normalized:
+        normalized["granular_ttl_config"] = normalized.pop("granular_ttl")
+    else:
+        normalized.pop("granular_ttl", None)
+    return normalized
+
+
 # ---------------------------------------------------------------------------
 # ADK Memory Service Builder & Callbacks
 # ---------------------------------------------------------------------------
@@ -708,7 +718,7 @@ class MemoryBankManager:
                 )
             },
             "ttl_config": {
-                "granular_ttl": {
+                "granular_ttl_config": {
                     "create_ttl": ttl_seconds,
                     "generate_created_ttl": ttl_seconds,
                     "generate_updated_ttl": ttl_seconds,
@@ -753,6 +763,11 @@ class MemoryBankManager:
             revision_ttl_days=revision_ttl_days,
             scope_keys=scope_keys or ["user_id"],
         )
+        if isinstance(semantic_config.get("ttl_config"), dict):
+            semantic_config = {
+                **semantic_config,
+                "ttl_config": _normalize_ttl_config(semantic_config["ttl_config"]),
+            }
         memory_bank = self.client.memory_banks.create(
             config={"display_name": display_name},
             managed_semantic_memory_config=semantic_config,
@@ -787,11 +802,13 @@ class MemoryBankManager:
             revision_ttl_days=revision_ttl_days,
             scope_keys=scope_keys or ["user_id"],
         )
+        raw_ttl = semantic_config.get("ttl_config")
+        normalized_ttl = _normalize_ttl_config(raw_ttl) if isinstance(raw_ttl, dict) else raw_ttl
         memory_bank_config: dict[str, Any] = {
             "generation_config": semantic_config["generation_config"],
             "customization_configs": semantic_config["unstructured_memory_configs"],
             "similarity_search_config": semantic_config["similarity_search_config"],
-            "ttl_config": semantic_config["ttl_config"],
+            "ttl_config": normalized_ttl,
             "disable_memory_revisions": semantic_config.get("disable_memory_revisions", False),
         }
         return self.client.runtimes.update(

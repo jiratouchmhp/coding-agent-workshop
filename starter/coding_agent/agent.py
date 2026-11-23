@@ -111,10 +111,14 @@ def _build_optional_skill_toolset(
     # TODO(lab-4): Import ``build_skill_registry_toolset`` from
     # ``coding_agent.tools.registry_loader`` and pass:
     #   project_id=settings.google_cloud_project,
-    #   location=settings.agent_registry_location or settings.skill_registry_location,
+    #   location=settings.agent_registry_skills_location,
     #   local_skill_dirs=[Path(__file__).resolve().parents[1] / "skills_to_register" / "secure-code-review"],
     #   environment=environment,
     #   enable_remote_registry=True,
+    # NOTE: Pass ``settings.agent_registry_skills_location`` (default ``"global"``) for
+    # standalone skill lookup rather than ``settings.agent_registry_location``
+    # (``"asia-southeast3"``, which is for Bangkok A2A/MCP discovery and currently times out
+    # on standalone skill endpoints).
     logger.info("ENABLE_SKILL_REGISTRY=true; complete TODO(lab-4) to attach SkillToolset.")
     return None
 
@@ -275,3 +279,45 @@ root_agent = build_root_agent()
 # CRITICAL: App.name MUST match the package folder name ("coding_agent")
 # to avoid "Session not found" errors in ADK runtime and `agents-cli eval`.
 app = App(root_agent=root_agent, name="coding_agent", **_build_app_options())
+
+
+async def run_local_smoke_turn(
+    prompt: str,
+    *,
+    user_id: str = "workshop-dev",
+) -> str:
+    """Run one local ADK smoke turn and close ``InMemoryRunner`` & async HTTP sessions cleanly."""
+    import asyncio
+
+    from google.adk.runners import InMemoryRunner
+
+    response_parts: list[str] = []
+    async with InMemoryRunner(app=app) as runner:
+        session = await runner.session_service.create_session(
+            app_name=app.name,
+            user_id=user_id,
+        )
+        content = types.Content(role="user", parts=[types.Part(text=prompt)])
+        async for event in runner.run_async(
+            user_id=user_id,
+            session_id=session.id,
+            new_message=content,
+        ):
+            event_content = getattr(event, "content", None)
+            for part in getattr(event_content, "parts", None) or []:
+                text = getattr(part, "text", None)
+                if text:
+                    response_parts.append(text)
+
+    # Close any cached google-genai async HTTP transport to avoid benign aiohttp exit warnings.
+    model = getattr(root_agent, "model", None)
+    api_client = getattr(model, "api_client", None)
+    aio_client = getattr(api_client, "aio", None)
+    aclose = getattr(aio_client, "aclose", None)
+    if callable(aclose):
+        try:
+            await aclose()
+        except Exception as exc:
+            logger.debug("Ignored async client cleanup warning: %s", exc)
+    await asyncio.sleep(0)
+    return "\n".join(response_parts).strip()

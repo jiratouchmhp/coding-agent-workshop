@@ -1,10 +1,10 @@
 # Lab 1 — Setup & Build the ADK Coding Agent (`Build Pillar`)
 
 > **Pillar:** Build (`google/agents-cli`, Google ADK 2.0 Python Agent Architectures — Simple, Collaborative, Graph & Dynamic Workflows, `EnvironmentToolset`, Service Registration, Antigravity `.agents/skills/`)  
-> **Duration:** 60 minutes (Full-Day Track — Part A 30 min, Part B 30 min) | 35 minutes (Half-Day Fast-Track — Part A 30 min hands-on, Part B 5 min walkthrough)  
+> **Duration:** 30 minutes Core (Part A) + 30 minutes Optional/Stretch (Part B) in Full-Day Track | 35 minutes (Half-Day Fast-Track — Part A 30 min hands-on, Part B 5 min walkthrough)  
 > **Antigravity Skill Companion:** [`.agents/skills/adk-coding-agent-build/SKILL.md`](../.agents/skills/adk-coding-agent-build/SKILL.md) *(with modular references [`agent-architectures-and-workflows.md`](../.agents/skills/adk-coding-agent-build/references/agent-architectures-and-workflows.md) & [`graph-and-dynamic-workflows.md`](../.agents/skills/adk-coding-agent-build/references/graph-and-dynamic-workflows.md); complements the built-in `google-agents-cli-adk-code` & `google-agents-cli-scaffold` skills)*  
 > **Previous:** [00 — Workshop Overview](./00-WORKSHOP-OVERVIEW.md) | **Next Lab:** [Lab 2: Custom Sandbox (BYOC), Lifecycle & Execution](./02-LAB-CUSTOM-SANDBOX-BYOC.md)  
-> **Files You Will Inspect & Edit:** `.env`, `starter/agents-cli-manifest.yaml`, `starter/coding_agent/config.py`, `starter/coding_agent/agent.py`, `starter/coding_agent/architectures.py`, `starter/services.yaml`, `starter/services.py`
+> **Files You Will Inspect & Edit:** `.env`, `starter/agents-cli-manifest.yaml`, `starter/coding_agent/config.py`, `starter/coding_agent/agent.py`, *(Optional Part B)* `starter/coding_agent/architectures.py`, `starter/services.yaml`, `starter/services.py`
 
 ---
 
@@ -15,14 +15,14 @@ By the end of Lab 1, you will:
 1. Install and configure **`google/agents-cli`** alongside its 7 global IDE workflow skills and verify **Antigravity `.agents/skills/`** auto-discovery (with zero co-trigger shadowing).
 2. Choose the right **Google ADK 2.0 agent architecture** for an enterprise coding workload across the full spectrum: **Simple `LlmAgent` → Collaborative Agent Team → Declarative Graph `Workflow` → Dynamic Workflow**, plus evaluate **`ManagedAgent`** (Preview) and **Service Registration** (`services.yaml` / `services.py`).
 3. Implement `TODO(lab-1)` in [`starter/coding_agent/agent.py`](../starter/coding_agent/agent.py) (`AGENT_ARCHITECTURE=simple`) using **`LlmAgent`** and **`EnvironmentToolset(LocalEnvironment)`** while avoiding verified `Path`, `App.name`, and regional model-ID pitfalls.
-4. Evolve your Coding Agent in **Part B** by implementing `TODO(lab-1)` in [`starter/coding_agent/architectures.py`](../starter/coding_agent/architectures.py) across `collaborative`, `graph`, and `dynamic` modes — including `JoinNode` fan-in, `RetryConfig`/timeouts, `RequestInput` HITL pauses, and automatic dynamic checkpointing — and inspecting [`starter/services.yaml`](../starter/services.yaml) / [`starter/services.py`](../starter/services.py).
+4. *(Optional / Fast-Track Stretch — Part B)* Evolve your Coding Agent by implementing `TODO(lab-1)` in [`starter/coding_agent/architectures.py`](../starter/coding_agent/architectures.py) across `collaborative`, `graph`, and `dynamic` modes — including `JoinNode` fan-in, `RetryConfig`/timeouts, `RequestInput` HITL pauses, and automatic dynamic checkpointing — and inspecting [`starter/services.yaml`](../starter/services.yaml) / [`starter/services.py`](../starter/services.py).
 5. Run and interactively test your Coding Agent locally via **`adk web`** and **`agents-cli run`**, verify why `LocalEnvironment` is not yet production-safe, and pass Checkpoint 1 with `./scripts/verify_lab.sh 1`.
 
 ---
 
 ## Quick-Run TL;DR (Classroom Fast Path)
 
-- **Focused Exercises (High-Signal TODOs):** `starter/coding_agent/agent.py` (`build_local_environment_toolset`, `_assemble_runtime_components`) + Part B `starter/coding_agent/architectures.py` (`build_collaborative_coding_team`, `build_graph_coding_workflow`, `build_dynamic_coding_workflow`) — *(config, schemas & boilerplate plumbing pre-filled!)*
+- **Focused Exercises (High-Signal TODOs):** **Part A (Core):** `starter/coding_agent/agent.py` (`build_local_environment_toolset`, `_assemble_runtime_components`); **Part B (Optional / Fast-Track Stretch):** `starter/coding_agent/architectures.py` (`build_collaborative_coding_team`, `build_graph_coding_workflow`, `build_dynamic_coding_workflow`) — *(config, schemas & boilerplate plumbing pre-filled!)*
 - **Key Commands (Zero Local Docker):**
   ```bash
   make preflight && make install
@@ -48,18 +48,22 @@ By the end of Lab 1, you will:
 # 0. Install standalone uv if not already available (works without python3-venv or docker!)
 command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# 1. Install google-agents-cli and register its 7 built-in IDE workflow skills
+# 1. (Optional) Install google-agents-cli and register its 7 built-in IDE workflow skills
+#    All labs work end-to-end with `uv`, `gcloud`, and Terraform even if `agents-cli` is not on your PATH.
 uvx google-agents-cli setup
 
-# 2. Verify CLI path, version, active extensions, and telemetry status
+# 2. (Optional) Verify CLI path, version, active extensions, and telemetry status
 agents-cli info
 
-# 3. Verify GCP authentication (or run `agents-cli login` if not yet authenticated)
+# 3. (Optional) Verify GCP authentication (or run `gcloud auth application-default login`)
 agents-cli login --status
 
-# 4. Run the workshop pre-flight validator (checks gcloud, ADC, APIs, uv, and Bangkok/Singapore regions; zero Docker needed!)
+# 4. Run the workshop pre-flight validator (checks gcloud, ADC, APIs, uv, and Bangkok-first regional config; zero Docker needed!)
 make preflight
 ```
+
+> [!NOTE]
+> **Optional `agents-cli` PATH Warning:** If you skip installing `google/agents-cli` globally, `make verify-lab LAB=1` reports a single non-fatal `WARN: agents-cli not found on PATH`. That warning is expected and completely safe to ignore when running labs via `uv run`, `gcloud`, and Terraform.
 
 > **Optional Telemetry Opt-Out:** To disable anonymous CLI usage metrics in enterprise environments, export `AGENTS_CLI_TELEMETRY=0` (or `DO_NOT_TRACK=1`) in your shell profile.
 
@@ -135,27 +139,31 @@ cp .env.example .env
 Edit `.env` with your GCP project values (do **not** commit `.env` to Git):
 
 ```dotenv
-# Agent Platform / Vertex AI ADC mode (recommended for Labs 1-8)
+# Agent Platform / Enterprise ADC mode (recommended for Labs 1-8)
+# Verified standalone on google-adk 2.15.0 / google-genai 2.34.0 — no need to set GOOGLE_GENAI_USE_VERTEXAI!
 GOOGLE_GENAI_USE_ENTERPRISE=TRUE
 GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID
 GOOGLE_CLOUD_PROJECT_NUMBER=YOUR_PROJECT_NUMBER
 
-# Bangkok (asia-southeast3) Primary: Artifact Registry, Cloud Build, Secret Manager, Agent Registry, Lab 8 GKE
+# Bangkok (asia-southeast3) first — default for Artifact Registry, Cloud Build, Secret Manager, Agent Registry A2A/MCP, Lab 8 GKE
+# Empirically verified: Bangkok AR (`asia-southeast3-docker.pkg.dev`) pulls cleanly into Singapore Agent Runtime & BYOC Sandboxes!
 PRIMARY_REGION=asia-southeast3
-AR_LOCATION=asia-southeast3           # Optional: set asia-southeast1 for strict same-region AR pulls
+AR_LOCATION=asia-southeast3
 BUILD_LOCATION=asia-southeast3        # Remote Cloud Build region (zero local Docker!)
 AGENT_REGISTRY_LOCATION=asia-southeast3
 GKE_LOCATION=asia-southeast3
 
-# Singapore (asia-southeast1) Secondary: Nearest supported Agent Platform region
+# Singapore (asia-southeast1) fallback ONLY for Agent Platform / Gemini services not yet launched in Bangkok
 # (Agent Runtime, Managed Sandboxes, Sessions, Memory Bank, Agent Gateway & Gemini 2.5 Flash)
 GOOGLE_CLOUD_LOCATION=asia-southeast1
 
-# Service-mandated multi-region overrides:
-# - Vertex AI Skill Registry (Lab 4) is 3-region Preview: us-central1, europe-west4, us-east5
-# - Gen AI Evaluation Service (Lab 6) supports 14 US/EU regions + global (APAC-ready + loss clustering)
+# GCP-mandated overrides:
+# - Vertex AI Skill Registry (Lab 4): 3-region Preview (us-central1, europe-west4, us-east5)
+# - Gen AI Evaluation Service (Lab 6): global (APAC-ready + generate_loss_clusters)
+# - Agent Registry standalone skills (Labs 4, 6 & 7): global (`gcloud alpha agent-registry skills`)
 SKILL_REGISTRY_LOCATION=us-central1
 EVAL_LOCATION=global
+AGENT_REGISTRY_SKILLS_LOCATION=global
 
 # Explicit versioned model ID (do NOT use `gemini-flash-latest` on regional endpoints!)
 MODEL_NAME=gemini-2.5-flash
@@ -174,10 +182,10 @@ ENABLE_HITL_APPROVAL=false
 SANDBOX_MODE=local
 
 # Populated progressively across Labs 2-5:
-# - Lab 2: Standalone backing instance (`REASONING_ENGINE_NAME` in asia-southeast1), BYOC sandbox image (asia-southeast3 AR) & template
+# - Lab 2: Standalone backing instance (`REASONING_ENGINE_NAME` in asia-southeast1), BYOC sandbox image (Bangkok asia-southeast3 AR) & template
 # - Lab 3: Reuses Lab 2's standalone `REASONING_ENGINE_NAME` (asia-southeast1) for Managed Sessions & Memory Bank
-# - Lab 4: Vertex AI Skill Registry (`SKILL_REGISTRY_LOCATION=us-central1`) & Agent Registry (`AGENT_REGISTRY_LOCATION=asia-southeast3`)
-# - Lab 5: Build `AGENT_IMAGE_URI` (Cloud Build asia-southeast3) & deploy ONCE to Singapore (asia-southeast1) via Terraform
+# - Lab 4: Vertex AI Skill Registry (`us-central1`), Bangkok Agent Registry A2A/MCP (`asia-southeast3`), optional standalone skills (`global`)
+# - Lab 5: Build `AGENT_IMAGE_URI` (Bangkok Cloud Build + AR) & deploy ONCE to Singapore (`asia-southeast1`) via Terraform
 # - Lab 6: Optimize (`EVAL_LOCATION=global` + Singapore runtime) | Optional Lab 7: Hardening | Lab 8: Bangkok GKE Deep-Dive
 REASONING_ENGINE_NAME=
 SANDBOX_TEMPLATE_NAME=
@@ -189,7 +197,9 @@ ENABLE_SKILL_REGISTRY=false
 ```
 
 > [!IMPORTANT]
-> **Regional Model ID Gotcha:** Per the [ADK Gemini Model docs](https://adk.dev/agents/models/google-gemini/), the alias `gemini-flash-latest` may **not** work on regional Agent Platform / Vertex AI endpoints such as `asia-southeast1` (Singapore) or `us-central1`. Always use an explicit versioned model ID (such as `gemini-2.5-flash`) when targeting a regional endpoint.
+> **Two Verified SDK & Regional Callouts:**
+> 1. **Standalone `GOOGLE_GENAI_USE_ENTERPRISE=TRUE`:** Verified on **`google-adk 2.15.0`** / **`google-genai 2.34.0`** — setting `GOOGLE_GENAI_USE_ENTERPRISE=TRUE` works standalone against regional Vertex AI / Agent Platform endpoints without also setting legacy `GOOGLE_GENAI_USE_VERTEXAI=TRUE`.
+> 2. **Regional Model ID Gotcha:** Per the [ADK Gemini Model docs](https://adk.dev/agents/models/google-gemini/), the alias `gemini-flash-latest` may **not** work on regional Agent Platform / Vertex AI endpoints such as `asia-southeast1` (Singapore) or `us-central1`. Always use an explicit versioned model ID (such as `gemini-2.5-flash`) when targeting a regional endpoint.
 
 #### 3.2 Install Dependencies & Explore the Starter Layout
 
@@ -442,6 +452,9 @@ Watch the **Events / Trace** tab in the ADK Web UI:
 2. `Execute` runs `pytest -v` and returns exit code `0`.
 3. Follow up with a second turn: *"Add a `moving_average(values: list[float], window: int)` function using EditFile, add unit tests, and run `pytest -v`."* Verify the agent uses **`EditFile`** rather than rewriting the whole file.
 
+> [!NOTE]
+> **Benign `InMemoryRunner` Exit Warning:** If you run single-shot Python turns via `InMemoryRunner` (or stop `adk web`), `google-genai`'s async HTTP client may log a benign `Unclosed client session` warning from `aiohttp` on process exit. This happens during interpreter teardown after the turn has already succeeded and does **not** indicate a bug in your agent.
+
 #### Security Reality Check: Why Local Mode Is NOT Production-Safe Yet
 
 Try asking your local agent: *"Print `whoami`, `pwd`, and check whether `gcloud` credentials exist on this machine."*
@@ -450,10 +463,11 @@ Even though `LocalEnvironment._resolve_path()` confines `ReadFile`/`WriteFile` p
 
 ---
 
-## Part B — Evolving Your Coding Agent Across Multi-Agent, Graph & Dynamic Architectures (30 min Full-Day | 5 min Walkthrough Half-Day)
+## Part B (Optional / Fast-Track Stretch) — Evolving Across 4 ADK 2.0 Architectures (30 min Full-Day Stretch | 5 min Walkthrough Half-Day)
 
-> [!NOTE]
-> **Half-Day Fast-Track (5-Minute Walkthrough):** If you are on the 3.5-hour Half-Day track, review the three completed architectures in [`solution/coding_agent/architectures.py`](../solution/coding_agent/architectures.py) and the service registration templates in [`starter/services.yaml`](../starter/services.yaml) / [`starter/services.py`](../starter/services.py) alongside the instructor, verify `AGENT_ARCHITECTURE=simple` in `.env`, and proceed straight to Step 9!
+> [!TIP]
+> **Optional / Fast-Track Stretch Module (Skip Anytime to Stay on Schedule!):**
+> Part B explores the three advanced ADK 2.0 architectures (`collaborative`, `graph`, `dynamic`) and custom service registration (`services.yaml` / `services.py`). **If you are on the Half-Day Fast-Track OR running short on time in the Full-Day Track**, review the completed patterns in [`solution/coding_agent/architectures.py`](../solution/coding_agent/architectures.py), run `make fast-forward LAB=1` (if you want `architectures.py` pre-filled for `verify-lab LAB=1`), verify `AGENT_ARCHITECTURE=simple` in `.env`, and jump straight to **Step 9** so you reach Lab 2 right on time!
 
 ### Step 7: Implement `# TODO(lab-1)` in `starter/coding_agent/architectures.py`
 
@@ -668,10 +682,10 @@ Return to the repository root and run the Lab 1 verifier:
 ```
 
 **Checkpoint Pass Criteria:**
-- [ ] `agents-cli info` succeeds and `.agents/skills/` passes `make validate-skills` (including both new modular references in `adk-coding-agent-build`).
+- [ ] `.agents/skills/` passes `make validate-skills` (including both modular references in `adk-coding-agent-build`). *(Optional: `agents-cli info` succeeds if you installed `google/agents-cli`; a `WARN: agents-cli not found on PATH` message from `verify-lab LAB=1` is benign if running with `uv` + Terraform directly.)*
 - [ ] `starter/coding_agent/agent.py` compiles cleanly with no remaining `# TODO(lab-1)` markers; `LocalEnvironment` receives a `pathlib.Path` and `EnvironmentToolset` sets `max_output_chars`.
 - [ ] `App(root_agent=root_agent, name="coding_agent")` matches the package directory name and enables `ResumabilityConfig(is_resumable=True)`.
-- [ ] *(Full-Day Track)* `starter/coding_agent/architectures.py` compiles cleanly with `# TODO(lab-1)` implemented for `collaborative`, `graph`, and `dynamic` modes, and `starter/services.yaml` + `starter/services.py` validate cleanly.
+- [ ] *(Optional / Stretch — Part B)* `starter/coding_agent/architectures.py` compiles cleanly with `# TODO(lab-1)` implemented for `collaborative`, `graph`, and `dynamic` modes (or fast-forwarded via `make fast-forward LAB=1`), and `starter/services.yaml` + `starter/services.py` validate cleanly.
 - [ ] Local test run successfully creates files and runs `pytest` via `EnvironmentToolset`.
 
 > **Time-Box Fallback:** If you hit any environment issue, inspect [`solution/coding_agent/agent.py`](../solution/coding_agent/agent.py) and [`solution/coding_agent/architectures.py`](../solution/coding_agent/architectures.py) to compare your implementation before moving on.

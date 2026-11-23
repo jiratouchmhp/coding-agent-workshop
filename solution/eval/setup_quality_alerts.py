@@ -32,6 +32,7 @@ from coding_agent.config import get_settings  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
+ONLINE_EVAL_RESOURCE_TYPE = "aiplatform.googleapis.com/OnlineEvaluator"
 ONLINE_EVAL_SCORES_METRIC = "aiplatform.googleapis.com/online_evaluator/scores"
 
 
@@ -42,7 +43,10 @@ def build_metric_filter(
     runtime_revision_id: str | None = None,
 ) -> str:
     """Build a Cloud Monitoring filter expression for ``online_evaluator/scores``."""
-    clauses = [f'metric.type="{ONLINE_EVAL_SCORES_METRIC}"']
+    clauses = [
+        f'resource.type="{ONLINE_EVAL_RESOURCE_TYPE}"',
+        f'metric.type="{ONLINE_EVAL_SCORES_METRIC}"',
+    ]
     if metric_name:
         clauses.append(f'metric.labels.evaluation_metric_name="{metric_name}"')
     if agent_resource_name:
@@ -68,15 +72,19 @@ def build_alert_policy_dict(
     Imports ``monitoring_v3`` when available to bind enum constants cleanly, and
     falls back to verified protobuf string enum names during offline ``--dry-run``.
     """
+    # `aiplatform.googleapis.com/online_evaluator/scores` has kind=DELTA and
+    # value_type=DISTRIBUTION, which rejects ALIGN_MEAN with HTTP 400.
+    # ALIGN_PERCENTILE_50 extracts the per-series median scalar cleanly
+    # (alternative: per_series_aligner=ALIGN_DELTA + cross_series_reducer=REDUCE_PERCENTILE_50).
     try:
         from google.cloud import monitoring_v3
 
         comparison: Any = monitoring_v3.ComparisonType.COMPARISON_LT
-        aligner: Any = monitoring_v3.Aggregation.Aligner.ALIGN_MEAN
+        aligner: Any = monitoring_v3.Aggregation.Aligner.ALIGN_PERCENTILE_50
         combiner: Any = monitoring_v3.AlertPolicy.ConditionCombinerType.OR
     except ImportError:
         comparison = "COMPARISON_LT"
-        aligner = "ALIGN_MEAN"
+        aligner = "ALIGN_PERCENTILE_50"
         combiner = "OR"
 
     metric_filter = build_metric_filter(
@@ -141,7 +149,8 @@ def render_gcloud_policy_yaml(
         f"    duration: {duration_seconds}s",
         "    aggregations:",
         f"    - alignmentPeriod: {alignment_period_seconds}s",
-        "      perSeriesAligner: ALIGN_MEAN",
+        "      # DELTA/DISTRIBUTION metric: use ALIGN_PERCENTILE_50 (or ALIGN_DELTA + REDUCE_PERCENTILE_50)",
+        "      perSeriesAligner: ALIGN_PERCENTILE_50",
         "combiner: OR",
         "enabled: true",
     ]
@@ -195,7 +204,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--threshold",
         type=float,
         default=0.80,
-        help="Trigger alert when aligned mean score falls below this value (default: 0.80).",
+        help="Trigger alert when aligned median (p50) score falls below this value (default: 0.80).",
     )
     parser.add_argument(
         "--duration-seconds",

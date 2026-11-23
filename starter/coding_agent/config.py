@@ -70,7 +70,9 @@ def _load_dotenv_candidates() -> None:
 class Settings:
     """Typed runtime settings loaded from environment variables / ``.env``."""
 
-    # Core Google Cloud project & regional configuration (Bangkok Primary + Singapore Secondary)
+    # Core Google Cloud project & regional configuration:
+    # Aim for Bangkok (`asia-southeast3`) first; fall back to Singapore (`asia-southeast1`)
+    # only for services not yet available in Bangkok (and `us-central1` / `global` where GCP mandates it).
     google_cloud_project: str = ""
     google_cloud_project_number: str = ""
     primary_region: str = "asia-southeast3"
@@ -84,14 +86,16 @@ class Settings:
     sandbox_image_uri: str = ""
     sandbox_mode: SandboxMode = "local"
 
-    # Skill Registry (strictly us-central1, europe-west4, or us-east5) &
-    # Agent Registry (Bangkok primary default, Lab 4).
-    # When AGENT_REGISTRY_LOCATION is unset/empty, it falls back to primary_region.
+    # Vertex AI Skill Registry Preview (GCP-mandated: us-central1, europe-west4, or us-east5),
+    # Agent Registry A2A/MCP discovery (Bangkok asia-southeast3 first; falls back to primary_region
+    # when AGENT_REGISTRY_LOCATION is unset/empty), and Agent Registry standalone skills
+    # (falls back to global because standalone skill endpoints currently time out in asia-southeast3; Lab 4).
     skill_registry_location: str = "us-central1"
     agent_registry_location: str = "asia-southeast3"
+    agent_registry_skills_location: str = "global"
 
-    # Gen AI Evaluation Service (14 US/EU regions + global; Lab 6) &
-    # Self-Hosted GKE Agent Sandbox region (Bangkok primary; Lab 8).
+    # Gen AI Evaluation Service (GCP-mandated: 14 US/EU regions + global; Lab 6) &
+    # Self-Hosted GKE Agent Sandbox region (Bangkok asia-southeast3 first; Lab 8).
     eval_location: str = "global"
     gke_location: str = "asia-southeast3"
 
@@ -149,6 +153,8 @@ class Settings:
         object.__setattr__(self, "skill_registry_location", normalized_skill_loc)
         normalized_agent_loc = self.agent_registry_location.strip() or self.primary_region
         object.__setattr__(self, "agent_registry_location", normalized_agent_loc)
+        normalized_agent_skills_loc = self.agent_registry_skills_location.strip() or "global"
+        object.__setattr__(self, "agent_registry_skills_location", normalized_agent_skills_loc)
         normalized_eval_loc = self.eval_location.strip() or "global"
         object.__setattr__(self, "eval_location", normalized_eval_loc)
         normalized_gke_loc = self.gke_location.strip() or self.primary_region
@@ -210,6 +216,9 @@ def load_settings() -> Settings:
     agent_registry_location = (
         os.environ.get("AGENT_REGISTRY_LOCATION", "").strip() or primary_region
     )
+    agent_registry_skills_location = (
+        os.environ.get("AGENT_REGISTRY_SKILLS_LOCATION", "").strip() or "global"
+    )
     skill_registry_location = (
         os.environ.get("SKILL_REGISTRY_LOCATION", "").strip() or "us-central1"
     )
@@ -240,6 +249,7 @@ def load_settings() -> Settings:
         sandbox_mode=raw_mode,  # type: ignore[arg-type]
         skill_registry_location=skill_registry_location,
         agent_registry_location=agent_registry_location,
+        agent_registry_skills_location=agent_registry_skills_location,
         eval_location=eval_location,
         gke_location=gke_location,
         model_name=os.environ.get("MODEL_NAME", "gemini-2.5-flash").strip(),

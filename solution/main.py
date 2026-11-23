@@ -23,8 +23,8 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, encoders, responses
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Request, encoders, responses
+from pydantic import BaseModel, ValidationError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("coding_agent_runtime")
@@ -40,6 +40,47 @@ class QueryRequest(BaseModel):
 
     input: dict[str, Any] | None = None
     class_method: str
+
+
+async def _parse_query_request(request: Request) -> QueryRequest:
+    """Parse Agent Runtime ``:query`` / ``:streamQuery`` payloads robustly.
+
+    FastAPI >= 0.163 strictly enforces ``Content-Type`` when injecting Pydantic body
+    models, which can pass a raw JSON string to Pydantic when Agent Runtime proxies
+    requests and trigger ``422 model_attributes_type``. Reading ``await request.body()``
+    directly, unwrapping once if double-encoded as a JSON string, and validating via
+    ``QueryRequest.model_validate`` handles both standard and proxied payloads cleanly.
+    """
+    raw_body = await request.body()
+    if not raw_body:
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+
+    try:
+        payload: Any = json.loads(raw_body.decode("utf-8"))
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Malformed JSON request body: {exc}",
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Request payload must decode to a JSON object with "
+                "'class_method' and optional 'input'."
+            ),
+        )
+
+    try:
+        return QueryRequest.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=encoders.jsonable_encoder(exc.errors()),
+        ) from exc
 
 
 def _encode_ndjson_chunk(chunk: Any) -> str | None:
@@ -103,6 +144,15 @@ def get_runtime_app() -> Any:
     except ImportError:
         from vertexai.agent_engines import AdkApp
 
+    # Defensively pop empty or whitespace-only GOOGLE_CLOUD_AGENT_ENGINE_ID after
+    # importing coding_agent.agent (which may load `.env`) and before instantiating
+    # AdkApp / calling runtime_app.set_up(). In google-cloud-agentplatform,
+    # AdkApp.set_up() checks `"GOOGLE_CLOUD_AGENT_ENGINE_ID" in os.environ`, so an
+    # empty export in `.env` or a local shell raises:
+    # `ValueError: agent_engine_id is required for VertexAiMemoryBankService.`.
+    if not os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID", "").strip():
+        os.environ.pop("GOOGLE_CLOUD_AGENT_ENGINE_ID", None)
+
     init_params = inspect.signature(AdkApp.__init__).parameters
     if "app" in init_params:
         runtime_app = AdkApp(app=adk_app)
@@ -134,38 +184,42 @@ def health_check() -> dict[str, str]:
 
 
 @app.post("/api/reasoning_engine")
-async def query_endpoint(request: QueryRequest) -> responses.JSONResponse:
+async def query_endpoint(request: Request) -> responses.JSONResponse:
     """Serve unary and async ``class_method`` invocations (``:query``)."""
+    query_req = await _parse_query_request(request)
     runtime_app = get_runtime_app()
-    method = _resolve_public_method(runtime_app, request.class_method)
+    method = _resolve_public_method(runtime_app, query_req.class_method)
     if method is None:
         return responses.JSONResponse(
             status_code=400,
-            content={"error": f"Method {request.class_method!r} not found on agent"},
+            content={"error": f"Method {query_req.class_method!r} not found on agent"},
         )
 
-    output = await _invoke_method(method, request.input or {})
+    output = await _invoke_method(method, query_req.input or {})
     try:
         serialized = encoders.jsonable_encoder({"output": output})
     except ValueError:
-        logger.exception("Failed to JSON-encode unary response for %s", request.class_method)
+        logger.exception("Failed to JSON-encode unary response for %s", query_req.class_method)
         raise
     return responses.JSONResponse(content=serialized)
 
 
 @app.post("/api/stream_reasoning_engine")
-async def stream_query_endpoint(request: QueryRequest) -> responses.StreamingResponse:
+async def stream_query_endpoint(request: Request) -> responses.StreamingResponse:
     """Serve streaming ``class_method`` invocations (``:streamQuery?alt=sse``) as NDJSON."""
+    query_req = await _parse_query_request(request)
     runtime_app = get_runtime_app()
-    method = _resolve_public_method(runtime_app, request.class_method)
+    method = _resolve_public_method(runtime_app, query_req.class_method)
     if method is None:
         return responses.StreamingResponse(
-            content=iter([json.dumps({"error": f"Method {request.class_method!r} not found"}) + "\n"]),
+            content=iter(
+                [json.dumps({"error": f"Method {query_req.class_method!r} not found"}) + "\n"]
+            ),
             status_code=400,
             media_type="application/json",
         )
 
-    output = await _invoke_method(method, request.input or {})
+    output = await _invoke_method(method, query_req.input or {})
     return responses.StreamingResponse(
         content=_ndjson_stream(output),
         media_type="application/json",

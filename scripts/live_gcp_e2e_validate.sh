@@ -5,14 +5,16 @@
 # Usage:
 #   ./scripts/live_gcp_e2e_validate.sh --project <SANDBOX_PROJECT_ID> [OPTIONS]
 #
-# Executes a full, real Google Cloud smoke validation across all regional
-# boundaries with guaranteed cleanup on EXIT (even on mid-run failure):
-#   1. Cloud Build remote builds (asia-southeast3 — ZERO local Docker)
-#   2. BYOC Sandbox + Shell Sandbox lifecycle (asia-southeast1)
-#   3. Managed Sessions + Memory Bank + Feedback Service (asia-southeast1)
+# Executes a full, real Google Cloud smoke validation following the workshop's
+# Bangkok-first fallback strategy (asia-southeast3 first; falling back to
+# asia-southeast1 / global / us-central1 only where GCP requires it) with
+# guaranteed cleanup on EXIT (even on mid-run failure):
+#   1. Cloud Build remote builds + Artifact Registry (Bangkok asia-southeast3 — ZERO local Docker)
+#   2. BYOC Sandbox (from Bangkok AR) + Shell Sandbox lifecycle (Singapore asia-southeast1 fallback)
+#   3. Managed Sessions + Memory Bank + Feedback Service (Singapore asia-southeast1 fallback)
 #   4. Disposable Vertex AI Skill Registry create+update (us-central1) +
-#      Agent Registry standalone skill create+describe (asia-southeast3)
-#   5. Isolated Terraform apply (asia-southeast1) + live GET / & query check
+#      Agent Registry standalone skill two-step create+describe via `gcloud alpha` (global fallback)
+#   5. Isolated Terraform apply (Singapore asia-southeast1 fallback, Bangkok AR image) + live GET / & query check
 #   6. Offline Evaluation (global) + Cloud Monitoring Quality Alert Policy
 #   7. Full Teardown + Verification that 0 dry-run resources remain
 #
@@ -37,6 +39,7 @@ PRIMARY_REG="asia-southeast3"
 BUILD_LOC=""
 AR_LOC=""
 AGENT_REG_LOC=""
+AGENT_REG_SKILLS_LOC="${AGENT_REGISTRY_SKILLS_LOCATION:-global}"
 AGENT_PLATFORM_LOC="asia-southeast1"
 SKILL_REG_LOC="us-central1"
 EVAL_LOC="global"
@@ -50,17 +53,18 @@ Usage: ./scripts/live_gcp_e2e_validate.sh --project <SANDBOX_PROJECT_ID> [OPTION
 Run a full live GCP end-to-end smoke validation with guaranteed teardown on EXIT.
 
 Required:
-  --project <PROJECT_ID>            Target sandbox GCP project ID (aborts if name contains 'prod')
+  --project <PROJECT_ID>                 Target sandbox GCP project ID (aborts if name contains 'prod')
 
 Options:
-  --allow-non-sandbox               Override safety abort when project ID contains 'prod' (USE WITH EXTREME CAUTION)
-  --primary-region <REGION>         Primary region for Cloud Build, AR, Agent Registry (default: asia-southeast3)
-  --agent-location <REGION>         Agent Platform region (default: asia-southeast1)
-  --skill-registry-location <REG>   Vertex AI Skill Registry region (default: us-central1)
-  --eval-location <REGION>          Gen AI Evaluation Service location (default: global)
-  --ar-repo <REPO_NAME>             Artifact Registry Docker repository (default: coding-agent-repo)
-  --track <solution|starter>        Workshop track to validate (default: solution)
-  -h, --help                        Show this help message
+  --allow-non-sandbox                    Override safety abort when project ID contains 'prod' (USE WITH EXTREME CAUTION)
+  --primary-region <REGION>              Bangkok-first region for Cloud Build, AR, Agent Registry A2A/MCP (default: asia-southeast3)
+  --agent-location <REGION>              Agent Platform fallback region (default: asia-southeast1)
+  --agent-registry-skills-location <REG> Agent Registry standalone skills location (default: global)
+  --skill-registry-location <REG>        Vertex AI Skill Registry region (default: us-central1)
+  --eval-location <REGION>               Gen AI Evaluation Service location (default: global)
+  --ar-repo <REPO_NAME>                  Artifact Registry Docker repository (default: coding-agent-repo)
+  --track <solution|starter>             Workshop track to validate (default: solution)
+  -h, --help                             Show this help message
 EOF
 }
 
@@ -84,6 +88,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --agent-location)
       AGENT_PLATFORM_LOC="$2"
+      shift 2
+      ;;
+    --agent-registry-skills-location)
+      AGENT_REG_SKILLS_LOC="$2"
       shift 2
       ;;
     --skill-registry-location)
@@ -135,7 +143,9 @@ fi
 
 BUILD_LOC="${BUILD_LOC:-${PRIMARY_REG}}"
 AR_LOC="${AR_LOC:-${PRIMARY_REG}}"
+# Bangkok-first for Agent Registry A2A/MCP discovery; standalone skills require `global` fallback.
 AGENT_REG_LOC="${AGENT_REG_LOC:-${PRIMARY_REG}}"
+AGENT_REG_SKILLS_LOC="${AGENT_REG_SKILLS_LOC:-${AGENT_REGISTRY_SKILLS_LOCATION:-global}}"
 
 # Unique timestamped suffix so every live resource is isolated and disposable
 RUN_TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
@@ -160,6 +170,7 @@ TF_ENGINE_NAME=""
 ALERT_POLICY_NAME=""
 SKILL_REG_CREATED=0
 AGENT_REG_CREATED=0
+AR_REPO_CREATED=0
 SANDBOX_IMG_PUSHED=0
 AGENT_IMG_PUSHED=0
 CLEANUP_RAN=0
@@ -173,11 +184,11 @@ warn() { printf "[WARN] %s\n" "$1" >&2; }
 run_track_python() {
   local track_dir="${REPO_ROOT}/${TRACK}"
   if [[ -x "${track_dir}/.venv/bin/python" ]]; then
-    (cd "${track_dir}" && "${track_dir}/.venv/bin/python" "$@")
+    (cd "${track_dir}" && env PYTHONDONTWRITEBYTECODE=1 "${track_dir}/.venv/bin/python" "$@")
   elif command -v uv >/dev/null 2>&1; then
-    (cd "${track_dir}" && uv run python "$@")
+    (cd "${track_dir}" && env PYTHONDONTWRITEBYTECODE=1 uv run python "$@")
   else
-    (cd "${track_dir}" && python3 "$@")
+    (cd "${track_dir}" && env PYTHONDONTWRITEBYTECODE=1 python3 "$@")
   fi
 }
 
@@ -200,14 +211,29 @@ run_teardown() {
       -var-file="${TF_WORK_DIR}/e2e.tfvars" || warn "terraform destroy reported errors"
   fi
 
-  # 2. Delete standalone Agent Platform instance (sandboxes, snapshots, templates + engine)
+  # 2. Delete standalone Agent Platform instance (sandboxes -> snapshots -> templates + engine)
   if [[ -n "${STANDALONE_ENGINE_NAME}" ]]; then
-    log "Teardown [2/6]: Cleaning sandboxes/snapshots/templates & deleting ${STANDALONE_ENGINE_NAME}"
-    run_track_python -m coding_agent.tools.sandbox_lifecycle \
-      --project "${PROJECT_ID}" \
-      --location "${AGENT_PLATFORM_LOC}" \
-      --instance "${STANDALONE_ENGINE_NAME}" \
-      cleanup-all --include-templates >/dev/null 2>&1 || true
+    log "Teardown [2/6]: Draining sandboxes/snapshots/templates & deleting ${STANDALONE_ENGINE_NAME}"
+    for _ in $(seq 1 3); do
+      local clean_out
+      clean_out="$(run_track_python -m coding_agent.tools.sandbox_lifecycle \
+        --project "${PROJECT_ID}" \
+        --location "${AGENT_PLATFORM_LOC}" \
+        --instance "${STANDALONE_ENGINE_NAME}" \
+        cleanup-all --include-templates 2>/dev/null || true)"
+      if python3 - "${clean_out}" <<'PYEOF'
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+    sys.exit(0 if sum(int(v) for v in d.values()) == 0 else 1)
+except Exception:
+    sys.exit(1)
+PYEOF
+      then
+        break
+      fi
+      sleep 5
+    done
 
     local token
     token="$(gcloud auth print-access-token 2>/dev/null || true)"
@@ -225,13 +251,30 @@ run_teardown() {
       --project="${PROJECT_ID}" --quiet >/dev/null 2>&1 || true
   fi
 
-  # 4. Delete Agent Registry standalone skill in AGENT_REG_LOC
+  # 4. Delete Agent Registry standalone skill revisions first, then skill in AGENT_REG_SKILLS_LOC
   if [[ "${AGENT_REG_CREATED}" -eq 1 ]]; then
-    log "Teardown [4/6]: Deleting Agent Registry skill ${AGENT_REG_SKILL_NAME} (${AGENT_REG_LOC})"
-    gcloud agent-registry skills delete "${AGENT_REG_SKILL_NAME}" \
+    log "Teardown [4/6]: Deleting Agent Registry skill revisions & skill ${AGENT_REG_SKILL_NAME} (${AGENT_REG_SKILLS_LOC})"
+    local rev_list rev_full rev_short
+    rev_list="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills revisions list \
+      --skill="${AGENT_REG_SKILL_NAME}" \
       --project="${PROJECT_ID}" \
-      --location="${AGENT_REG_LOC}" \
-      --quiet >/dev/null 2>&1 || true
+      --location="${AGENT_REG_SKILLS_LOC}" \
+      --format="value(name)" </dev/null 2>/dev/null || true)"
+    if [[ -n "${rev_list}" ]]; then
+      while IFS= read -r rev_full; do
+        [[ -z "${rev_full}" ]] && continue
+        rev_short="${rev_full##*/}"
+        CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills revisions delete "${rev_short}" \
+          --skill="${AGENT_REG_SKILL_NAME}" \
+          --project="${PROJECT_ID}" \
+          --location="${AGENT_REG_SKILLS_LOC}" \
+          --quiet </dev/null >/dev/null 2>&1 || true
+      done <<< "${rev_list}"
+    fi
+    CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills delete "${AGENT_REG_SKILL_NAME}" \
+      --project="${PROJECT_ID}" \
+      --location="${AGENT_REG_SKILLS_LOC}" \
+      --quiet </dev/null >/dev/null 2>&1 || true
   fi
 
   # 5. Delete disposable Vertex AI Skill Registry skill in SKILL_REG_LOC
@@ -247,7 +290,7 @@ run_teardown() {
     fi
   fi
 
-  # 6. Delete dry-run Artifact Registry images
+  # 6. Delete dry-run Artifact Registry images (and disposable repo if created in Stage 0)
   if [[ "${SANDBOX_IMG_PUSHED}" -eq 1 ]]; then
     log "Teardown [6a/6]: Deleting Artifact Registry image ${SANDBOX_IMG_URI}"
     gcloud artifacts docker images delete "${SANDBOX_IMG_URI}" \
@@ -257,6 +300,13 @@ run_teardown() {
     log "Teardown [6b/6]: Deleting Artifact Registry image ${AGENT_IMG_URI}"
     gcloud artifacts docker images delete "${AGENT_IMG_URI}" \
       --delete-tags --quiet --project="${PROJECT_ID}" >/dev/null 2>&1 || true
+  fi
+  if [[ "${AR_REPO_CREATED}" -eq 1 ]]; then
+    log "Teardown [6c/6]: Deleting newly created disposable Artifact Registry repository ${AR_REPO} (${AR_LOC})"
+    gcloud artifacts repositories delete "${AR_REPO}" \
+      --location="${AR_LOC}" \
+      --project="${PROJECT_ID}" \
+      --quiet </dev/null >/dev/null 2>&1 || true
   fi
 
   # Remove ephemeral workspace
@@ -298,6 +348,7 @@ export PRIMARY_REGION="${PRIMARY_REG}"
 export BUILD_LOCATION="${BUILD_LOC}"
 export AR_LOCATION="${AR_LOC}"
 export AGENT_REGISTRY_LOCATION="${AGENT_REG_LOC}"
+export AGENT_REGISTRY_SKILLS_LOCATION="${AGENT_REG_SKILLS_LOC}"
 export GOOGLE_CLOUD_LOCATION="${AGENT_PLATFORM_LOC}"
 export SKILL_REGISTRY_LOCATION="${SKILL_REG_LOC}"
 export EVAL_LOCATION="${EVAL_LOC}"
@@ -314,14 +365,15 @@ if ! gcloud artifacts repositories describe "${AR_REPO}" \
     --location="${AR_LOC}" \
     --project="${PROJECT_ID}" \
     --description="Enterprise Coding Agent Workshop BYOC images"
+  AR_REPO_CREATED=1
 fi
 
 # Ensure Vertex AI / Reasoning Engine service identities exist
-gcloud beta services identity create \
+CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha services identity create \
   --service=aiplatform.googleapis.com \
-  --project="${PROJECT_ID}" >/dev/null 2>&1 || true
+  --project="${PROJECT_ID}" </dev/null >/dev/null 2>&1 || true
 
-pass "Stage 0 ready (project=${PROJECT_ID} #${PROJECT_NUMBER}, primary=${PRIMARY_REG}, agent=${AGENT_PLATFORM_LOC}, skill=${SKILL_REG_LOC}, eval=${EVAL_LOC})"
+pass "Stage 0 ready (project=${PROJECT_ID} #${PROJECT_NUMBER}, bangkok-first=${PRIMARY_REG}, agent-fallback=${AGENT_PLATFORM_LOC}, agent-reg-skills=${AGENT_REG_SKILLS_LOC}, skill=${SKILL_REG_LOC}, eval=${EVAL_LOC})"
 
 # -----------------------------------------------------------------------------
 # Stage 1: Cloud Build Remote Image Builds (asia-southeast3 — ZERO Docker)
@@ -450,16 +502,18 @@ PYEOF
 pass "Feedback Service live submit -> list -> delete succeeded in ${AGENT_PLATFORM_LOC}"
 
 # -----------------------------------------------------------------------------
-# Stage 4: Disposable Skill Registry (us-central1) + Agent Registry (asia-southeast3)
+# Stage 4: Disposable Skill Registry (us-central1) + Agent Registry Skills (global fallback)
 # -----------------------------------------------------------------------------
-log "Stage 4: Validating Vertex AI Skill Registry (${SKILL_REG_LOC}) + Agent Registry (${AGENT_REG_LOC})"
+log "Stage 4: Validating Vertex AI Skill Registry (${SKILL_REG_LOC}) + Agent Registry Standalone Skills (${AGENT_REG_SKILLS_LOC})"
 
+SKILL_DIR="${REPO_ROOT}/${TRACK}/skills_to_register/secure-code-review"
 SKILL_ZIP="${TMP_WORK_DIR}/secure-code-review-${RUN_SUFFIX}.zip"
 python3 "${REPO_ROOT}/scripts/package_registry_skill.py" \
-  "${REPO_ROOT}/${TRACK}/skills_to_register/secure-code-review" \
+  "${SKILL_DIR}" \
   --output "${SKILL_ZIP}" >/dev/null
 pass "Packaged validated 16-rule skill ZIP: ${SKILL_ZIP}"
 
+# Vertex AI Skill Registry `local_path` requires a directory (auto-zipped by SDK)
 run_track_python -m coding_agent.tools.registry_loader \
   --project "${PROJECT_ID}" \
   --location "${SKILL_REG_LOC}" \
@@ -467,7 +521,7 @@ run_track_python -m coding_agent.tools.registry_loader \
   --skill-id "${SKILL_ID}" \
   --display-name "Secure Code Review (${RUN_SUFFIX})" \
   --description "Disposable E2E dry-run skill (${RUN_SUFFIX})." \
-  --path "${SKILL_ZIP}" >/dev/null
+  --path "${SKILL_DIR}" >/dev/null
 SKILL_REG_CREATED=1
 pass "Created disposable Vertex AI Skill Registry skill: ${SKILL_ID} (${SKILL_REG_LOC})"
 
@@ -479,28 +533,35 @@ run_track_python -m coding_agent.tools.registry_loader \
   --description "Updated disposable E2E dry-run skill (${RUN_SUFFIX})." >/dev/null
 pass "Updated disposable Vertex AI Skill Registry skill: ${SKILL_ID} (${SKILL_REG_LOC})"
 
-gcloud agent-registry skills create "${SKILL_ID}" \
+# Two-step Agent Registry standalone skill creation (gcloud alpha in global fallback):
+# 1. Create bare skill container without --payload (works around gcloud alpha --payload drop bug)
+# 2. Upload initial revision `rev-1` (3+ chars required) with --payload=<zip>
+CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills create "${SKILL_ID}" \
   --project="${PROJECT_ID}" \
-  --location="${AGENT_REG_LOC}" \
+  --location="${AGENT_REG_SKILLS_LOC}" \
   --display-name="Secure Code Review (${RUN_SUFFIX})" \
   --description="Disposable E2E dry-run standalone skill (${RUN_SUFFIX})." \
   --target-state=disabled \
-  --scanning-policy=enabled-blocking \
-  --payload="${SKILL_ZIP}" >/dev/null
+  --scanning-policy=enabled-blocking </dev/null >/dev/null
 AGENT_REG_CREATED=1
-gcloud agent-registry skills describe "${AGENT_REG_SKILL_NAME}" \
+CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills revisions create rev-1 \
+  --skill="${AGENT_REG_SKILL_NAME}" \
   --project="${PROJECT_ID}" \
-  --location="${AGENT_REG_LOC}" >/dev/null
-pass "Created and described Agent Registry standalone skill: ${AGENT_REG_SKILL_NAME} (${AGENT_REG_LOC})"
+  --location="${AGENT_REG_SKILLS_LOC}" \
+  --payload="${SKILL_ZIP}" </dev/null >/dev/null
+CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills describe "${AGENT_REG_SKILL_NAME}" \
+  --project="${PROJECT_ID}" \
+  --location="${AGENT_REG_SKILLS_LOC}" </dev/null >/dev/null
+pass "Created rev-1 and described Agent Registry standalone skill: ${AGENT_REG_SKILL_NAME} (${AGENT_REG_SKILLS_LOC})"
 
 # -----------------------------------------------------------------------------
 # Stage 5: Terraform Apply (asia-southeast1) + Live GET / & Query Check
 # -----------------------------------------------------------------------------
 log "Stage 5: Deploying isolated Agent Runtime via Terraform (${AGENT_PLATFORM_LOC}) + Live health/query checks"
 
-# Verify HTTP contract locally (GET / -> 200 {"status":"ok"})
+# Verify HTTP contract locally (GET / + POST /api/reasoning_engine with and without application/json)
 make -C "${REPO_ROOT}" TRACK="${TRACK}" test-agent-local
-pass "Verified Agent Runtime HTTP contract GET / -> 200 {\"status\":\"ok\"} locally"
+pass "Verified Agent Runtime HTTP contract (GET / and POST /api/reasoning_engine) locally"
 
 cp -R "${REPO_ROOT}/${TRACK}/terraform" "${TF_WORK_DIR}"
 rm -rf "${TF_WORK_DIR}/.terraform" "${TF_WORK_DIR}/terraform.tfstate" "${TF_WORK_DIR}/terraform.tfstate.backup"
@@ -538,6 +599,9 @@ EOF
 if grep -q 'variable "agent_registry_location"' "${TF_WORK_DIR}/variables.tf"; then
   printf 'agent_registry_location = "%s"\n' "${AGENT_REG_LOC}" >> "${TF_WORK_DIR}/e2e.tfvars"
 fi
+if grep -q 'variable "agent_registry_skills_location"' "${TF_WORK_DIR}/variables.tf"; then
+  printf 'agent_registry_skills_location = "%s"\n' "${AGENT_REG_SKILLS_LOC}" >> "${TF_WORK_DIR}/e2e.tfvars"
+fi
 
 terraform -chdir="${TF_WORK_DIR}" init -input=false >/dev/null
 terraform -chdir="${TF_WORK_DIR}" validate >/dev/null
@@ -569,6 +633,19 @@ if [[ "${QUERY_HTTP_CODE}" != "200" ]]; then
   exit 1
 fi
 pass "Live Agent Runtime :query (list_sessions) returned HTTP 200"
+
+CREATE_SESS_RESP_FILE="${TMP_WORK_DIR}/live_create_session_resp.json"
+CREATE_SESS_HTTP_CODE="$(curl -sS -o "${CREATE_SESS_RESP_FILE}" -w "%{http_code}" \
+  -X POST \
+  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "{\"class_method\": \"create_session\", \"input\": {\"user_id\": \"e2e-smoke-${RUN_SUFFIX}\"}}" \
+  "https://${AGENT_PLATFORM_LOC}-aiplatform.googleapis.com/v1beta1/${TF_ENGINE_NAME}:query")"
+if [[ "${CREATE_SESS_HTTP_CODE}" != "200" ]]; then
+  echo "ERROR: Live Agent Runtime :query (create_session) returned HTTP ${CREATE_SESS_HTTP_CODE}: $(cat "${CREATE_SESS_RESP_FILE}")" >&2
+  exit 1
+fi
+pass "Live Agent Runtime :query (create_session) returned HTTP 200 (exercises Stage 7 deletion_policy=\"FORCE\")"
 
 # -----------------------------------------------------------------------------
 # Stage 6: Offline Evaluation (global) + Cloud Monitoring Quality Alert Policy
@@ -640,13 +717,13 @@ else
   pass "Verified 0 dry-run Cloud Monitoring alert policies remain"
 fi
 
-# 7c. Verify 0 dry-run Agent Registry standalone skills remain in AGENT_REG_LOC
-if gcloud agent-registry skills describe "${AGENT_REG_SKILL_NAME}" \
-  --project="${PROJECT_ID}" --location="${AGENT_REG_LOC}" >/dev/null 2>&1; then
-  warn "LEAK DETECTED: Agent Registry skill ${AGENT_REG_SKILL_NAME} still present in ${AGENT_REG_LOC}"
+# 7c. Verify 0 dry-run Agent Registry standalone skills remain in AGENT_REG_SKILLS_LOC
+if CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills describe "${AGENT_REG_SKILL_NAME}" \
+  --project="${PROJECT_ID}" --location="${AGENT_REG_SKILLS_LOC}" </dev/null >/dev/null 2>&1; then
+  warn "LEAK DETECTED: Agent Registry skill ${AGENT_REG_SKILL_NAME} still present in ${AGENT_REG_SKILLS_LOC}"
   LEAKS=$((LEAKS + 1))
 else
-  pass "Verified 0 dry-run Agent Registry skills remain in ${AGENT_REG_LOC}"
+  pass "Verified 0 dry-run Agent Registry skills remain in ${AGENT_REG_SKILLS_LOC}"
 fi
 
 # 7d. Verify disposable Vertex AI Skill Registry skill is deleted in SKILL_REG_LOC (allow brief LRO propagation)
@@ -667,7 +744,7 @@ else
   LEAKS=$((LEAKS + 1))
 fi
 
-# 7e. Verify 0 dry-run Artifact Registry tags remain in AR_LOC
+# 7e. Verify 0 dry-run Artifact Registry tags (and any disposable repo created in Stage 0) remain in AR_LOC
 REMAINING_AR=0
 for img in "${SANDBOX_IMG_URI}" "${AGENT_IMG_URI}"; do
   if gcloud artifacts docker images describe "${img}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
@@ -679,6 +756,24 @@ if [[ "${REMAINING_AR}" -ne 0 ]]; then
   LEAKS=$((LEAKS + 1))
 else
   pass "Verified 0 dry-run Artifact Registry images remain in ${AR_LOC}"
+fi
+
+if [[ "${AR_REPO_CREATED}" -eq 1 ]]; then
+  AR_REPO_GONE=0
+  for _ in $(seq 1 6); do
+    if ! gcloud artifacts repositories describe "${AR_REPO}" \
+      --location="${AR_LOC}" --project="${PROJECT_ID}" </dev/null >/dev/null 2>&1; then
+      AR_REPO_GONE=1
+      break
+    fi
+    sleep 5
+  done
+  if [[ "${AR_REPO_GONE}" -eq 1 ]]; then
+    pass "Verified disposable Artifact Registry repository ${AR_REPO} removed from ${AR_LOC}"
+  else
+    warn "LEAK DETECTED: Disposable Artifact Registry repository ${AR_REPO} still present in ${AR_LOC}"
+    LEAKS=$((LEAKS + 1))
+  fi
 fi
 
 if [[ "${LEAKS}" -gt 0 ]]; then

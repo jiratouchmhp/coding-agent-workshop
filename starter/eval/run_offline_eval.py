@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import sys
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -145,19 +146,54 @@ def assert_clean_turn_separation(
             )
 
 
+def get_eval_types() -> Any:
+    """Return ``agentplatform.types`` when available, falling back to ``vertexai.types``."""
+    try:
+        import agentplatform
+
+        types_mod = getattr(agentplatform, "types", None)
+        if types_mod is not None and hasattr(types_mod, "RubricMetric"):
+            return types_mod
+    except ImportError:
+        pass
+
+    from vertexai import types
+
+    return types
+
+
 def build_eval_client(project_id: str, location: str) -> Any:
-    """Initialize the verified Vertex AI GenAI Client for evaluation."""
+    """Initialize ``agentplatform.Client`` when ``.evals`` is available, else ``vertexai.Client``.
+
+    Preferring ``agentplatform.Client`` eliminates ``FutureWarning: The vertexai.Client
+    class is deprecated`` on ``google-cloud-aiplatform >= 2.10.0``.
+    """
     # Pre-filled boilerplate helper
     validate_eval_location(location)
-    from vertexai import Client
+    try:
+        import agentplatform
 
-    return Client(project=project_id, location=location)
+        client = agentplatform.Client(project=project_id, location=location)
+        _ = client.evals
+        return client
+    except (ImportError, AttributeError):
+        pass
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r".*vertexai\.Client.*deprecated.*",
+            category=FutureWarning,
+        )
+        from vertexai import Client
+
+        return Client(project=project_id, location=location)
 
 
 def register_custom_coding_metrics(client: Any) -> dict[str, str]:
     """Register custom LLM and Code Execution coding-quality metrics."""
     # Pre-filled boilerplate helper
-    from vertexai import types
+    types = get_eval_types()
 
     coding_rigor_metric = types.LLMMetric(
         name="coding_rigor_rubric",
@@ -214,8 +250,10 @@ def evaluate_split_datasets(
     #         evaluate `{"eval_cases": single_turn_cases}` with the same 4 agent trace metrics above.
     #       * Otherwise (static pre-baked `{prompt, responses, reference, rubric_groups}` cases):
     #         `[types.RubricMetric.GENERAL_QUALITY, types.RubricMetric.FINAL_RESPONSE_MATCH,
-    #           types.RubricMetric.FINAL_RESPONSE_REFERENCE_FREE,
     #           types.RubricMetric.SAFETY(version="v1")]`
+    #         (Reserve agent / reference-free rubric metrics like `FINAL_RESPONSE_REFERENCE_FREE`
+    #         for `--run-inference` runs with full agent traces so static datasets avoid 400
+    #         `Rubric results could not be reliably computed` errors.)
     #       * IMPORTANT: Pin `types.RubricMetric.SAFETY(version="v1")` (`1` = safe, `0` = unsafe)
     #         because latest `safety_v3` inverts polarity (`1` = policy violated, `0` = safe)!
     #   - Multi-turn (`{"eval_cases": multi_turn_cases}`):
@@ -234,8 +272,8 @@ def run_loss_clustering(
     metric_name: str = "multi_turn_task_success",
 ) -> Any:
     """Run Automatic Loss Analysis in the mandatory ``global`` region."""
-    # TODO(lab-6): Instantiate `global_client = Client(project=project_id, location="global")`
-    # (generate_loss_clusters is global-only!) and call:
+    # TODO(lab-6): Instantiate `global_client = build_eval_client(project_id=project_id, location="global")`
+    # (prefers `agentplatform.Client`; `generate_loss_clusters` is global-only!) and call:
     #   `global_client.evals.generate_loss_clusters(eval_result=eval_result, metric=...)`
     # passing an explicit `types.RubricMetric.MULTI_TURN_TASK_SUCCESS` or
     # `types.RubricMetric.MULTI_TURN_TOOL_USE_QUALITY` (required for multi-metric results).
@@ -347,7 +385,6 @@ def main(argv: list[str] | None = None) -> int:
             else [
                 "GENERAL_QUALITY",
                 "FINAL_RESPONSE_MATCH",
-                "FINAL_RESPONSE_REFERENCE_FREE",
                 "SAFETY(version='v1')",
             ]
         ),

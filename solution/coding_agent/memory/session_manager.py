@@ -285,6 +285,8 @@ class SessionLifecycleManager:
 
         runtime_name = self._require_runtime_name()
         config: dict[str, Any] = {}
+        if session_id is not None:
+            config["session_id"] = session_id
         if expire_time is not None:
             config["expire_time"] = expire_time
         elif ttl_days is not None:
@@ -294,18 +296,21 @@ class SessionLifecycleManager:
             "name": runtime_name,
             "user_id": user_id,
         }
-        if session_id is not None:
-            kwargs["session_id"] = session_id
         if config:
             kwargs["config"] = config
 
         session_op = self.client.sessions.create(**kwargs)
         return _extract_session_name(session_op)
 
-    def get_session(self, session_name: str, user_id: str) -> Any:
-        """Fetch a single Managed Session resource."""
-        validate_session_identifiers(user_id)
-        return self.client.sessions.get(name=session_name, user_id=user_id)
+    def get_session(self, session_name: str, user_id: str | None = None) -> Any:
+        """Fetch a single Managed Session resource.
+
+        ``agentplatform==2.10.0`` exposes ``sessions.get(*, name: str, config=None)``;
+        optional ``user_id`` is validated locally when supplied for caller convenience.
+        """
+        if user_id is not None:
+            validate_session_identifiers(user_id)
+        return self.client.sessions.get(name=session_name)
 
     def list_sessions(self, user_id: str | None = None) -> list[Any]:
         """List Managed Sessions under the parent runtime (default order: ``create_time desc``).

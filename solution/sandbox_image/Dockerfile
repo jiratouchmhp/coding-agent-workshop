@@ -48,7 +48,9 @@ RUN groupadd --gid 1000 appuser \
     && chown -R appuser:appuser /workspace /home/appuser
 
 # Keep runner.py read-only (root:root 0644) so untrusted commands running as appuser cannot tamper with it.
-COPY --chown=root:root --chmod=0644 runner.py /opt/sandbox_runner/runner.py
+# Use a separate RUN chmod instead of BuildKit-only COPY --chmod so Cloud Build's legacy builder succeeds.
+COPY --chown=root:root runner.py /opt/sandbox_runner/runner.py
+RUN chmod 0644 /opt/sandbox_runner/runner.py
 
 USER appuser
 WORKDIR /workspace

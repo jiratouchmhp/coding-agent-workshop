@@ -234,9 +234,10 @@ verify_lab_1() {
   check_file_exists "${TRACK}/services.yaml"
   check_file_exists "${TRACK}/services.py"
 
-  check_pattern ".env.example" "^PRIMARY_REGION=asia-southeast3$" ".env.example sets PRIMARY_REGION=asia-southeast3 (Bangkok primary)"
-  check_pattern ".env.example" "^GOOGLE_CLOUD_LOCATION=asia-southeast1$" ".env.example sets GOOGLE_CLOUD_LOCATION=asia-southeast1 (Singapore Agent Platform)"
-  check_pattern ".env.example" "^AGENT_REGISTRY_LOCATION=asia-southeast3$" ".env.example sets AGENT_REGISTRY_LOCATION=asia-southeast3"
+  check_pattern ".env.example" "^PRIMARY_REGION=asia-southeast3$" ".env.example sets PRIMARY_REGION=asia-southeast3 (Bangkok first)"
+  check_pattern ".env.example" "^GOOGLE_CLOUD_LOCATION=asia-southeast1$" ".env.example sets GOOGLE_CLOUD_LOCATION=asia-southeast1 (Singapore fallback for Agent Platform)"
+  check_pattern ".env.example" "^AGENT_REGISTRY_LOCATION=asia-southeast3$" ".env.example sets AGENT_REGISTRY_LOCATION=asia-southeast3 (Bangkok A2A/MCP discovery)"
+  check_pattern ".env.example" "^AGENT_REGISTRY_SKILLS_LOCATION=global$" ".env.example sets AGENT_REGISTRY_SKILLS_LOCATION=global (Agent Registry standalone skills fallback)"
   check_pattern ".env.example" "^SKILL_REGISTRY_LOCATION=us-central1$" ".env.example sets SKILL_REGISTRY_LOCATION=us-central1"
   check_pattern ".env.example" "^EVAL_LOCATION=global$" ".env.example sets EVAL_LOCATION=global"
   check_pattern ".env.example" "^AGENT_ARCHITECTURE=simple$" "Default AGENT_ARCHITECTURE=simple preserves Labs 2-8 compatibility"
@@ -249,6 +250,68 @@ verify_lab_1() {
   check_pattern "Makefile" "^pack-agent-source:" "Makefile defines zero-Docker/zero-AR pack-agent-source target"
   check_pattern "Makefile" "^fast-forward:" "Makefile defines fast-forward target"
   check_pattern "Makefile" "^cleanup:" "Makefile defines cleanup target"
+
+  # Regression check: Makefile `test-agent-local` must `unset GOOGLE_CLOUD_AGENT_ENGINE_ID`
+  # instead of exporting `GOOGLE_CLOUD_AGENT_ENGINE_ID=""` (AdkApp.set_up() checks key presence
+  # in os.environ and crashes with ValueError on an empty string).
+  if [[ -f "Makefile" ]]; then
+    if python3 - "Makefile" <<'PYEOF'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+m = re.search(
+    r"^test-agent-local:[^\n]*\n((?:\t[^\n]*\n|[ \t]*\n)*)",
+    text,
+    flags=re.MULTILINE,
+)
+if not m:
+    sys.exit(1)
+
+recipe = "\n".join(
+    line for line in m.group(1).splitlines() if not line.lstrip().startswith("#")
+)
+joined = re.sub(r"\\\n[ \t]*", " ", recipe)
+if not re.search(r"\bunset\b[^\n;]*\bGOOGLE_CLOUD_AGENT_ENGINE_ID\b", joined):
+    sys.exit(1)
+if re.search(r"\bGOOGLE_CLOUD_AGENT_ENGINE_ID\s*=", joined):
+    sys.exit(1)
+PYEOF
+    then
+      pass "Makefile test-agent-local unsets GOOGLE_CLOUD_AGENT_ENGINE_ID (does not export empty string)"
+    else
+      fail "Makefile test-agent-local must unset GOOGLE_CLOUD_AGENT_ENGINE_ID (and must NOT export GOOGLE_CLOUD_AGENT_ENGINE_ID=\"\")"
+    fi
+  fi
+
+  # Regression check: scripts/live_gcp_e2e_validate.sh must not invoke bare
+  # `gcloud beta services identity create` (hangs invisibly if gcloud beta component is absent).
+  if [[ -f "scripts/live_gcp_e2e_validate.sh" ]]; then
+    if python3 - "scripts/live_gcp_e2e_validate.sh" <<'PYEOF'
+import re
+import sys
+from pathlib import Path
+
+raw = Path(sys.argv[1]).read_text(encoding="utf-8")
+code = "\n".join(
+    line for line in raw.splitlines() if not line.lstrip().startswith("#")
+)
+joined = re.sub(r"\\\n[ \t]*", " ", code)
+if re.search(r"\bgcloud\s+beta\s+services\s+identity\s+create\b", joined):
+    sys.exit(1)
+if not re.search(
+    r"CLOUDSDK_CORE_DISABLE_PROMPTS=1\s+gcloud\s+alpha\s+services\s+identity\s+create\b[^\n]*</dev/null",
+    joined,
+):
+    sys.exit(1)
+PYEOF
+    then
+      pass "scripts/live_gcp_e2e_validate.sh uses non-interactive gcloud alpha services identity create (no bare gcloud beta)"
+    else
+      fail "scripts/live_gcp_e2e_validate.sh must use CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha services identity create ... </dev/null (never bare gcloud beta services identity create)"
+    fi
+  fi
 
   check_pattern "${TRACK}/agents-cli-manifest.yaml" "agent_directory:[[:space:]]*coding_agent" "agents-cli manifest sets agent_directory: coding_agent"
   check_pattern "${TRACK}/agents-cli-manifest.yaml" "framework:[[:space:]]*google-adk" "agents-cli manifest sets framework: google-adk"
@@ -323,16 +386,20 @@ s = mod.Settings()
 assert s.agent_architecture == "simple", f"Expected default simple, got {s.agent_architecture!r}"
 assert s.max_fix_rounds == 3, f"Expected default max_fix_rounds=3, got {s.max_fix_rounds!r}"
 assert s.enable_hitl_approval is False, f"Expected default enable_hitl_approval=False, got {s.enable_hitl_approval!r}"
-assert s.primary_region == "asia-southeast3", f"Expected default primary_region='asia-southeast3', got {s.primary_region!r}"
-assert s.google_cloud_location == "asia-southeast1", f"Expected default google_cloud_location='asia-southeast1', got {s.google_cloud_location!r}"
-assert s.ar_location == "asia-southeast3", f"Expected default ar_location='asia-southeast3', got {s.ar_location!r}"
-assert s.build_location == "asia-southeast3", f"Expected default build_location='asia-southeast3', got {s.build_location!r}"
+assert s.primary_region == "asia-southeast3", f"Expected Bangkok-first default primary_region='asia-southeast3', got {s.primary_region!r}"
+assert s.google_cloud_location == "asia-southeast1", f"Expected Singapore fallback google_cloud_location='asia-southeast1', got {s.google_cloud_location!r}"
+assert s.ar_location == "asia-southeast3", f"Expected Bangkok-first ar_location='asia-southeast3', got {s.ar_location!r}"
+assert s.build_location == "asia-southeast3", f"Expected Bangkok-first build_location='asia-southeast3', got {s.build_location!r}"
 assert s.skill_registry_location == "us-central1", f"Expected default skill_registry_location='us-central1', got {s.skill_registry_location!r}"
-assert s.agent_registry_location == "asia-southeast3", f"Expected default agent_registry_location='asia-southeast3', got {s.agent_registry_location!r}"
+assert s.agent_registry_location == "asia-southeast3", f"Expected Bangkok-first default agent_registry_location='asia-southeast3', got {s.agent_registry_location!r}"
+assert getattr(s, "agent_registry_skills_location", None) == "global", (
+    f"Expected fallback default agent_registry_skills_location='global', got {getattr(s, 'agent_registry_skills_location', None)!r}"
+)
 assert s.eval_location == "global", f"Expected default eval_location='global', got {s.eval_location!r}"
-assert s.gke_location == "asia-southeast3", f"Expected default gke_location='asia-southeast3', got {s.gke_location!r}"
+assert s.gke_location == "asia-southeast3", f"Expected Bangkok-first default gke_location='asia-southeast3', got {s.gke_location!r}"
 assert mod.Settings(primary_region="europe-west4", agent_registry_location="").agent_registry_location == "europe-west4"
 assert mod.Settings(skill_registry_location="europe-west4", agent_registry_location="global").agent_registry_location == "global"
+assert mod.Settings(agent_registry_skills_location="").agent_registry_skills_location == "global"
 
 for arch in ("simple", "collaborative", "graph", "dynamic"):
     assert mod.Settings(agent_architecture=arch).agent_architecture == arch
@@ -393,9 +460,9 @@ PYEOF
   fi
 
   if command -v agents-cli >/dev/null 2>&1; then
-    pass "agents-cli found on PATH ($(command -v agents-cli))"
+    pass "agents-cli found on PATH ($(command -v agents-cli)) — optional for Labs 1-6"
   else
-    warn "agents-cli not found on PATH (install with: uvx google-agents-cli setup)"
+    warn "agents-cli not found on PATH (optional for Labs 1-6; install anytime with: uvx google-agents-cli setup)"
   fi
 }
 
@@ -420,6 +487,12 @@ verify_lab_2() {
     check_pattern "${df}" "^USER[[:space:]]+appuser" "BYOC Dockerfile enforces non-root USER appuser"
     check_pattern "${df}" "^WORKDIR[[:space:]]+/workspace" "BYOC Dockerfile sets WORKDIR /workspace"
     check_pattern "${df}" "^EXPOSE[[:space:]]+8080" "BYOC Dockerfile exposes port 8080"
+    check_pattern "${df}" "RUN.*[[:space:]]chmod[[:space:]]+0?644[[:space:]]+/opt/sandbox_runner/runner\.py" "BYOC Dockerfile sets runner.py permissions with Cloud Build legacy-compatible RUN chmod 0644"
+    if grep -Ev '^[[:space:]]*#' "${df}" | grep -Eq -- '--chmod='; then
+      fail "BYOC Dockerfile uses BuildKit-only --chmod= flag (fails under default Cloud Build legacy builder); use RUN chmod 0644 instead (${df})"
+    else
+      pass "BYOC Dockerfile avoids BuildKit-only --chmod= flag (${df})"
+    fi
     check_dockerfile_non_root "${df}" "BYOC Sandbox Dockerfile"
   fi
 
@@ -658,8 +731,104 @@ verify_lab_3() {
   check_pattern "${sess}" "VertexAiSessionService" "Wires ADK VertexAiSessionService"
   check_pattern "${mem}" "VertexAiMemoryBankService" "Wires ADK VertexAiMemoryBankService"
   check_pattern "${mem}" "sanitize_for_memory_ingestion" "Includes prompt-injection sanitizer before Memory Bank ingestion"
+  check_pattern "${mem}" "granular_ttl_config" "Memory Bank TTL config uses SDK 2.10+ granular_ttl_config field"
   check_pattern "${cb}" "aiplatform\.googleapis\.com/ReasoningEngine" "Logs parent runtime sandbox output to ReasoningEngine resource"
   check_pattern "${cb}" "feedback_entries" "Implements Feedback Service client"
+
+  # Regression check: memory_bank_manager.py must emit `granular_ttl_config` (not legacy `granular_ttl` dict key)
+  if [[ -f "${mem}" ]]; then
+    if python3 - "${mem}" <<'PYEOF'
+import ast
+import sys
+from pathlib import Path
+
+tree = ast.parse(Path(sys.argv[1]).read_text(encoding="utf-8"))
+has_granular_ttl_config = False
+for node in ast.walk(tree):
+    if isinstance(node, ast.Dict):
+        for key in node.keys:
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                if key.value == "granular_ttl":
+                    sys.exit(1)
+                if key.value == "granular_ttl_config":
+                    has_granular_ttl_config = True
+
+if not has_granular_ttl_config:
+    sys.exit(1)
+PYEOF
+    then
+      pass "memory_bank_manager.py uses granular_ttl_config dict key (zero legacy granular_ttl keys) (${mem})"
+    else
+      fail "${mem} must use 'granular_ttl_config' (not legacy 'granular_ttl') inside ttl_config dicts for agentplatform 2.10+"
+    fi
+  fi
+
+  # Regression check: feedback_entries.list() must use parent= (not name=)
+  if [[ -f "${cb}" ]]; then
+    if python3 - "${cb}" <<'PYEOF'
+import ast
+import sys
+from pathlib import Path
+
+tree = ast.parse(Path(sys.argv[1]).read_text(encoding="utf-8"))
+found_list = False
+for node in ast.walk(tree):
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "list"
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "feedback_entries"
+    ):
+        found_list = True
+        kw_names = {kw.arg for kw in node.keywords if kw.arg}
+        if "name" in kw_names or "parent" not in kw_names:
+            sys.exit(1)
+
+if not found_list:
+    sys.exit(1)
+PYEOF
+    then
+      pass "telemetry_and_feedback.py calls feedback_entries.list(parent=...) (not name=) (${cb})"
+    else
+      fail "${cb} must call client.feedback_entries.list(parent=...) rather than name= for agentplatform 2.10+"
+    fi
+  fi
+
+  # Regression check: sessions.get() must NOT pass unsupported user_id= (and sessions.create() must not pass top-level session_id=)
+  if [[ -f "${sess}" ]]; then
+    if python3 - "${sess}" <<'PYEOF'
+import ast
+import sys
+from pathlib import Path
+
+tree = ast.parse(Path(sys.argv[1]).read_text(encoding="utf-8"))
+found_get = False
+for node in ast.walk(tree):
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "sessions"
+    ):
+        kw_names = {kw.arg for kw in node.keywords if kw.arg}
+        if node.func.attr == "get":
+            found_get = True
+            if "user_id" in kw_names:
+                sys.exit(1)
+        elif node.func.attr == "create":
+            if "session_id" in kw_names:
+                sys.exit(1)
+
+if not found_get:
+    sys.exit(1)
+PYEOF
+    then
+      pass "session_manager.py calls sessions.get(name=...) without unsupported user_id= (${sess})"
+    else
+      fail "${sess} must NOT pass user_id= to client.sessions.get() or top-level session_id= to client.sessions.create()"
+    fi
+  fi
 }
 
 # -----------------------------------------------------------------------------
@@ -684,6 +853,16 @@ verify_lab_4() {
   check_pattern "${reg}" "AgentRegistry" "Integrates ADK AgentRegistry"
   check_pattern "${reg}" "GcpAuthProvider" "Registers Agent Identity GcpAuthProvider"
   check_pattern "${reg}" "X-Goog-User-Project" "Implements GoogleApiAuth with X-Goog-User-Project header"
+  check_pattern "${reg}" "is_dir\(\)" "Enforces directory-only local_path (is_dir()) for Vertex AI Skill Registry"
+  check_pattern ".env.example" "^AGENT_REGISTRY_SKILLS_LOCATION=global$" ".env.example configures AGENT_REGISTRY_SKILLS_LOCATION=global for standalone skills"
+  check_pattern "${TRACK}/coding_agent/config.py" "AGENT_REGISTRY_SKILLS_LOCATION" "config.py reads AGENT_REGISTRY_SKILLS_LOCATION for standalone skills"
+  if ! has_todo_markers "${ag}" "lab-4"; then
+    if grep -Eq "agent_registry_skills_location|AGENT_REGISTRY_SKILLS_LOCATION" "${ag}" "${reg}"; then
+      pass "Lab 4 skill registry wiring uses AGENT_REGISTRY_SKILLS_LOCATION / agent_registry_skills_location"
+    else
+      fail "Lab 4 skill registry wiring in ${ag} / ${reg} must use agent_registry_skills_location (default global)"
+    fi
+  fi
 
   if [[ -d "${skill_dir}" ]]; then
     if python3 scripts/package_registry_skill.py "${skill_dir}" --dry-run >/dev/null 2>&1; then
@@ -691,6 +870,61 @@ verify_lab_4() {
     else
       fail "${skill_dir} failed scripts/package_registry_skill.py --dry-run"
     fi
+  fi
+
+  # Regression check: reject invalid `--scanning-policy=enabled-non-<extra-hyphen>blocking` typo across repo
+  if python3 - <<'PYEOF'
+import sys
+from pathlib import Path
+
+bad_flag = "--scanning-policy=enabled-non-" + "blocking"
+roots = [Path("workshop"), Path(".agents/skills"), Path("starter"), Path("solution"), Path("scripts")]
+hits = []
+for root in roots:
+    if not root.exists():
+        continue
+    for path in root.rglob("*"):
+        if not path.is_file() or ".venv" in path.parts or "__pycache__" in path.parts:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if bad_flag in text:
+            hits.append(str(path))
+if hits:
+    print("Found invalid flag spelling in:", ", ".join(hits), file=sys.stderr)
+    sys.exit(1)
+PYEOF
+  then
+    pass "Zero invalid Agent Registry --scanning-policy flag typos across workshop, skills, code, and scripts"
+  else
+    fail "Found invalid '--scanning-policy=enabled-non-'+'blocking' typo; valid gcloud flag is '--scanning-policy=enabled-nonblocking'"
+  fi
+
+  # Regression check: governance Antigravity skills must pass AGENT_REGISTRY_SKILLS_LOCATION / global to GCPSkillRegistry
+  if python3 - <<'PYEOF'
+import re
+import sys
+from pathlib import Path
+
+gov_dir = Path(".agents/skills/agent-platform-governance-and-registries")
+bad = []
+if gov_dir.exists():
+    for path in gov_dir.rglob("*.md"):
+        text = path.read_text(encoding="utf-8")
+        for m in re.finditer(r"GCPSkillRegistry\([^)]*\)", text, re.DOTALL):
+            snippet = m.group(0)
+            if "AGENT_REGISTRY_LOCATION" in snippet or "asia-southeast3" in snippet or "location=registry_location" in snippet:
+                bad.append(f"{path}: {snippet}")
+if bad:
+    print("Stale regional GCPSkillRegistry snippet(s):", "\n".join(bad), file=sys.stderr)
+    sys.exit(1)
+PYEOF
+  then
+    pass "Governance Antigravity skills decouple GCPSkillRegistry location to AGENT_REGISTRY_SKILLS_LOCATION (global)"
+  else
+    fail "Governance Antigravity skills must pass AGENT_REGISTRY_SKILLS_LOCATION ('global') to GCPSkillRegistry(...), not AGENT_REGISTRY_LOCATION / asia-southeast3"
   fi
 }
 
@@ -884,6 +1118,59 @@ PYEOF
   check_pattern "${runtime_main}" "/api/reasoning_engine" "Agent Runtime server defines POST /api/reasoning_engine"
   check_pattern "${runtime_main}" "/api/stream_reasoning_engine" "Agent Runtime server defines POST /api/stream_reasoning_engine"
 
+  # Regression check: FastAPI 0.163+ strict content-type parsing rejects raw JSON `:query` proxy
+  # payloads when endpoints declare `request: QueryRequest`; endpoints must accept `Request` and
+  # parse raw JSON body explicitly.
+  if [[ -f "${runtime_main}" ]]; then
+    if python3 - "${runtime_main}" <<'PYEOF'
+import ast
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1]).read_text(encoding="utf-8")
+tree = ast.parse(source)
+has_todo = "TODO(lab-5)" in source
+
+endpoints: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+for node in tree.body:
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in {
+        "query_endpoint",
+        "stream_query_endpoint",
+    }:
+        endpoints[node.name] = node
+
+if len(endpoints) != 2:
+    sys.exit(1)
+
+for fn in endpoints.values():
+    params = fn.args.args + fn.args.kwonlyargs
+    has_request_param = False
+    for arg in params:
+        ann = ast.unparse(arg.annotation) if arg.annotation is not None else ""
+        if "QueryRequest" in ann:
+            sys.exit(1)
+        if ann == "Request" or ann.endswith(".Request"):
+            has_request_param = True
+    if not has_request_param:
+        sys.exit(1)
+
+if not has_todo:
+    has_raw_parse = any(
+        isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr in {"body", "json"}
+        for n in ast.walk(tree)
+    )
+    if not has_raw_parse:
+        sys.exit(1)
+PYEOF
+    then
+      pass "main.py accepts FastAPI Request and parses raw JSON bodies (FastAPI 0.163+ :query proxy safe) (${runtime_main})"
+    else
+      fail "${runtime_main} must declare query_endpoint/stream_query_endpoint with FastAPI Request (not QueryRequest) and parse raw JSON body explicitly"
+    fi
+  fi
+
   check_no_todo_markers "${main_tf}" "lab-5"
 
   check_pattern "${versions_tf}" 'version[[:space:]]*=[[:space:]]*">= 6\.0\.0"' "Terraform provider floor >= 6.0.0 for container_spec support"
@@ -895,8 +1182,83 @@ PYEOF
   check_pattern "${tfvars_example}" '^skill_registry_location[[:space:]]*=[[:space:]]*"us-central1"' "terraform.tfvars.example declares skill_registry_location"
   check_pattern "${main_tf}" 'resource "google_vertex_ai_reasoning_engine"' "Declares google_vertex_ai_reasoning_engine"
   check_pattern "${main_tf}" "region[[:space:]]*=[[:space:]]*var\.location" "Uses verified Terraform attribute 'region = var.location'"
+  if [[ -f "${main_tf}" ]]; then
+    if python3 - "${main_tf}" <<'PYEOF'
+import re
+import sys
+from pathlib import Path
+
+raw = Path(sys.argv[1]).read_text(encoding="utf-8")
+in_re_block = False
+depth = 0
+found_force = False
+
+for raw_line in raw.splitlines():
+    stripped = raw_line.lstrip()
+    if stripped.startswith(("#", "//")):
+        continue
+    no_strings = re.sub(r'"(?:\\.|[^"\\])*"', '""', raw_line)
+    no_comments = re.sub(r"(?:#|//).*$", "", no_strings)
+
+    if not in_re_block:
+        if re.match(r'\s*resource\s+"google_vertex_ai_reasoning_engine"\s+"[^"]+"\s*\{', raw_line):
+            in_re_block = True
+            depth = no_comments.count("{") - no_comments.count("}")
+            if depth <= 0:
+                in_re_block = False
+        continue
+
+    if depth == 1 and re.match(r'\s*deletion_policy\s*=\s*"FORCE"\s*(?:(?:#|//).*)?$', raw_line):
+        found_force = True
+
+    depth += no_comments.count("{") - no_comments.count("}")
+    if depth <= 0:
+        in_re_block = False
+
+sys.exit(0 if found_force else 1)
+PYEOF
+    then
+      pass "main.tf declares deletion_policy = \"FORCE\" on google_vertex_ai_reasoning_engine (${main_tf})"
+    else
+      fail "${main_tf} must declare deletion_policy = \"FORCE\" on google_vertex_ai_reasoning_engine so terraform destroy cleans up live sessions"
+    fi
+  fi
   check_pattern "${main_tf}" 'Dockerfile[[:space:]]+main\.py[[:space:]]+requirements\.txt[[:space:]]+coding_agent/[[:space:]]+skills_to_register/' "Terraform source_code_spec tar example includes skills_to_register/"
   check_pattern "${main_tf}" "SANDBOX_MODE" "Injects SANDBOX_MODE env var in Agent Runtime deployment_spec"
+  check_pattern "${main_tf}" 'dynamic[[:space:]]+"env"' "Uses dynamic \"env\" block to omit empty SANDBOX_TEMPLATE_NAME"
+  if [[ -f "${main_tf}" ]] && ! has_todo_markers "${main_tf}" "lab-5"; then
+    if python3 - "${main_tf}" <<'PYEOF'
+import re
+import sys
+from pathlib import Path
+
+raw = Path(sys.argv[1]).read_text(encoding="utf-8")
+code = "\n".join(
+    line for line in raw.splitlines() if not line.lstrip().startswith(("#", "//"))
+)
+
+# Reject unconditional static env { name = "SANDBOX_TEMPLATE_NAME" ... }
+if re.search(
+    r'(?<!dynamic\s)\benv\s*\{[^{}]*name\s*=\s*"SANDBOX_TEMPLATE_NAME"',
+    code,
+    flags=re.DOTALL,
+):
+    sys.exit(1)
+
+# Require dynamic "env" block containing SANDBOX_TEMPLATE_NAME gated on var.sandbox_template_name
+if not re.search(
+    r'dynamic\s+"env"\s*\{[^}]*sandbox_template_name[^}]*content\s*\{[^}]*"SANDBOX_TEMPLATE_NAME"',
+    code,
+    flags=re.DOTALL,
+):
+    sys.exit(1)
+PYEOF
+    then
+      pass "main.tf gates SANDBOX_TEMPLATE_NAME inside dynamic \"env\" block (prevents HTTP 400 on empty value) (${main_tf})"
+    else
+      fail "${main_tf} must emit SANDBOX_TEMPLATE_NAME via a dynamic \"env\" block gated on var.sandbox_template_name (not an unconditional static env block)"
+    fi
+  fi
   check_pattern "${main_tf}" "roles/aiplatform\.memoryUser" "Grants roles/aiplatform.memoryUser for Lab 3 Memory Bank access"
   check_pattern "${main_tf}" 'resource "google_project_iam_member" "runtime_sa_agentregistry_viewer"' "Declares conditional runtime_sa_agentregistry_viewer IAM binding for Lab 4 Skill Registry"
   check_pattern "${main_tf}" 'roles/agentregistry\.viewer' "Grants conditional roles/agentregistry.viewer when enable_skill_registry is true"
@@ -1103,12 +1465,108 @@ PYEOF
   fi
   check_pattern "${eval_dir}/setup_quality_alerts.py" "monitoring_v3" "Uses google.cloud.monitoring_v3"
   check_pattern "${eval_dir}/setup_quality_alerts.py" "aiplatform\.googleapis\.com/online_evaluator/scores" "Targets verified online_evaluator/scores metric"
+  check_pattern "${eval_dir}/setup_quality_alerts.py" "aiplatform\.googleapis\.com/OnlineEvaluator" "Alert filter restricts resource.type=\"aiplatform.googleapis.com/OnlineEvaluator\""
+  check_pattern "${eval_dir}/setup_quality_alerts.py" "ALIGN_PERCENTILE_50" "Alert policy uses DISTRIBUTION-compatible ALIGN_PERCENTILE_50 aligner"
+
+  # Regression check: Cloud Monitoring rejects ALIGN_MEAN on DELTA/DISTRIBUTION online_evaluator/scores
+  if [[ -f "${eval_dir}/setup_quality_alerts.py" ]]; then
+    if python3 - "${eval_dir}/setup_quality_alerts.py" <<'PYEOF'
+import ast
+import re
+import sys
+from pathlib import Path
+
+tree = ast.parse(Path(sys.argv[1]).read_text(encoding="utf-8"))
+
+docstring_nodes: set[int] = set()
+for parent in ast.walk(tree):
+    if isinstance(parent, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+        if (
+            parent.body
+            and isinstance(parent.body[0], ast.Expr)
+            and isinstance(parent.body[0].value, ast.Constant)
+            and isinstance(parent.body[0].value.value, str)
+        ):
+            docstring_nodes.add(id(parent.body[0].value))
+
+for node in ast.walk(tree):
+    if isinstance(node, ast.Attribute) and node.attr == "ALIGN_MEAN":
+        sys.exit(1)
+    if (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and id(node) not in docstring_nodes
+    ):
+        for line in node.value.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if stripped == "ALIGN_MEAN" or re.search(
+                r"(?:perSeriesAligner|per_series_aligner)\s*[:=]\s*['\"]?ALIGN_MEAN\b",
+                stripped,
+            ):
+                sys.exit(1)
+PYEOF
+    then
+      pass "setup_quality_alerts.py avoids incompatible ALIGN_MEAN aligner in alert code/YAML (${eval_dir}/setup_quality_alerts.py)"
+    else
+      fail "${eval_dir}/setup_quality_alerts.py must use ALIGN_PERCENTILE_50 (not ALIGN_MEAN) for DELTA/DISTRIBUTION online_evaluator/scores metrics"
+    fi
+  fi
+
   check_pattern "${eval_dir}/optimize_prompt.py" "SimplePromptOptimizer" "Integrates ADK SimplePromptOptimizer"
   check_pattern "${eval_dir}/optimize_prompt.py" "agents-cli eval optimize" "Documents agents-cli eval optimize command"
   check_pattern "${eval_dir}/optimize_prompt.py" "load_skill_from_dir" "Attaches local SkillToolset skills via load_skill_from_dir for GEPARootAgentOptimizer"
   check_pattern "${eval_dir}/optimize_prompt.py" "client\.skills\.update" "Supports zero-redeploy Skill Registry hot-update via client.skills.update"
-  check_pattern "${eval_dir}/optimize_prompt.py" "revisions create v2" "Documents Agent Registry immutable v2 skill revision creation"
+  check_pattern "${eval_dir}/optimize_prompt.py" "gcloud alpha agent-registry skills" "Uses gcloud alpha agent-registry skills for standalone skill revisions"
+  check_pattern "${eval_dir}/optimize_prompt.py" "(AGENT_REGISTRY_SKILLS_LOCATION|agent_registry_skills_location|--location=global|location=global)" "Targets global / AGENT_REGISTRY_SKILLS_LOCATION for standalone Agent Registry skills"
+  check_pattern "${eval_dir}/optimize_prompt.py" "revisions create rev-2" "Documents Agent Registry immutable rev-2 skill revision creation"
   check_pattern "${eval_dir}/optimize_prompt.py" "--default-revision=" "Documents Agent Registry --default-revision promotion and rollback"
+
+  # Regression check: optimize_prompt.py feedback_entries.list() uses parent= (not name=)
+  # and client.skills.update() passes skill directory (not zip_path) as local_path.
+  if [[ -f "${eval_dir}/optimize_prompt.py" ]]; then
+    if python3 - "${eval_dir}/optimize_prompt.py" <<'PYEOF'
+import ast
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1]).read_text(encoding="utf-8")
+tree = ast.parse(source)
+has_todo = "TODO(lab-6)" in source
+
+for node in ast.walk(tree):
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "list"
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "feedback_entries"
+    ):
+        kw_names = {kw.arg for kw in node.keywords if kw.arg}
+        if "name" in kw_names or "parent" not in kw_names:
+            sys.exit(1)
+    if (
+        not has_todo
+        and isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "update"
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "skills"
+    ):
+        for kw in node.keywords:
+            if kw.arg == "config" and isinstance(kw.value, ast.Dict):
+                for k, v in zip(kw.value.keys, kw.value.values):
+                    if isinstance(k, ast.Constant) and k.value == "local_path":
+                        if "zip_path" in ast.unparse(v):
+                            sys.exit(1)
+PYEOF
+    then
+      pass "optimize_prompt.py uses feedback_entries.list(parent=...) and directory local_path for client.skills.update() (${eval_dir}/optimize_prompt.py)"
+    else
+      fail "${eval_dir}/optimize_prompt.py must use feedback_entries.list(parent=...) and pass the skill directory (not zip_path) as local_path to client.skills.update()"
+    fi
+  fi
 
   # Regression check: pre-recorded multi-turn traces (coding_agent_multi_turn.json) MUST use
   # `agents-cli eval grade --traces`, NEVER `agents-cli eval run --dataset`.

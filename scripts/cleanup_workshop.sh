@@ -7,15 +7,20 @@
 #                                 [--include-skill-registry]
 #                                 [--project PROJECT_ID] [--env-file PATH]
 #
+# Regional strategy: Bangkok (asia-southeast3) first, falling back to Singapore
+# (asia-southeast1), global, or us-central1 only for services not yet in Bangkok.
+#
 # Tears down workshop cloud resources and local temporary artifacts in order:
 #   1. Terraform resources (starter/terraform & solution/terraform if state exists)
-#   2. Standalone Agent Platform instance (REASONING_ENGINE_NAME / asia-southeast1
-#      sandboxes, snapshots, templates, and parent ReasoningEngine)
+#   2. Standalone Agent Platform instance in Singapore fallback (REASONING_ENGINE_NAME /
+#      asia-southeast1 — waits/retries LRO completion in sandbox -> snapshot -> template
+#      order before deleting the parent ReasoningEngine)
 #   3. Lab 6 Cloud Monitoring Quality Alert policies ("Coding Agent Quality Drift")
-#   4. Lab 4/7 Agent Registry standalone skills in AGENT_REGISTRY_LOCATION (asia-southeast3)
+#   4. Lab 4/7 Agent Registry standalone skills via `gcloud alpha agent-registry skills`
+#      in AGENT_REGISTRY_SKILLS_LOCATION (default: global — deletes child revisions first)
 #   5. Vertex AI Skill Registry skills in SKILL_REGISTRY_LOCATION (us-central1)
 #      ONLY when --include-skill-registry is explicitly passed (permanent ID lockout!)
-#   6. Artifact Registry images in AR_LOCATION (asia-southeast3)
+#   6. Bangkok Artifact Registry images in AR_LOCATION (asia-southeast3)
 #   7. Local temporary artifacts (dist/, */terraform/coding_agent_source.tar.gz,
 #      /tmp/byoc_smoke, /tmp/coding_agent_workspace)
 # =============================================================================
@@ -149,6 +154,7 @@ AGENT_PLATFORM_LOC="${GOOGLE_CLOUD_LOCATION:-asia-southeast1}"
 AR_LOC="${AR_LOCATION:-${PRIMARY_REG}}"
 AR_REPO="${AR_REPOSITORY:-coding-agent-repo}"
 AGENT_REG_LOC="${AGENT_REGISTRY_LOCATION:-${PRIMARY_REG}}"
+AGENT_REG_SKILLS_LOC="${AGENT_REGISTRY_SKILLS_LOCATION:-global}"
 SKILL_REG_LOC="${SKILL_REGISTRY_LOCATION:-us-central1}"
 
 ENGINE_NAME="${REASONING_ENGINE_NAME:-}"
@@ -161,8 +167,10 @@ printf "Enterprise Coding Agent Workshop — Teardown Plan\n"
 printf "=============================================================================\n"
 printf "  Mode:                    %s\n" "$([[ "${DRY_RUN}" -eq 1 ]] && echo "DRY-RUN (no mutations)" || echo "LIVE TEARDOWN")"
 printf "  GCP Project:             %s\n" "${PROJECT_ID:-<none — local cleanup only>}"
-printf "  Agent Platform Location: %s\n" "${AGENT_PLATFORM_LOC}"
-printf "  Agent Registry Location: %s\n" "${AGENT_REG_LOC}"
+printf "  Primary Region:          %s (Bangkok first)\n" "${PRIMARY_REG}"
+printf "  Agent Platform Fallback: %s\n" "${AGENT_PLATFORM_LOC}"
+printf "  Agent Registry (A2A):    %s\n" "${AGENT_REG_LOC}"
+printf "  Agent Registry (Skills): %s (gcloud alpha agent-registry skills)\n" "${AGENT_REG_SKILLS_LOC}"
 printf "  Artifact Registry:       %s-docker.pkg.dev/%s/%s\n" "${AR_LOC}" "${PROJECT_ID:-<project>}" "${AR_REPO}"
 printf "  Skill Registry Cleanup:  %s\n" "$([[ "${INCLUDE_SKILL_REGISTRY}" -eq 1 ]] && echo "ENABLED (${SKILL_REG_LOC} — PERMANENT SKILL_ID RESERVATION!)" || echo "SKIPPED (safe default)")"
 printf "=============================================================================\n"
@@ -272,43 +280,127 @@ else
   ENGINE_LOC="$(printf '%s\n' "${ENGINE_NAME}" | sed -nE 's|^projects/[^/]+/locations/([^/]+)/reasoningEngines/.*|\1|p')"
   ENGINE_LOC="${ENGINE_LOC:-${AGENT_PLATFORM_LOC}}"
 
-  # 2a. Clean up child sandboxes, snapshots, and templates via sandbox_lifecycle CLI if available
+  # 2a. Clean up child resources in strict sandbox -> snapshot -> template order,
+  #     waiting/retrying LRO completion at each stage so zero leftovers survive.
   PY_BIN=""
+  PY_TRACK_DIR=""
   if [[ -x "${REPO_ROOT}/solution/.venv/bin/python" ]]; then
     PY_BIN="${REPO_ROOT}/solution/.venv/bin/python"
+    PY_TRACK_DIR="${REPO_ROOT}/solution"
   elif [[ -x "${REPO_ROOT}/starter/.venv/bin/python" ]]; then
     PY_BIN="${REPO_ROOT}/starter/.venv/bin/python"
+    PY_TRACK_DIR="${REPO_ROOT}/starter"
   fi
 
   if [[ -n "${PY_BIN}" ]]; then
-    info "Deleting sandboxes, snapshots, and templates under ${ENGINE_NAME}..."
-    if (cd "${REPO_ROOT}/solution" && "${PY_BIN}" -m coding_agent.tools.sandbox_lifecycle \
-      --project "${PROJECT_ID}" --location "${ENGINE_LOC}" --instance "${ENGINE_NAME}" \
-      cleanup-all --include-templates); then
-      ok "Cleaned up sandboxes, snapshots, and templates under ${ENGINE_NAME}"
+    info "Draining sandboxes -> snapshots -> templates (with LRO wait/retry) under ${ENGINE_NAME}..."
+    if (cd "${PY_TRACK_DIR}" && env PYTHONDONTWRITEBYTECODE=1 "${PY_BIN}" - \
+      "${PROJECT_ID}" "${ENGINE_LOC}" "${ENGINE_NAME}" <<'PYEOF'
+import sys
+import time
+
+from coding_agent.tools.sandbox_lifecycle import SandboxLifecycleManager
+
+project_id, location, instance_name = sys.argv[1:4]
+mgr = SandboxLifecycleManager(
+    project_id=project_id,
+    location=location,
+    instance_name=instance_name,
+)
+
+
+def _is_not_found(exc: Exception) -> bool:
+    msg = str(exc).upper()
+    return "404" in msg or "NOT_FOUND" in msg or "NOT FOUND" in msg
+
+
+def _drain_stage(label: str, list_fn, delete_fn, max_attempts: int = 12, delay_s: float = 5.0) -> bool:
+    for attempt in range(1, max_attempts + 1):
+        try:
+            items = list(list_fn())
+        except Exception as exc:
+            if _is_not_found(exc):
+                print(f"  [{label}] Parent instance already removed (404).")
+                return True
+            print(f"  [{label}] list attempt {attempt}/{max_attempts} failed: {exc}", file=sys.stderr)
+            time.sleep(delay_s)
+            continue
+
+        if not items:
+            print(f"  [{label}] 0 remaining.")
+            return True
+
+        print(f"  [{label}] Pass {attempt}/{max_attempts}: deleting {len(items)} resource(s)...")
+        for item in items:
+            res_name = getattr(item, "name", "")
+            if not res_name:
+                continue
+            try:
+                delete_fn(res_name)
+            except Exception as exc:
+                if not _is_not_found(exc):
+                    print(f"    retrying delete {res_name} after error: {exc}", file=sys.stderr)
+        time.sleep(delay_s)
+
+    try:
+        leftovers = list(list_fn())
+    except Exception as exc:
+        if _is_not_found(exc):
+            return True
+        return False
+    if leftovers:
+        print(f"  [{label}] WARNING: {len(leftovers)} resource(s) still remain after retries.", file=sys.stderr)
+        return False
+    return True
+
+
+ok_sb = _drain_stage("sandboxes", mgr.list_sandboxes, mgr.delete_sandbox)
+ok_sn = _drain_stage("snapshots", mgr.list_snapshots, mgr.delete_snapshot)
+ok_tp = _drain_stage("templates", mgr.list_templates, mgr.delete_template)
+sys.exit(0 if (ok_sb and ok_sn and ok_tp) else 1)
+PYEOF
+    ); then
+      ok "Drained all sandboxes, snapshots, and templates under ${ENGINE_NAME}"
     else
-      warn "sandbox_lifecycle cleanup-all returned non-zero (instance may already be deleted); continuing with force delete."
+      warn "Child sandbox/snapshot/template drain reported warnings (instance may already be deleted or still propagating); continuing with force delete."
     fi
   else
     info "Local venv not detected; relying on Agent Platform force=true teardown for child resources."
   fi
 
-  # 2b. Force-delete parent ReasoningEngine via v1beta1 REST API
+  # 2b. Force-delete parent ReasoningEngine via v1beta1 REST API and wait for LRO propagation
   TOKEN="$(gcloud auth print-access-token 2>/dev/null || true)"
   if [[ -z "${TOKEN}" ]]; then
     warn "Unable to obtain gcloud access token; skipping deletion of ${ENGINE_NAME}."
   else
     DELETE_URL="https://${ENGINE_LOC}-aiplatform.googleapis.com/v1beta1/${ENGINE_NAME}?force=true"
-    HTTP_CODE="$(curl -sS -o /tmp/cleanup_engine_resp_$$.json -w "%{http_code}" \
+    HTTP_CODE="$(curl -sS -o "/tmp/cleanup_engine_resp_$$.json" -w "%{http_code}" \
       -X DELETE \
       -H "Authorization: Bearer ${TOKEN}" \
       "${DELETE_URL}" || echo "000")"
     if [[ "${HTTP_CODE}" == "200" || "${HTTP_CODE}" == "202" || "${HTTP_CODE}" == "204" ]]; then
-      ok "Requested deletion (HTTP ${HTTP_CODE}) for ${ENGINE_NAME}"
+      ok "Requested deletion (HTTP ${HTTP_CODE}) for ${ENGINE_NAME}; waiting for LRO completion..."
+      ENGINE_GONE=0
+      CHECK_CODE="000"
+      for _ in $(seq 1 12); do
+        CHECK_CODE="$(curl -sS -o /dev/null -w "%{http_code}" \
+          -H "Authorization: Bearer ${TOKEN}" \
+          "https://${ENGINE_LOC}-aiplatform.googleapis.com/v1beta1/${ENGINE_NAME}" || echo "000")"
+        if [[ "${CHECK_CODE}" == "404" ]]; then
+          ENGINE_GONE=1
+          break
+        fi
+        sleep 5
+      done
+      if [[ "${ENGINE_GONE}" -eq 1 ]]; then
+        ok "Confirmed deletion (HTTP 404) for ${ENGINE_NAME}"
+      else
+        warn "Deletion LRO for ${ENGINE_NAME} is still propagating (last HTTP ${CHECK_CODE})."
+      fi
     elif [[ "${HTTP_CODE}" == "404" ]]; then
       skip "ReasoningEngine already deleted (HTTP 404): ${ENGINE_NAME}"
     else
-      warn "Unexpected HTTP ${HTTP_CODE} deleting ${ENGINE_NAME}: $(cat /tmp/cleanup_engine_resp_$$.json 2>/dev/null || true)"
+      warn "Unexpected HTTP ${HTTP_CODE} deleting ${ENGINE_NAME}: $(cat "/tmp/cleanup_engine_resp_$$.json" 2>/dev/null || true)"
     fi
     rm -f "/tmp/cleanup_engine_resp_$$.json"
   fi
@@ -345,19 +437,19 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Step 4: Lab 4/7 Agent Registry Standalone Skills (AGENT_REGISTRY_LOCATION)
+# Step 4: Lab 4/7 Agent Registry Standalone Skills (AGENT_REGISTRY_SKILLS_LOCATION)
 # -----------------------------------------------------------------------------
-section "Step 4: Agent Registry Standalone Skills (${AGENT_REG_LOC})"
+section "Step 4: Agent Registry Standalone Skills (${AGENT_REG_SKILLS_LOC})"
 
 if [[ "${DRY_RUN}" -eq 1 ]]; then
-  dry "Would list and delete workshop Agent Registry standalone skills (private-secure-code-review*) in location '${AGENT_REG_LOC}'"
+  dry "Would list and delete workshop Agent Registry standalone skills (private-secure-code-review*) and all child revisions via 'gcloud alpha agent-registry skills' in location '${AGENT_REG_SKILLS_LOC}'"
 elif [[ "${CAN_RUN_GCP}" -eq 0 ]]; then
   skip "Skipping Agent Registry standalone skills cleanup (GCP unavailable)."
 else
-  AGENT_REG_SKILLS="$(gcloud agent-registry skills list \
+  AGENT_REG_SKILLS="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills list \
     --project="${PROJECT_ID}" \
-    --location="${AGENT_REG_LOC}" \
-    --format='value(name)' 2>/dev/null || true)"
+    --location="${AGENT_REG_SKILLS_LOC}" \
+    --format='value(name)' </dev/null 2>/dev/null || true)"
 
   FOUND_AR_SKILL=0
   if [[ -n "${AGENT_REG_SKILLS}" ]]; then
@@ -366,21 +458,45 @@ else
       skill_short="${skill_full_name##*/}"
       if [[ "${skill_short}" == private-secure-code-review* ]]; then
         FOUND_AR_SKILL=1
-        info "Deleting Agent Registry standalone skill: ${skill_short} (${AGENT_REG_LOC})"
-        if gcloud agent-registry skills delete "${skill_short}" \
+        # Agent Registry skills delete has no --force flag and fails FAILED_PRECONDITION
+        # while child revisions exist, so delete all revisions first.
+        SKILL_REVISIONS="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills revisions list \
+          --skill="${skill_short}" \
           --project="${PROJECT_ID}" \
-          --location="${AGENT_REG_LOC}" \
-          --quiet 2>/dev/null; then
+          --location="${AGENT_REG_SKILLS_LOC}" \
+          --format="value(name)" </dev/null 2>/dev/null || true)"
+        if [[ -n "${SKILL_REVISIONS}" ]]; then
+          while IFS= read -r rev_full_name; do
+            [[ -z "${rev_full_name}" ]] && continue
+            rev_short="${rev_full_name##*/}"
+            info "Deleting Agent Registry skill revision: ${skill_short}/revisions/${rev_short} (${AGENT_REG_SKILLS_LOC})"
+            if CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills revisions delete "${rev_short}" \
+              --skill="${skill_short}" \
+              --project="${PROJECT_ID}" \
+              --location="${AGENT_REG_SKILLS_LOC}" \
+              --quiet </dev/null 2>/dev/null; then
+              ok "Deleted Agent Registry skill revision: ${rev_short}"
+            else
+              warn "Could not delete revision '${rev_short}' for skill '${skill_short}' (may already be deleted)."
+            fi
+          done <<< "${SKILL_REVISIONS}"
+        fi
+
+        info "Deleting Agent Registry standalone skill: ${skill_short} (${AGENT_REG_SKILLS_LOC})"
+        if CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills delete "${skill_short}" \
+          --project="${PROJECT_ID}" \
+          --location="${AGENT_REG_SKILLS_LOC}" \
+          --quiet </dev/null 2>/dev/null; then
           ok "Deleted Agent Registry skill: ${skill_short}"
         else
-          warn "Could not delete Agent Registry skill '${skill_short}' (may require decommission/force or already deleted)."
+          warn "Could not delete Agent Registry skill '${skill_short}' (may have remaining revisions or already be deleted)."
         fi
       fi
     done <<< "${AGENT_REG_SKILLS}"
   fi
 
   if [[ "${FOUND_AR_SKILL}" -eq 0 ]]; then
-    skip "No workshop Agent Registry standalone skills (private-secure-code-review*) found in ${AGENT_REG_LOC}."
+    skip "No workshop Agent Registry standalone skills (private-secure-code-review*) found in ${AGENT_REG_SKILLS_LOC}."
   fi
 fi
 

@@ -261,19 +261,26 @@ class SessionLifecycleManager:
             raise ValueError(f"ttl_days must be positive, got {ttl_days}.")
 
         runtime_name = self._require_runtime_name()
-        # TODO(lab-3): Build ``config`` with ``{"expire_time": expire_time}`` or
-        # ``{"ttl": f"{ttl_days * 24 * 60 * 60}s"}``, call ``self.client.sessions.create(
-        # name=runtime_name, user_id=user_id, ...)`` (passing ``session_id`` when provided),
-        # and return ``_extract_session_name(session_op)`` so both LRO (.response.name)
-        # and direct Session (.name) SDK responses work cleanly.
+        # TODO(lab-3): Build ``config`` with optional ``"session_id": session_id`` (in
+        # ``agentplatform>=2.10.0``, ``session_id`` belongs inside ``config``, NOT as a
+        # top-level kwarg) plus ``"expire_time": expire_time`` or
+        # ``"ttl": f"{ttl_days * 24 * 60 * 60}s"``, call ``self.client.sessions.create(
+        # name=runtime_name, user_id=user_id, config=config)``, and return
+        # ``_extract_session_name(session_op)`` so both LRO (.response.name) and direct
+        # Session (.name) SDK responses work cleanly.
         _ = (runtime_name, session_id, ttl_days, expire_time)
         raise NotImplementedError("Complete TODO(lab-3): SessionLifecycleManager.create_session()")
 
-    def get_session(self, session_name: str, user_id: str) -> Any:
-        """Fetch a single Managed Session resource."""
+    def get_session(self, session_name: str, user_id: str | None = None) -> Any:
+        """Fetch a single Managed Session resource.
+
+        ``agentplatform==2.10.0`` exposes ``sessions.get(*, name: str, config=None)``;
+        optional ``user_id`` is validated locally when supplied for caller convenience.
+        """
         # Pre-filled boilerplate helper (already working for the workshop)
-        validate_session_identifiers(user_id)
-        return self.client.sessions.get(name=session_name, user_id=user_id)
+        if user_id is not None:
+            validate_session_identifiers(user_id)
+        return self.client.sessions.get(name=session_name)
 
     def list_sessions(self, user_id: str | None = None) -> list[Any]:
         """List Managed Sessions under the parent runtime (default order: ``create_time desc``).

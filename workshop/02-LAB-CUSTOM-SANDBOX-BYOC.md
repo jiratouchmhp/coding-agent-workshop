@@ -44,12 +44,12 @@ flowchart LR
         AGENT --> CLIENT
     end
 
-    subgraph CP["Google-Managed Control Plane (Bangkok AR/Build + Singapore Sandboxes)"]
+    subgraph CP["Google-Managed Control Plane (Bangkok AR/Build -> Singapore Sandbox Fallback)"]
         AR["Artifact Registry (asia-southeast3)\ncoding-sandbox:v1 via Cloud Build"]
         SA_SBX["Agent Sandbox Service Agent\ngcp-sa-vertex-sandbox (artifactregistry.reader)"]
         TPL["SandboxEnvironmentTemplate (asia-southeast1)\nPre-Warmed Pool + Egress Policy"]
         SNAP["SandboxEnvironmentSnapshot\nManaged GCS + Optional CMEK"]
-        AR -- "Pulls Image" --> SA_SBX
+        AR -- "Pull from Bangkok AR (Verified)" --> SA_SBX
         SA_SBX --> TPL
     end
 
@@ -98,7 +98,7 @@ Do not confuse these three distinct products when reading docs or designing arch
 > [!TIP]
 > **Zero-Docker First-Class Workflow (3 Options — Local `docker` Is Strictly Optional!):**
 > 1. **Local Pure-Python Runner Smoke Test (`make test-sandbox-local`):** Verifies `starter/sandbox_image/runner.py` (`GET /health` + `POST /exec`) directly on localhost using Python's standard library — **zero Docker daemon required!**
-> 2. **Remote Cloud Build in Bangkok (`make push-sandbox`):** Submits `starter/sandbox_image/` to **Cloud Build in Bangkok (`--region=asia-southeast3`)** and pushes into **Bangkok Artifact Registry (`asia-southeast3-docker.pkg.dev/...`)** — zero local Docker! *(Prefer strict same-region image pulls into Singapore Managed Sandboxes? Set `AR_LOCATION=asia-southeast1` to push to `asia-southeast1-docker.pkg.dev/...` instead.)*
+> 2. **Remote Cloud Build in Bangkok (`make push-sandbox`):** Submits `starter/sandbox_image/` to **Cloud Build in Bangkok (`--region=asia-southeast3`)** and pushes into **Bangkok Artifact Registry (`asia-southeast3-docker.pkg.dev/...`)** — zero local Docker! **Empirically verified:** Singapore BYOC Sandboxes (`asia-southeast1`, our fallback only because Managed Sandboxes are not yet launched in Bangkok) pull directly from Bangkok Artifact Registry (`asia-southeast3-docker.pkg.dev`) with zero issues — **no second Singapore AR repository is required**.
 > 3. **Zero-Build Fast-Track (`SANDBOX_MODE=shell`):** Want to skip BYOC container builds entirely (e.g., on the Half-Day Fast-Track)? Keep **`SANDBOX_MODE=shell`** in `.env` — Google Cloud's managed gVisor **Shell Sandbox** in **Singapore (`asia-southeast1`)** runs immediately with zero container build or Artifact Registry setup!
 
 ### A.1 Inspect `starter/sandbox_image/` & Run the Zero-Docker Local Smoke Test
@@ -123,25 +123,33 @@ make test-sandbox-local
 
 Confirm you see a non-root `USER appuser` (never `USER root`), `WORKDIR /workspace`, `EXPOSE 8080`, and passing `/health` + `/exec` assertions from `make test-sandbox-local`.
 
+> [!WARNING]
+> **Cloud Build Legacy Builder Gotcha (`COPY --chmod` vs. `RUN chmod`):**
+> `gcloud builds submit --region=asia-southeast3 --tag=...` runs Cloud Build's **legacy Docker builder** (without BuildKit enabled). Using BuildKit-only syntax like `COPY --chown=root:root --chmod=0644 runner.py /opt/sandbox_runner/runner.py` fails the remote build with `the --chmod option requires BuildKit`. Always separate permissions into a standard `RUN chmod` step so the Dockerfile builds identically on Cloud Build and local Docker:
+> ```dockerfile
+> COPY --chown=root:root runner.py /opt/sandbox_runner/runner.py
+> RUN chmod 0644 /opt/sandbox_runner/runner.py
+> ```
+
 ### A.2 Create Bangkok Artifact Registry Repo & Push via Remote Cloud Build (`--region=asia-southeast3`)
 
 ```bash
 source .env
 
-# Bangkok (asia-southeast3) is our primary build & Artifact Registry region.
-# Optional: set AR_LOCATION="asia-southeast1" if you prefer strict same-region pulls
-# into Singapore (asia-southeast1) Managed Sandboxes.
+# Aim for Bangkok (asia-southeast3) first for Cloud Build & Artifact Registry.
+# Empirically verified: Singapore (asia-southeast1) BYOC Sandboxes pull cleanly from
+# Bangkok Artifact Registry (`asia-southeast3-docker.pkg.dev`) — no second AR repo needed!
 export AR_LOCATION="${AR_LOCATION:-asia-southeast3}"
 export BUILD_LOCATION="${BUILD_LOCATION:-asia-southeast3}"
 
-# 1. Create a unified Docker repository in Artifact Registry (hosts both Lab 2 coding-sandbox and Lab 5 coding-agent images)
+# 1. Create a unified Docker repository in Bangkok Artifact Registry (hosts both Lab 2 coding-sandbox and Lab 5 coding-agent images)
 gcloud artifacts repositories create coding-agent-repo \
   --repository-format=docker \
   --location="$AR_LOCATION" \
   --description="BYOC Coding Sandbox and Agent Runtime images for Gemini Enterprise Agent Platform" \
   --project="$GOOGLE_CLOUD_PROJECT" || true
 
-# 2. Define the canonical BYOC sandbox image URI (Bangkok primary: asia-southeast3-docker.pkg.dev/...)
+# 2. Define the canonical BYOC sandbox image URI (Bangkok default: asia-southeast3-docker.pkg.dev/...)
 export SANDBOX_IMAGE_URI="${AR_LOCATION}-docker.pkg.dev/${GOOGLE_CLOUD_PROJECT}/coding-agent-repo/coding-sandbox:v1"
 echo "SANDBOX_IMAGE_URI=$SANDBOX_IMAGE_URI"
 
@@ -205,7 +213,7 @@ import agentplatform
 
 client = agentplatform.Client(
     project=project_id,
-    location=location,  # e.g., "asia-southeast1" (Singapore — nearest supported Agent Platform region)
+    location=location,  # "asia-southeast1" (Singapore fallback — Managed Sandboxes are not yet in Bangkok asia-southeast3)
     http_options={"api_version": "v1beta1"},  # Required for BYOC templates, PSC, CMEK
 )
 
@@ -228,7 +236,7 @@ byoc_tpl_op = client.sandboxes.templates.create(
     config={
         "custom_container_environment": {
             "custom_container_spec": {
-                "image_uri": image_uri,  # e.g., asia-southeast3-docker.pkg.dev/PROJECT/coding-agent-repo/coding-sandbox:v1 (or asia-southeast1-docker.pkg.dev/...)
+                "image_uri": image_uri,  # Bangkok AR: asia-southeast3-docker.pkg.dev/PROJECT/coding-agent-repo/coding-sandbox:v1 (verified with SG sandboxes!)
             },
             "resources": {
                 "requests": {"cpu": "1", "memory": "1Gi"},
@@ -255,8 +263,9 @@ template_details = client.sandboxes.templates.get(name=template_name)
 
 # UPDATE Template: No in-place SDK update method is documented.
 # Official pattern (scale/sandbox/manage-templates): delete old template + create new template.
-# NOTE: delete() fails if a warm pool or sandbox is actively being created from this template!
-client.sandboxes.templates.delete(name=template_name)
+# NOTE: delete() returns an async LRO and fails if a warm pool or sandbox is still active —
+# always wait for delete LROs to finish before tearing down parent/dependent resources!
+client.sandboxes.templates.delete(name=template_name, config={"wait_for_completion": True})
 ```
 
 #### 3. `SandboxEnvironment` Lifecycle (All 7 Operations)
@@ -327,11 +336,18 @@ branch_op = client.sandboxes.create(
     },
 )
 
-# 7. DELETE Snapshot & Sandboxes (deleting sandbox does NOT delete its backing template)
-client.sandboxes.snapshots.delete(name=snapshot_name)
-client.sandboxes.delete(name=branch_op.response.name)
-client.sandboxes.delete(name=sandbox_name)
+# 7. DELETE Snapshot, Sandboxes & Template — WAIT FOR EACH DELETE LRO TO COMPLETE!
+# Deleting a sandbox does NOT delete its backing template, and firing async delete() calls
+# without waiting can leave orphaned snapshots or templates behind when parent cleanup runs.
+client.sandboxes.snapshots.delete(name=snapshot_name, config={"wait_for_completion": True})
+client.sandboxes.delete(name=branch_op.response.name, config={"wait_for_completion": True})
+client.sandboxes.delete(name=sandbox_name, config={"wait_for_completion": True})
+client.sandboxes.templates.delete(name=template_name, config={"wait_for_completion": True})
 ```
+
+> [!WARNING]
+> **Avoid Orphaned Snapshots & Templates During Teardown (Async Delete LROs):**
+> `sandboxes.delete()`, `sandboxes.snapshots.delete()`, and `sandboxes.templates.delete()` return asynchronous Long-Running Operations (LROs). Even if a `finally:` block logs `"Deleted snapshot"` / `"Deleted template"`, failing to wait for each delete LRO to reach completion causes parent template/instance teardown races and leaves orphaned snapshots or templates behind. Always wait for `delete_sandbox` → `delete_snapshot` → `delete_template` LROs in order (`config={"wait_for_completion": True}` or polling `op.done`), and verify zero leftovers with `uv run python -m coding_agent.tools.sandbox_lifecycle cleanup-all --include-templates`.
 
 ### Run the Lifecycle CLI Demo
 
@@ -584,9 +600,9 @@ Run the Lab 2 automated checkpoint verifier from the repository root:
 ```
 
 **Checkpoint Pass Criteria:**
-- [ ] `starter/sandbox_image/Dockerfile` sets a non-root `USER appuser`, passes `make test-sandbox-local` (zero local Docker!), and image is pushed to `coding-agent-repo` in Bangkok Artifact Registry (`asia-southeast3-docker.pkg.dev`, or optional `asia-southeast1-docker.pkg.dev`) via `make push-sandbox` — OR you opted into the zero-build `SANDBOX_MODE=shell` fast-track in Singapore (`asia-southeast1`).
+- [ ] `starter/sandbox_image/Dockerfile` sets a non-root `USER appuser`, uses Cloud Build-compatible `COPY --chown=root:root` + `RUN chmod 0644` (not BuildKit-only `--chmod`), passes `make test-sandbox-local` (zero local Docker!), and pushes cleanly to `coding-agent-repo` in Bangkok Artifact Registry (`asia-southeast3-docker.pkg.dev` — empirically verified with Singapore BYOC Sandboxes!) via `make push-sandbox` — OR you opted into the zero-build `SANDBOX_MODE=shell` fast-track in Singapore (`asia-southeast1`).
 - [ ] `service-PROJECT_NUMBER@gcp-sa-vertex-sandbox.iam.gserviceaccount.com` holds `roles/artifactregistry.reader` on `coding-agent-repo`.
-- [ ] `starter/coding_agent/tools/sandbox_lifecycle.py` has zero remaining `# TODO(lab-2)` markers and completes template/sandbox/snapshot lifecycle operations in Singapore (`asia-southeast1`).
+- [ ] `starter/coding_agent/tools/sandbox_lifecycle.py` has zero remaining `# TODO(lab-2)` markers, completes template/sandbox/snapshot lifecycle operations in Singapore (`asia-southeast1`), and waits for delete LROs to finish so zero snapshots or templates remain orphaned.
 - [ ] `starter/coding_agent/tools/sandbox_execution.py` implements Shell `execute_bash`, BYOC `/exec`, `AgentEngineSandboxCodeExecutor`, and `AgentPlatformSandboxEnvironment(BaseEnvironment)` with `EnvironmentScope.SESSION` and `*, ctx: Context | None = None`.
 - [ ] Metadata server probe inside the sandbox confirmed unreachable (`169.254.169.254:80` blocked).
 - [ ] Temporary demo sandboxes deleted so no idle sandbox billing accumulates.

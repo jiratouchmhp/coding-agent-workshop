@@ -59,10 +59,13 @@ entry = client.feedback_entries.get(name=entry_name)
 print(entry.feedback_type, entry.feedback_labels, entry.feedback_text)
 
 # 3. List feedback entries
+# Verified for google-cloud-agentplatform==2.10.0:
+# `feedback_entries.list(*, parent: str, config=None)` requires `parent=` (NOT `name=`, which raises TypeError),
+# whereas `feedback_entries.create` and `feedback_entries.delete` use `name=`.
 # Filterable fields: session_id, user_id, feedback_type, feedback_labels, create_time, update_time
 # Sortable fields: create_time, update_time
 for item in client.feedback_entries.list(
-    name=engine_name,
+    parent=engine_name,
     config={
         "filter": 'session_id="SESSION_ID" AND feedback_type="THUMBS_UP"',
         "order_by": "create_time desc",
@@ -166,7 +169,7 @@ curl -X POST \
 
 ## 5. Verification & Troubleshooting
 
-- **End-to-end check:** Run an agent turn with tracing enabled, capture the OTel `gcp.vertex.agent.event_id` (or session `raw_event.id`), call `feedback_entries.create`, verify `feedback_entries.list(filter='session_id="..."')`, attach `feedback_contexts.update`, read back via `feedback_contexts.get(name=f"{entry_name}/feedbackContext")`, and confirm the feedback badge appears under **Deployments -> `<agent>` -> Traces**.
+- **End-to-end check:** Run an agent turn with tracing enabled, capture the OTel `gcp.vertex.agent.event_id` (or session `raw_event.id`), call `feedback_entries.create`, verify `feedback_entries.list(parent=engine_name, config={"filter": 'session_id="..."'})`, attach `feedback_contexts.update`, read back via `feedback_contexts.get(name=f"{entry_name}/feedbackContext")`, and confirm the feedback badge appears under **Deployments -> `<agent>` -> Traces**.
 - **Common errors:**
   - Feedback missing from Console Traces UI -> `event_id` does not match `gcp.vertex.agent.event_id` UUID or tracing was disabled when the turn ran.
   - `404` / invalid resource name on `feedback_contexts.get` or `.update` -> verify `.update` uses `entry_name` and `.get` uses `f"{entry_name}/feedbackContext"`.

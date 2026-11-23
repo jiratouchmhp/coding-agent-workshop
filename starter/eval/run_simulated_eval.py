@@ -25,7 +25,12 @@ if str(TRACK_ROOT) not in sys.path:
     sys.path.insert(0, str(TRACK_ROOT))
 
 from coding_agent.config import get_settings  # noqa: E402
-from eval.run_offline_eval import SUPPORTED_EVAL_LOCATIONS, validate_eval_location  # noqa: E402
+from eval.run_offline_eval import (  # noqa: E402
+    SUPPORTED_EVAL_LOCATIONS,
+    build_eval_client,
+    get_eval_types,
+    validate_eval_location,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +65,8 @@ def generate_scenarios(
     environment_context: str = DEFAULT_ENVIRONMENT_CONTEXT,
 ) -> Any:
     """Step 1: Extract ``AgentInfo`` and synthesize multi-turn user scenarios."""
-    # TODO(lab-6): Import `types` from `vertexai`, call:
+    # TODO(lab-6): Resolve `types = get_eval_types()` (prefers `agentplatform.types`,
+    # falls back to `vertexai.types`), call:
     #   `agent_info = types.evals.AgentInfo.load_from_agent(agent=agent)`
     # and return:
     #   `client.evals.generate_conversation_scenarios(agent_info=agent_info, config={
@@ -94,7 +100,7 @@ def run_user_simulation(
 def grade_simulated_traces(client: Any, simulated_traces: Any) -> Any:
     """Step 3: Grade multi-turn traces strictly using ``MULTI_TURN_*`` metrics."""
     # Pre-filled boilerplate helper
-    from vertexai import types
+    types = get_eval_types()
 
     return client.evals.evaluate(
         dataset=simulated_traces,
@@ -113,7 +119,7 @@ def cluster_simulation_failures(
 ) -> Any:
     """Step 4: Run Automatic Loss Analysis in ``global`` with explicit ``metric=``."""
     # Pre-filled boilerplate helper
-    from vertexai import Client, types
+    types = get_eval_types()
 
     metric_map = {
         "multi_turn_task_success": types.RubricMetric.MULTI_TURN_TASK_SUCCESS,
@@ -122,7 +128,7 @@ def cluster_simulation_failures(
     if metric_name not in metric_map:
         raise ValueError(f"Unsupported metric {metric_name!r}; expected {sorted(metric_map)}.")
 
-    global_client = Client(project=project_id, location="global")
+    global_client = build_eval_client(project_id=project_id, location="global")
     return global_client.evals.generate_loss_clusters(
         eval_result=sim_eval_result,
         metric=metric_map[metric_name],
@@ -182,9 +188,7 @@ def main(argv: list[str] | None = None) -> int:
     if not project_id:
         settings.require_gcp_project()
 
-    from vertexai import Client
-
-    client = Client(project=project_id, location=location)
+    client = build_eval_client(project_id=project_id, location=location)
     agent = load_local_coding_agent()
 
     scenario_dataset = generate_scenarios(

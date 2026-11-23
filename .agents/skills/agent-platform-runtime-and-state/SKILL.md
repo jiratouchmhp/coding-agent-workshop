@@ -30,10 +30,10 @@ Standardize new Python code on **`agentplatform.Client`** (`google-cloud-agentpl
 pip install --upgrade "google-adk[gcp]" "google-cloud-agentplatform>=2.0.1"
 export GOOGLE_GENAI_USE_ENTERPRISE="TRUE"   # Required for Feedback Service & enterprise ADK
 export GOOGLE_CLOUD_PROJECT="PROJECT_ID"
-export PRIMARY_REGION="asia-southeast3"     # Bangkok primary (AR, Cloud Build, Secret Manager)
-export GOOGLE_CLOUD_LOCATION="asia-southeast1" # Singapore (nearest supported Agent Platform region)
-export AR_LOCATION="${PRIMARY_REGION}"      # Bangkok primary AR (or asia-southeast1 for same-region pulls)
-export BUILD_LOCATION="${PRIMARY_REGION}"   # Remote Cloud Build (zero local Docker)
+export PRIMARY_REGION="asia-southeast3"        # Bangkok default (AR, Cloud Build, Secret Manager, Agent Registry A2A/MCP)
+export GOOGLE_CLOUD_LOCATION="asia-southeast1" # Singapore fallback only for Agent Platform / Gemini services not yet in Bangkok
+export AR_LOCATION="${PRIMARY_REGION}"         # Single Bangkok AR (verified with both SG Agent Runtime & SG BYOC Sandboxes; no 2nd AR repo needed)
+export BUILD_LOCATION="${PRIMARY_REGION}"      # Bangkok remote Cloud Build (zero local Docker)
 ```
 
 > **API Version Rule:** Pass `http_options={"api_version": "v1beta1"}` on `agentplatform.Client(...)` for **REST `/v1beta1/...` calls** and SDK **Revisions/Traffic Splitting** or **Agent Identity**; standard `v1` Runtime CRUD/query as well as `agentplatform.Client` `feedback_entries` and `sessions` SDK methods work with default client options (plus `GOOGLE_GENAI_USE_ENTERPRISE="TRUE"`). Note that **no `gcloud` deploy command exists** for Agent Runtime—deploy via Terraform, `agentplatform` SDK, REST, or `agents-cli deploy`.
@@ -56,8 +56,8 @@ export BUILD_LOCATION="${PRIMARY_REGION}"   # Remote Cloud Build (zero local Doc
 
 1. **Always wire BOTH Google-managed service agents into Terraform `depends_on` — never rely on implicit ordering.**
    - *Why:* `service-PROJECT_NUMBER@gcp-sa-aiplatform-re.iam.gserviceaccount.com` pulls same-project BYOC images (`roles/artifactregistry.reader`), while `service-PROJECT_NUMBER@gcp-sa-aiplatform.iam.gserviceaccount.com` fetches `secret_env` at deploy time under `AGENT_IDENTITY` (`roles/secretmanager.secretAccessor`) and pulls cross-project AR images. Omitting `depends_on` causes `IMAGE_PULL_BACKOFF` or deploy-time secret failures.
-2. **Use `region = var.location`, `hashicorp/google >= 6.0.0`, and `reverse(split("/", ...))[0]` in Terraform — not upstream doc typos.**
-   - *Why:* One upstream doc example prints `location = var.location` (wrong schema attr); cached `5.x` providers reject `spec.container_spec`; and Terraform's `element(split(...), -1)` from `agent-identity` docs crashes because `element()` forbids negative indices. Also `.id` is the full path while `.name` is the short numeric ID.
+2. **Use `region = var.location`, `deletion_policy = "FORCE"`, `hashicorp/google >= 6.0.0`, and `reverse(split("/", ...))[0]` in Terraform — not upstream doc typos.**
+   - *Why:* One upstream doc example prints `location = var.location` (wrong schema attr); omitting `deletion_policy = "FORCE"` makes `terraform destroy` fail with HTTP 400 once child sessions/memories exist; cached `5.x` providers reject `spec.container_spec`; and Terraform's `element(split(...), -1)` from `agent-identity` docs crashes because `element()` forbids negative indices. Also `.id` is the full path while `.name` is the short numeric ID.
 3. **Pack `Dockerfile` at level 0 (root) of `source_archive` (`<= 8 MB`) — never nest it in a subdirectory.**
    - *Why:* `source_code_spec` with empty `image_spec {}` unpacks the `.tar.gz` directly into Cloud Build's workspace root and fails immediately if `./Dockerfile` is missing (`cd app && tar -czvf ../src.tar.gz Dockerfile main.py requirements.txt`).
 4. **Never set reserved env vars in `deployment_spec` (`GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `PORT`, `K_SERVICE`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_AGENT_ENGINE*`).**
@@ -95,15 +95,16 @@ resource "google_secret_manager_secret_iam_member" "platform_sa_secret" {
 }
 
 resource "google_vertex_ai_reasoning_engine" "agent" {
-  provider     = google-beta
-  display_name = "my-agent-tf"
-  project      = var.project_id
-  region       = var.location
+  provider        = google-beta
+  display_name    = "my-agent-tf"
+  project         = var.project_id
+  region          = var.location
+  deletion_policy = "FORCE" # Prevents HTTP 400 child-sessions failure on `terraform destroy`
   spec {
     agent_framework = "google-adk"
     identity_type   = "AGENT_IDENTITY" # Immutable; or omit & set `service_account = "<email>"`
     container_spec {
-      # var.ar_location defaults to Bangkok primary (asia-southeast3); or asia-southeast1 for same-region pulls
+      # Single Bangkok AR (var.ar_location = "asia-southeast3") pulls cleanly into Singapore Agent Runtime — no second AR repo needed
       image_uri = "${var.ar_location}-docker.pkg.dev/${var.project_id}/agents-repo/agent:${var.image_tag}"
     }
     deployment_spec {

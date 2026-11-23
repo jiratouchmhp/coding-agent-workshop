@@ -238,8 +238,8 @@ Combine **Feedback Service** (`agentplatform.Client`), **Offline Eval & Loss Clu
    │     └── Monitor `online_evaluator/scores` & Quality Alerts sliced by `runtime_revision_id`; promote 100% or instant rollback
    └── Track B (Domain Skill Change — ZERO Agent Container Rebuild):
          ├── Re-validate 16 atomic ZIP checks (`package_registry_skill.py`)
-         ├── Vertex AI Skill Registry: `client.skills.update(name=..., config={"display_name": ..., "description": ..., "local_path": zip})`
-         └── Agent Registry (Governed): `gcloud agent-registry skills revisions create v2 --payload=zip` -> `ENABLED_BLOCKING` scan -> `gcloud agent-registry skills update private-SKILL_ID --default-revision=.../revisions/v2` (1-cmd rollback to `v1` if Quality Alerts regress)
+         ├── Vertex AI Skill Registry: `client.skills.update(name=..., config={"display_name": ..., "description": ..., "local_path": skill_dir})` (DIRECTORY only — never `.zip`!)
+         └── Agent Registry (Governed): `gcloud alpha agent-registry skills revisions create rev-2 --skill=private-SKILL_ID --location=global --payload=zip` -> `ENABLED_BLOCKING` scan -> `gcloud alpha agent-registry skills update private-SKILL_ID --location=global --default-revision=.../revisions/rev-2` (1-cmd rollback to `rev-1` if Quality Alerts regress)
 ```
 
 ### Verified SDK Bridges (Feedback Harvest -> Canary Traffic Split & Zero-Redeploy Skill Update)
@@ -251,7 +251,8 @@ import agentplatform
 os.environ["GOOGLE_GENAI_USE_ENTERPRISE"] = "TRUE"
 
 # 1. Harvest production feedback entries and their exact transcript snapshots
-runtime_location = os.environ.get("GOOGLE_CLOUD_LOCATION", "asia-southeast1")  # Singapore Agent Runtime
+# Singapore fallback (asia-southeast1) — Agent Runtime is not yet launched in Bangkok (asia-southeast3)
+runtime_location = os.environ.get("GOOGLE_CLOUD_LOCATION", "asia-southeast1")
 ap_client = agentplatform.Client(
     project="PROJECT_ID",
     location=runtime_location,
@@ -259,8 +260,9 @@ ap_client = agentplatform.Client(
 )
 engine_name = f"projects/PROJECT_ID/locations/{runtime_location}/reasoningEngines/RESOURCE_ID"
 
+# Verified for agentplatform==2.10.0: feedback_entries.list() takes `parent=`, NOT `name=`!
 entries = ap_client.feedback_entries.list(
-    name=engine_name,
+    parent=engine_name,
     config={"filter": 'session_id="SESSION_ID"', "order_by": "create_time desc"},
 )
 for entry in entries:
@@ -293,6 +295,7 @@ ap_client.runtimes.update(
 
 # 2B. Track B (Domain Skill — ZERO agent container rebuild): hot-update Vertex AI Skill Registry
 # Note: Vertex AI Skill Registry Preview is strictly 3 regions (SKILL_REGISTRY_LOCATION=us-central1)
+# CRITICAL: `local_path` MUST be a skill DIRECTORY (agentplatform==2.10.0 zips it internally and rejects .zip!).
 skill_location = os.environ.get("SKILL_REGISTRY_LOCATION", "us-central1")
 skill_client = agentplatform.Client(project="PROJECT_ID", location=skill_location)
 skill_client.skills.update(
@@ -300,7 +303,7 @@ skill_client.skills.update(
     config={
         "display_name": "Secure Code Review",
         "description": "Updated from offline eval + feedback flywheel.",
-        "local_path": "dist/secure-code-review.zip",
+        "local_path": "skills_to_register/secure-code-review",
     },
 )
 ```

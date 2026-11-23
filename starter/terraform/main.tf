@@ -159,6 +159,10 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
   project      = var.project_id
   region       = var.location
 
+  # Allow `terraform destroy` and `make cleanup` to tear down the engine cleanly
+  # after live attendee sessions or Memory Bank memories are created.
+  deletion_policy = "FORCE"
+
   spec {
     agent_framework = "google-adk"
 
@@ -260,18 +264,24 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
       # execution (`SANDBOX_MODE`, `SANDBOX_TEMPLATE_NAME`, and
       # `SANDBOX_SERVICE_ACCOUNT_EMAIL`), optional Lab 3/Lab 4 runtime flags
       # (`ENABLE_MEMORY_BANK`, `ENABLE_SKILL_REGISTRY`, `SKILL_REGISTRY_LOCATION`,
-      # `AGENT_REGISTRY_LOCATION`), plus Secret Manager `CODING_AGENT_API_KEY`.
+      # `AGENT_REGISTRY_LOCATION`, `AGENT_REGISTRY_SKILLS_LOCATION`), plus Secret
+      # Manager `CODING_AGENT_API_KEY`.
       # Setting `SANDBOX_MODE` explicitly prevents deployed containers from silently
       # falling back to `local` inside the trusted Agent Runtime container.
+      # Using `dynamic "env"` for optional string variables prevents Vertex AI HTTP 400
+      # errors (`Required field is not set`) when a variable defaults to `""`.
       #
       # env {
       #   name  = "SANDBOX_MODE"
       #   value = local.resolved_sandbox_mode
       # }
       #
-      # env {
-      #   name  = "SANDBOX_TEMPLATE_NAME"
-      #   value = var.sandbox_template_name
+      # dynamic "env" {
+      #   for_each = var.sandbox_template_name != "" ? [1] : []
+      #   content {
+      #     name  = "SANDBOX_TEMPLATE_NAME"
+      #     value = var.sandbox_template_name
+      #   }
       # }
       #
       # env {
@@ -289,14 +299,28 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
       #   value = tostring(var.enable_skill_registry)
       # }
       #
-      # env {
-      #   name  = "SKILL_REGISTRY_LOCATION"
-      #   value = var.skill_registry_location
+      # dynamic "env" {
+      #   for_each = var.skill_registry_location != "" ? [1] : []
+      #   content {
+      #     name  = "SKILL_REGISTRY_LOCATION"
+      #     value = var.skill_registry_location
+      #   }
       # }
       #
-      # env {
-      #   name  = "AGENT_REGISTRY_LOCATION"
-      #   value = var.agent_registry_location
+      # dynamic "env" {
+      #   for_each = var.agent_registry_location != "" ? [1] : []
+      #   content {
+      #     name  = "AGENT_REGISTRY_LOCATION"
+      #     value = var.agent_registry_location
+      #   }
+      # }
+      #
+      # dynamic "env" {
+      #   for_each = var.agent_registry_skills_location != "" ? [1] : []
+      #   content {
+      #     name  = "AGENT_REGISTRY_SKILLS_LOCATION"
+      #     value = var.agent_registry_skills_location
+      #   }
       # }
       #
       # secret_env {

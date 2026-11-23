@@ -99,7 +99,7 @@ gcloud services enable aiplatform.googleapis.com agentregistry.googleapis.com \
   compute.googleapis.com dns.googleapis.com cloudtrace.googleapis.com --project=PROJECT_ID
 
 export PROJECT_NUM=$(gcloud projects describe PROJECT_ID --format="value(projectNumber)")
-gcloud beta services identity create --service=aiplatform.googleapis.com --project=PROJECT_ID
+gcloud alpha services identity create --service=aiplatform.googleapis.com --project=PROJECT_ID
 for ROLE in roles/compute.networkAdmin roles/dns.admin roles/cloudtrace.agent; do
   gcloud projects add-iam-policy-binding PROJECT_ID \
     --member="serviceAccount:service-${PROJECT_NUM}@gcp-sa-aiplatform.iam.gserviceaccount.com" \

@@ -13,7 +13,7 @@ variable "project_number" {
 variable "location" {
   type        = string
   default     = "asia-southeast1"
-  description = "The Google Cloud region for Agent Runtime (Singapore asia-southeast1 — nearest supported Agent Runtime region for Bangkok asia-southeast3 primary teams)"
+  description = "Google Cloud region for Agent Runtime (aim for Bangkok asia-southeast3 first; falls back to nearest supported Singapore asia-southeast1 because Agent Runtime is not yet available in Bangkok)"
 }
 
 variable "repository_name" {
@@ -30,13 +30,13 @@ variable "display_name" {
 
 variable "agent_image_uri" {
   type        = string
-  description = "Full Artifact Registry URI for the trusted Agent Runtime BYOC container image (e.g., asia-southeast3-docker.pkg.dev/PROJECT_ID/coding-agent-repo/coding-agent:v1; or asia-southeast1-docker.pkg.dev/... for strict same-region runtime pulls)"
+  description = "Full Artifact Registry URI for the trusted Agent Runtime BYOC container image (e.g., asia-southeast3-docker.pkg.dev/PROJECT_ID/coding-agent-repo/coding-agent:v1 — Bangkok AR is verified working for Singapore Agent Runtime pulls; no second Singapore AR repository is needed)"
 }
 
 variable "sandbox_image_uri" {
   type        = string
   default     = ""
-  description = "Optional Artifact Registry URI for the Lab 2 untrusted BYOC sandbox image (e.g., asia-southeast3-docker.pkg.dev/PROJECT_ID/coding-agent-repo/coding-sandbox:v1; or asia-southeast1-docker.pkg.dev/... for strict same-region pulls; pulled by gcp-sa-vertex-sandbox)"
+  description = "Optional Artifact Registry URI for the Lab 2 untrusted BYOC sandbox image (e.g., asia-southeast3-docker.pkg.dev/PROJECT_ID/coding-agent-repo/coding-sandbox:v1 — Bangkok AR is verified working for Singapore BYOC Sandbox pulls by gcp-sa-vertex-sandbox; no second Singapore AR repository is needed)"
 }
 
 variable "sandbox_template_name" {
@@ -89,5 +89,11 @@ variable "skill_registry_location" {
 variable "agent_registry_location" {
   type        = string
   default     = "asia-southeast3"
-  description = "Lab 4 Agent Registry region injected as AGENT_REGISTRY_LOCATION (Bangkok primary default: asia-southeast3)"
+  description = "Lab 4 Agent Registry A2A/MCP discovery region injected as AGENT_REGISTRY_LOCATION (Bangkok asia-southeast3 first)"
+}
+
+variable "agent_registry_skills_location" {
+  type        = string
+  default     = "global"
+  description = "Lab 4 Agent Registry standalone skills location injected as AGENT_REGISTRY_SKILLS_LOCATION (falls back to global because standalone skill endpoints currently time out in asia-southeast3)"
 }

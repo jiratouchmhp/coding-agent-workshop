@@ -17,8 +17,9 @@ Source-verified ADK Python (`google-adk`) and Go (`google.golang.org/adk/v2`) re
 ```bash
 gcloud auth application-default login
 export GOOGLE_CLOUD_PROJECT="GOVERNANCE_PROJECT_ID"
-export AGENT_REGISTRY_LOCATION="asia-southeast3"   # Bangkok primary Agent Registry (also supports "global", "us", "eu", or regional)
-export GOOGLE_CLOUD_LOCATION="asia-southeast1"     # Singapore Agent Runtime & Gemini 2.5 Flash region
+export AGENT_REGISTRY_LOCATION="asia-southeast3"   # Bangkok default for A2A/MCP discovery (also supports "global", "us", "eu", or regional)
+export AGENT_REGISTRY_SKILLS_LOCATION="global"     # Required for Agent Registry standalone skills / GCPSkillRegistry (asia-southeast3 times out)
+export GOOGLE_CLOUD_LOCATION="asia-southeast1"     # Singapore fallback for Agent Runtime & Gemini 2.5 Flash (not yet in Bangkok)
 ```
 
 ---
@@ -95,7 +96,7 @@ from google.adk.tools.skill_toolset import SkillToolset
 
 registry = GCPSkillRegistry(
     project_id=os.environ.get("GOOGLE_CLOUD_PROJECT"),
-    location=os.environ.get("AGENT_REGISTRY_LOCATION", "asia-southeast3"),
+    location=os.environ.get("AGENT_REGISTRY_SKILLS_LOCATION", "global"),
     # credentials=optional_google_auth_credentials,
 )
 

@@ -55,7 +55,7 @@ Author, provision, execute, and secure **Managed Sandboxes** (`SandboxEnvironmen
 - **API Version:** Always pass `http_options={"api_version": "v1beta1"}` when creating BYOC `SandboxEnvironmentTemplate` resources, configuring PSC-I/PSC-E networking, or enabling CMEK on parent instances.
 - **Payloads:** Pass plain Python `dict`s for `spec` and `config` — never import private `agentplatform._genai` modules.
 - **Caller IAM:** `roles/aiplatform.user` (grants `aiplatform.sandboxEnvironments.execute` and full lifecycle). Add `roles/iam.serviceAccountTokenCreator` on the signing SA when calling `generate_access_token()` or `generate_browser_ws_headers()`.
-- **Regional Topology & Zero-Docker Builds:** Managed Sandboxes and parent `ReasoningEngine` instances run in **Singapore (`asia-southeast1`)** (`GOOGLE_CLOUD_LOCATION=asia-southeast1`, nearest supported Agent Platform region; not yet in Bangkok). Artifact Registry (`AR_LOCATION=asia-southeast3`, or `asia-southeast1` for strict same-region pulls) and remote Cloud Build (`BUILD_LOCATION=asia-southeast3`, zero local Docker via `gcloud builds submit`) default to **Bangkok (`asia-southeast3`)**.
+- **Regional Topology & Zero-Docker Builds (Bangkok-First):** Aim for **Bangkok (`asia-southeast3`)** first for Artifact Registry (`AR_LOCATION=asia-southeast3`) and remote Cloud Build (`BUILD_LOCATION=asia-southeast3`, zero local Docker via `gcloud builds submit`). Fall back to **Singapore (`asia-southeast1`)** (`GOOGLE_CLOUD_LOCATION=asia-southeast1`) only because Managed Sandboxes and parent `ReasoningEngine` instances are not yet available in Bangkok. **Empirically verified:** a single Bangkok `asia-southeast3` AR repo pulls cleanly into **both** Singapore Agent Runtime and Singapore BYOC Sandboxes — **no second AR repo is needed**.
 
 ### Three Distinct Service Agents — Never Confuse Them
 
@@ -95,7 +95,7 @@ Author, provision, execute, and secure **Managed Sandboxes** (`SandboxEnvironmen
 ### 1. Grant BYOC Artifact Registry Pull IAM (Run Once per Repo)
 
 ```bash
-# AR_LOCATION defaults to Bangkok primary (asia-southeast3); set asia-southeast1 for strict same-region pulls
+# Single Bangkok AR (asia-southeast3) — empirically verified to pull cleanly into Singapore BYOC Sandboxes (no second AR repo needed)
 gcloud artifacts repositories add-iam-policy-binding REPO_NAME \
     --location="${AR_LOCATION:-asia-southeast3}" \
     --member="serviceAccount:service-PROJECT_NUMBER@gcp-sa-vertex-sandbox.iam.gserviceaccount.com" \
@@ -109,7 +109,7 @@ import agentplatform
 
 client = agentplatform.Client(
     project="PROJECT_ID",
-    location="asia-southeast1",  # GOOGLE_CLOUD_LOCATION (Singapore — nearest supported Agent Platform region)
+    location="asia-southeast1",  # GOOGLE_CLOUD_LOCATION (Singapore fallback — Managed Sandboxes not yet in Bangkok)
     http_options={"api_version": "v1beta1"},
 )
 instance_name = client.runtimes.create().api_resource.name
@@ -120,7 +120,7 @@ tpl_op = client.sandboxes.templates.create(
     config={
         "custom_container_environment": {
             "custom_container_spec": {
-                # Bangkok primary AR (asia-southeast3); or asia-southeast1-docker.pkg.dev for same-region pull
+                # Single Bangkok AR (asia-southeast3) pulls cleanly into Singapore BYOC Sandboxes (no second AR repo needed)
                 "image_uri": "asia-southeast3-docker.pkg.dev/PROJECT_ID/REPO/coding-sandbox:v1"
             },
             "resources": {

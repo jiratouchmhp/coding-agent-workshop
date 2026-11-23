@@ -27,10 +27,12 @@ By the end of this optional hardening module, you will be able to:
 ## Quick-Run TL;DR (Classroom Fast Path)
 
 - **Focused Exercises (High-Signal TODOs):** Pure control-plane hardening walkthrough & CLI commands — **`0` starter TODOs** *(optional module: skip cleanly straight to [Lab 8](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) if short on time; Labs 1–6 remain 100% green!)*.
-- **Key Commands (Zero Local Docker — Bangkok Agent Registry + Singapore Runtime/Gateway):**
+- **Key Commands (Zero Local Docker — `global` Agent Registry Standalone Skills + Singapore Runtime/Gateway Fallback; Bangkok A2A/MCP):**
   ```bash
-  gcloud agent-registry skills create secure-code-review --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_LOCATION:-asia-southeast3}" --display-name="Secure Code Review" --description="Enterprise OWASP audit." --target-state=disabled --scanning-policy=enabled-blocking --payload="dist/secure-code-review.zip"
-  gcloud agent-registry skills describe private-secure-code-review --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_LOCATION:-asia-southeast3}"
+  # 2-step standalone skill create (gcloud alpha + --location=global; omit --payload on skills create, then upload rev-1)
+  gcloud alpha agent-registry skills create secure-code-review --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_SKILLS_LOCATION:-global}" --display-name="Secure Code Review" --description="Enterprise OWASP audit." --target-state=disabled --scanning-policy=enabled-blocking
+  gcloud alpha agent-registry skills revisions create rev-1 --skill=private-secure-code-review --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_SKILLS_LOCATION:-global}" --payload="dist/secure-code-review.zip"
+  gcloud alpha agent-registry skills describe private-secure-code-review --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_SKILLS_LOCATION:-global}"
   (cd starter && uv run python -m coding_agent.memory.memory_bank_manager --offline-check)
   make verify-lab LAB=7                                     # Optional check (make verify-lab LAB=all passes without Lab 7)
   ```
@@ -46,8 +48,8 @@ flowchart LR
     User["Human Developer<br/>(User Identity)"] -->|"CLIENT_TO_AGENT Ingress<br/>(Model Armor: gcp-sa-aiplatform-re)"| InGW["Ingress Agent Gateway (asia-southeast1)"]
     InGW --> RT["Hardened Agent Runtime (Singapore asia-southeast1)<br/>(SPIFFE AGENT_IDENTITY + 24h X.509 mTLS)"]
 
-    subgraph SUPPLY["Part A: Supply-Chain Skill Governance (Bangkok asia-southeast3)"]
-        AReg["Agent Registry (v1 — asia-southeast3)<br/>private-* Skills + ENABLED_BLOCKING LLM Scan<br/>+ Custom Org Policy"]
+    subgraph SUPPLY["Part A: Supply-Chain Skill Governance (global Standalone Skills; Bangkok A2A/MCP)"]
+        AReg["Agent Registry (gcloud alpha — location=global)<br/>private-* Skills + ENABLED_BLOCKING LLM Scan<br/>+ Custom Org Policy"]
     end
 
     subgraph EGRESS["Part B & C: Egress Policy & 3-Identity Delegation"]
@@ -85,8 +87,8 @@ Google Cloud exposes **two distinct skill registry API surfaces** (see [Agent Re
 | Dimension | Vertex AI / Agent Platform **Skill Registry** (Preview) | **Agent Registry** Standalone Skills (Preview) |
 |---|---|---|
 | **API Endpoint** | `https://LOCATION-aiplatform.googleapis.com/v1beta1/projects/PROJECT_ID/locations/LOCATION/skills` | `https://agentregistry.googleapis.com/v1/projects/PROJECT_ID/locations/LOCATION/skills` |
-| **CLI / SDK Surface** | Python `agentplatform.Client.skills.*` (`google-cloud-aiplatform`), Node.js `@google-cloud/agentplatform`, REST `v1beta1` | `gcloud agent-registry skills ...`, `skills revisions ...`, `findings ...`, REST `v1` |
-| **Supported Regions** | `us-central1` (Iowa), `europe-west4` (Netherlands), `us-east5` (Columbus, Ohio) | `global`, multi-regions (`us`, `eu`), or regional (**`asia-southeast3` Bangkok**, `asia-southeast1`, `us-central1`, `europe-west1`, etc.) |
+| **CLI / SDK Surface** | Python `agentplatform.Client.skills.*` (`google-cloud-aiplatform`, directory-only `local_path`), Node.js `@google-cloud/agentplatform`, REST `v1beta1` | **`gcloud alpha agent-registry skills ...`**, `skills revisions ...`, `findings ...`, REST `v1` *(alpha CLI only; GA `gcloud agent-registry skills` returns `Invalid choice`)* |
+| **Supported Regions** | `us-central1` (Iowa), `europe-west4` (Netherlands), `us-east5` (Columbus, Ohio) | **`global`** *(empirically verified working end-to-end for standalone skills; `--location=asia-southeast3` currently times out for standalone skills, whereas A2A/MCP discovery stays in Bangkok `asia-southeast3`)* |
 | **Max Compressed ZIP** | **10 MB** | **1 MB** |
 | **Max Uncompressed Size** | **500 MB** total | **10 MB** total & **1 MB** per individual file *(when security scanning is enabled)* |
 | **Skill ID Naming** | `1–63` chars `[a-z0-9-]`, starts with letter, ends with letter/digit; cannot start with `gcp-` | Auto-assigned to `private` publisher -> registry prepends **`private-`** (`private-SKILL_ID`) |
@@ -107,62 +109,89 @@ Before authoring IAM, Agent Gateway, or Semantic Governance rules, verify which 
 
 ### Step A2: Register, Scan (`ENABLED_BLOCKING`), Triage Findings & Promote
 
-1. Enable the Agent Registry API and upload your validated ZIP from Lab 4 (`dist/secure-code-review.zip`, `<= 1 MB` compressed) starting in `disabled` state with blocking LLM security scanning enabled:
+1. Enable the Agent Registry API (and confirm `gcloud components install alpha` is installed), then register your validated ZIP from Lab 4 (`dist/secure-code-review.zip`, `<= 1 MB` compressed) using the verified **2-step flow** in `--location=global` starting in `disabled` state with blocking LLM security scanning enabled:
+
+   > [!WARNING]
+   > **Empirically Verified `gcloud 588.0.0 alpha` Standalone Skills Quirks:**
+   > 1. **Use `gcloud alpha agent-registry skills` with `--location=global`:** GA `gcloud agent-registry skills` does not exist yet (`Invalid choice`), and `--location=asia-southeast3` currently times out for `skills list`/`skills create` (keep Bangkok `asia-southeast3` for A2A/MCP discovery and use `AGENT_REGISTRY_SKILLS_LOCATION=global` for standalone skills).
+   > 2. **2-Step Create (Never Pass `--payload` to `skills create`):** In `gcloud 588.0.0 alpha`, `skills create --payload=...` drops `--payload` from the request body (`400 source is required`), and 2-char revision IDs (`v1`/`v2`) fail format validation. Create the bare skill shell first, then upload `rev-1` via `revisions create --payload=...`.
+   > 3. **Delete Revisions Before Deleting the Skill:** `skills delete` has no `--force` flag and returns `FAILED_PRECONDITION` (`cannot_delete_skill_with_revisions`) until every child revision is deleted via `revisions delete`.
 
    ```bash
    gcloud services enable agentregistry.googleapis.com --project="${GOOGLE_CLOUD_PROJECT}"
 
-   # Bangkok (asia-southeast3) is our primary Agent Registry location!
-   export AGENT_REGISTRY_LOCATION="${AGENT_REGISTRY_LOCATION:-asia-southeast3}"
+   # Standalone Agent Registry skills run in `global` (while A2A/MCP discovery stays in Bangkok asia-southeast3)
+   export AGENT_REGISTRY_SKILLS_LOCATION="${AGENT_REGISTRY_SKILLS_LOCATION:-global}"
 
-   gcloud agent-registry skills create secure-code-review \
+   # Step 1: Create the bare skill resource WITHOUT --payload (Agent Registry prepends `private-`)
+   # Production default: `--scanning-policy=enabled-blocking` (blocks promotion until async LLM scan finishes).
+   # For rapid workshop demos without waiting on the async scan, you can use `--scanning-policy=enabled-nonblocking`.
+   gcloud alpha agent-registry skills create secure-code-review \
      --project="${GOOGLE_CLOUD_PROJECT}" \
-     --location="${AGENT_REGISTRY_LOCATION}" \
+     --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
      --display-name="Secure Code Review" \
      --description="Enterprise OWASP security audit guidelines for Coding Agent." \
      --target-state=disabled \
-     --scanning-policy=enabled-blocking \
+     --scanning-policy=enabled-blocking
+
+   # Step 2: Upload the validated ZIP bundle as revision `rev-1` (avoid 2-char `v1`)
+   gcloud alpha agent-registry skills revisions create rev-1 \
+     --skill=private-secure-code-review \
+     --project="${GOOGLE_CLOUD_PROJECT}" \
+     --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
      --payload="dist/secure-code-review.zip"
    ```
 
    > [!IMPORTANT]
    > **Automatic `private-` Prefixing & Auto-IAM:** Agent Registry assigns user-created skills to the `private` publisher and prepends **`private-`** to your ID (`private-secure-code-review`). You **MUST** use `private-secure-code-review` in all subsequent `describe`, `update`, `revisions`, `findings`, and IAM commands! On creation, Agent Registry automatically grants `roles/agentregistry.admin` to the creator and (in org-backed projects) `roles/agentregistry.viewer` to the project's agent workload `principalSet`.
 
-2. Inspect the initial revision's LLM security scan status and triage any findings (`roles/agentregistry.admin`):
+2. Inspect `rev-1`'s LLM security scan status and triage any findings (`roles/agentregistry.admin`):
 
    ```bash
-   gcloud agent-registry skills describe private-secure-code-review \
+   gcloud alpha agent-registry skills describe private-secure-code-review \
      --project="${GOOGLE_CLOUD_PROJECT}" \
-     --location="${AGENT_REGISTRY_LOCATION}"
+     --location="${AGENT_REGISTRY_SKILLS_LOCATION}"
 
-   # Inspect scan findings for a specific revision (VULNERABILITY or SECRET findings):
-   # Replace ${REV_ID} with the revision ID printed by `skills describe` above.
-   gcloud agent-registry findings list \
+   gcloud alpha agent-registry skills revisions describe rev-1 \
+     --skill=private-secure-code-review \
      --project="${GOOGLE_CLOUD_PROJECT}" \
-     --location="${AGENT_REGISTRY_LOCATION}" \
-     --filter="resource=\"projects/${GOOGLE_CLOUD_PROJECT}/locations/${AGENT_REGISTRY_LOCATION}/skills/private-secure-code-review/revisions/${REV_ID}\""
+     --location="${AGENT_REGISTRY_SKILLS_LOCATION}"
+
+   # Inspect scan findings for revision `rev-1` (VULNERABILITY or SECRET findings):
+   gcloud alpha agent-registry findings list \
+     --project="${GOOGLE_CLOUD_PROJECT}" \
+     --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
+     --filter="resource=\"projects/${GOOGLE_CLOUD_PROJECT}/locations/${AGENT_REGISTRY_SKILLS_LOCATION}/skills/private-secure-code-review/revisions/rev-1\""
    ```
 
-   - Under `ENABLED_BLOCKING` (default), Agent Registry scans `SKILL.md`, scripts, and assets via LLM for exfiltration, exposed secrets, and prompt injection, and **blocks** downloads or `defaultRevision` promotion with `FAILED_PRECONDITION` until the scan succeeds with zero findings.
-   - **Closing the Lab 6 Flywheel Safely:** When your team iterates on `secure-code-review/SKILL.md` in [Lab 6 Section 6.4](./06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md#64-close-the-skill-optimization-loop-hot-update-skill-registry--promote-agent-registry-revisions-zero-container-rebuild) (`gcloud agent-registry skills revisions create v2`), `ENABLED_BLOCKING` automatically scans the new `v2` bundle before `--default-revision` promotion can succeed — ensuring an automated GEPA rewrite can never introduce prompt injection or unsafe shell commands into production, while preserving 1-command rollback to `v1` if Online Eval Quality Alerts regress.
+   - Under `ENABLED_BLOCKING` (default), Agent Registry scans `SKILL.md`, scripts, and assets asynchronously via LLM for exfiltration, exposed secrets, and prompt injection. **Immediately calling `skills update --default-revision` right after `revisions create` returns `FAILED_PRECONDITION: cannot set default revision to a revision with pending scan results when scanning policy is ENABLED_BLOCKING`** — wait until `revisions describe` reports `scanResult.scanState: SUCCEEDED` with zero findings (or use `--scanning-policy=enabled-nonblocking` for rapid workshop demos).
+   - **Closing the Lab 6 Flywheel Safely:** When your team iterates on `secure-code-review/SKILL.md` in [Lab 6 Section 6.4](./06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md#64-close-the-skill-optimization-loop-hot-update-skill-registry--promote-agent-registry-revisions-zero-container-rebuild) (`gcloud alpha agent-registry skills revisions create rev-2 --skill=private-secure-code-review --location=global --payload=...`), `ENABLED_BLOCKING` automatically scans the new `rev-2` bundle before `--default-revision` promotion can succeed — ensuring an automated GEPA rewrite can never introduce prompt injection or unsafe shell commands into production, while preserving 1-command rollback to `rev-1` if Online Eval Quality Alerts regress.
    - **Non-retroactive rule:** Changing `scanningConfig.policy` (`ENABLED_BLOCKING` / `ENABLED_NONBLOCKING` / `DISABLED`) applies only to **future revisions**.
    - **5 Lifecycle States:** `DRAFT` -> `ACTIVE` <-> `DISABLED` -> `DEPRECATED` -> `DECOMMISSIONED` (**terminal** — can only transition from `DEPRECATED` and cannot revert!).
 
-3. Once `scanResult.scanState` is `SUCCEEDED` with 0 findings, set the verified revision as the **`--default-revision`** AND promote the skill to **`ACTIVE`** (required so ADK `GCPSkillRegistry` resolves the skill revision cleanly — see [Manage Skills](https://docs.cloud.google.com/agent-registry/manage-skills)), then test semantic search (indexes full `SKILL.md` + scripts + assets):
+3. Once `revisions describe rev-1` reports `scanResult.scanState: SUCCEEDED` with 0 findings (skipping the wait under `ENABLED_BLOCKING` triggers `FAILED_PRECONDITION` for pending scan results), set `rev-1` as the **`--default-revision`** AND promote the skill to **`ACTIVE`** (required so ADK `GCPSkillRegistry` resolves the skill revision cleanly — see [Manage Skills](https://docs.cloud.google.com/agent-registry/manage-skills)), then test semantic search (indexes full `SKILL.md` + scripts + assets):
 
    ```bash
-   # Ensure REV_ID is set to the scanned revision ID returned by `skills describe` above
-   gcloud agent-registry skills update private-secure-code-review \
+   gcloud alpha agent-registry skills update private-secure-code-review \
      --project="${GOOGLE_CLOUD_PROJECT}" \
-     --location="${AGENT_REGISTRY_LOCATION}" \
-     --default-revision="projects/${GOOGLE_CLOUD_PROJECT}/locations/${AGENT_REGISTRY_LOCATION}/skills/private-secure-code-review/revisions/${REV_ID}" \
+     --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
+     --default-revision="projects/${GOOGLE_CLOUD_PROJECT}/locations/${AGENT_REGISTRY_SKILLS_LOCATION}/skills/private-secure-code-review/revisions/rev-1" \
      --target-state=ACTIVE
 
-   gcloud agent-registry skills search \
+   gcloud alpha agent-registry skills search \
      --project="${GOOGLE_CLOUD_PROJECT}" \
-     --location="${AGENT_REGISTRY_LOCATION}" \
+     --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
      --query="find SQL injection and unsafe subprocess vulnerabilities" \
      --search-type=semantic
+
+   # Clean teardown order (always delete child revisions BEFORE deleting the parent skill!):
+   # gcloud alpha agent-registry skills revisions delete rev-1 \
+   #   --skill=private-secure-code-review \
+   #   --project="${GOOGLE_CLOUD_PROJECT}" \
+   #   --location="${AGENT_REGISTRY_SKILLS_LOCATION}" --quiet
+   # gcloud alpha agent-registry skills delete private-secure-code-review \
+   #   --project="${GOOGLE_CLOUD_PROJECT}" \
+   #   --location="${AGENT_REGISTRY_SKILLS_LOCATION}" --quiet
    ```
 
 4. **Prevent Disabling Skill Scanning Organization-Wide (Custom Org Policy):** Because there is no built-in managed constraint, platform security teams deploy a custom Org Policy constraint on `agentregistry.googleapis.com/Skill`:
@@ -203,16 +232,19 @@ Every intercepted LLM response containing a proposed tool call passes through **
 >    ```yaml
 >    when: "!request.headers['content-type'].startsWith('application/grpc') && (request.path.contains(':generateContent') || request.path.contains(':rawPredict') || request.path.contains('/v1/messages') || request.path.contains('/chat/completions'))"
 >    ```
-> 5. **Supported Regions (8 US/EU Regions) & Truncation Limits:** While **Agent Runtime & Agent Gateway** run natively in **Singapore (`asia-southeast1`)** and **Agent Registry** runs in **Bangkok (`asia-southeast3`)**, the **Semantic Governance Policy Engine (Preview)** is currently limited to 8 US/EU regions: `us-central1`, `us-east1`, `us-east4`, `us-west1`, `europe-southwest1`, `europe-west1`, `europe-west4`, `europe-west8`. *(Bangkok/Singapore cohorts should target one of those 8 regions — e.g. `SGP_LOCATION=us-central1` — when testing live NLC policy creation, while keeping Agent Gateway, Model Armor, and SPIFFE `AGENT_IDENTITY` in `asia-southeast1`!)* Keep descriptions concise so the policy engine never truncates critical context: tool/MCP server description **<= 1,000 chars**, action/function description **<= 750 chars**, parameter description **<= 300 chars**. Always set `--agent-response-denial-message` (**<= 1,000 chars**) so proprietary NLC text is never leaked to end users!
+> 5. **Supported Regions (8 US/EU Regions) & Truncation Limits:** Following our **Bangkok-first (`asia-southeast3`)** strategy, A2A/MCP Agent Registry discovery stays in Bangkok (`asia-southeast3`), Agent Registry standalone skills run in `global`, Agent Runtime & Agent Gateway fall back to Singapore (`asia-southeast1`), and the **Semantic Governance Policy Engine (Preview)** is currently limited to 8 US/EU regions: `us-central1`, `us-east1`, `us-east4`, `us-west1`, `europe-southwest1`, `europe-west1`, `europe-west4`, `europe-west8`. *(Target one of those 8 regions — e.g., `SGP_LOCATION=us-central1` — when testing live NLC policy creation, while keeping Agent Gateway, Model Armor, and SPIFFE `AGENT_IDENTITY` in `asia-southeast1`!)* Keep descriptions concise so the policy engine never truncates critical context: tool/MCP server description **<= 1,000 chars**, action/function description **<= 750 chars**, parameter description **<= 300 chars**. Always set `--agent-response-denial-message` (**<= 1,000 chars**) so proprietary NLC text is never leaked to end users!
 
 ### Step B2: Author Natural Language Constraints for Coding Agent Skills
+
+> [!NOTE]
+> **Optional `gcloud beta` Component Required Here Only:** Core workshop setup (Labs 0–6, including `gcloud alpha services identity create` and `gcloud alpha agent-registry skills`) relies solely on the `alpha` component checked by `make preflight`. Run **`gcloud components install beta --quiet`** only if you execute the optional `gcloud beta ai semantic-governance-policies` commands below.
 
 *(If you have already provisioned an Egress Agent Gateway + `semanticGovernancePolicyEngine` + `AuthzExtension` / `AuthzPolicy` in one of the 8 supported NLC regions, execute the commands below; otherwise review and stage them as part of your governance config.)*
 
 ```bash
 # Semantic Governance Policy Engine Preview requires one of the 8 US/EU regions (e.g., us-central1).
-# Note: Agent Runtime & Agent Gateway run in Singapore (GOOGLE_CLOUD_LOCATION=asia-southeast1),
-# while Agent Registry standalone skills run in Bangkok (AGENT_REGISTRY_LOCATION=asia-southeast3).
+# Note: Agent Runtime & Agent Gateway fall back to Singapore (GOOGLE_CLOUD_LOCATION=asia-southeast1),
+# A2A/MCP discovery stays in Bangkok (AGENT_REGISTRY_LOCATION=asia-southeast3), and standalone skills use `global`.
 export SGP_LOCATION="${SGP_LOCATION:-us-central1}"
 # Scope the regional aiplatform endpoint override to this shell session only so you do NOT
 # break subsequent `gcloud ai` commands targeting `global` or another region!
@@ -333,6 +365,8 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
   description  = "Hardened Enterprise ADK Coding Agent with SPIFFE AGENT_IDENTITY & Agent Gateway"
   project      = var.project_id
   region       = var.location  # e.g., "asia-southeast1" (Singapore — Agent Runtime & Agent Gateway)
+  # Prevents `terraform destroy` HTTP 400 failures once child sessions/memories exist on the runtime
+  deletion_policy = "FORCE"
 
   spec {
     agent_framework = "google-adk"
@@ -531,7 +565,7 @@ bash scripts/verify_lab.sh 7 --track solution
 
 **Hardening Audit Checklist:**
 - [ ] Understood the 8 architectural differences between **Vertex AI Skill Registry (`v1beta1`)** and **Agent Registry Standalone Skills (`v1`)**, `private-` prefixing, `ENABLED_BLOCKING` scanning, and the 4 identifier layers.
-- [ ] Reviewed (or executed) `gcloud agent-registry skills create/describe/findings/update` and the `custom.skillsScanningEnforcement` Org Policy YAML.
+- [ ] Reviewed (or executed) the 2-step `gcloud alpha agent-registry skills create` + `revisions create rev-1` + `describe`/`findings`/`update` (`--location=global`) + revision-first teardown flow and the `custom.skillsScanningEnforcement` Org Policy YAML.
 - [ ] Reviewed (or executed) the 3 **Semantic Governance (NLC)** policies using the scoped `CLOUDSDK_API_ENDPOINT_OVERRIDES_AIPLATFORM` pattern, `DRY_RUN` `updateMask=metadata` gotcha, non-streaming prerequisite, gRPC-exclusion CEL, and Model Armor token/size limits & IAM roles.
 - [ ] Reviewed the **Terraform hardening diff** (`provider = google-beta`, immutable `identity_type = "AGENT_IDENTITY"`, `agent_gateway_config`) and how Lab 2/3's decoupled standalone Memory Bank instance preserves memories across immutable recreates.
 - [ ] Audited `sanitize_for_memory_ingestion()` via `uv run python -m coding_agent.memory.memory_bank_manager --offline-check`, verified exact-casing CEL IAM Conditions for Sessions and Memory Bank, and reviewed CMEK, VPC-SC, WORM audit buckets (`agent-audit-worm`), SIEM Pub/Sub sinks (`agent-siem-sink`), and 3-layer Agent Anomaly Detection → SCC.

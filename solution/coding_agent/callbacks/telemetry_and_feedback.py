@@ -655,7 +655,7 @@ class FeedbackClient:
         escaped = session_id.replace("\\", "\\\\").replace('"', '\\"')
         return list(
             self.client.feedback_entries.list(
-                name=self._require_runtime_name(),
+                parent=self._require_runtime_name(),
                 config={
                     "filter": f'session_id="{escaped}"',
                     "order_by": order_by,

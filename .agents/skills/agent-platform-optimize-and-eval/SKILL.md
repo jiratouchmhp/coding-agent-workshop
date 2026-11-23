@@ -25,15 +25,16 @@ Production playbook for the **Optimize pillar** of Google Cloud's **Gemini Enter
 
 ## SDK & Environment Baseline
 
-> **Critical Package Split:** Evaluation docs say *"Agent Platform SDK"* in prose, yet **all evaluation Python code uses `google-cloud-aiplatform[adk,evaluation]` (`from vertexai import Client, types`)** — NOT `agentplatform`. Use `agentplatform.Client` (`v1beta1`) only for the **Feedback Service** harvest, **Canary `trafficSplitManual`** rollouts, and **Emergency Stop (`runtimes.delete`)**.
+> **Preferred SDK & Fallback Split:** On `google-cloud-agentplatform[adk,evaluation]>=2.0.1` / `google-cloud-aiplatform>=1.154.0`, prefer **`agentplatform.Client(project=..., location="global")`** (and `agentplatform.types`) for evaluation, Feedback Service harvest, Canary `trafficSplitManual` rollouts, and Emergency Stop (`runtimes.delete`) — falling back to `from vertexai import Client, types` only on older builds to avoid `vertexai.Client` `FutureWarning` deprecations.
 
 ```bash
-pip install --upgrade "google-cloud-aiplatform[adk,evaluation]" "google-adk>=2.0.0" "google-cloud-monitoring"
+pip install --upgrade "google-cloud-agentplatform[adk,evaluation]>=2.0.1" "google-cloud-aiplatform[adk,evaluation]>=1.154.0" "google-adk>=2.0.0" "google-cloud-monitoring"
 # Optional: multimodal GCS OTel capture requires exact pinned fsspec
 pip install "opentelemetry-instrumentation-google-genai>=0.4b0" "fsspec[gcs]==2025.10.0"
 
 export GOOGLE_CLOUD_PROJECT="PROJECT_ID"
-export GOOGLE_CLOUD_LOCATION="asia-southeast1"  # Singapore (Agent Runtime, Feedback & Canary rollouts)
+export PRIMARY_REGION="asia-southeast3"         # Bangkok default (AR, Cloud Build, Secrets, Agent Registry A2A/MCP)
+export GOOGLE_CLOUD_LOCATION="asia-southeast1"  # Singapore fallback (Agent Runtime, Feedback & Canary rollouts — not yet in Bangkok)
 export EVAL_LOCATION="global"                   # APAC-ready Gen AI Eval region (14 US/EU + global) & required for generate_loss_clusters
 export SKILL_REGISTRY_LOCATION="us-central1"    # Vertex AI Skill Registry Preview (3 regions only)
 ```
@@ -104,7 +105,10 @@ gcloud logging sinks create agent-audit-siem-sink \
 
 ```python
 from google.adk.agents import Agent
-from vertexai import Client, types
+try:
+    from agentplatform import Client, types
+except ImportError:
+    from vertexai import Client, types
 
 # Use location="global" so generate_loss_clusters works in the same client
 client = Client(project="YOUR_PROJECT_ID", location="global")

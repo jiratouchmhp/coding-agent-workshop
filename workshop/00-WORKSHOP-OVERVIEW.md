@@ -78,7 +78,7 @@ flowchart LR
         EVAL --> ALERTS
         EVAL --> OPT
         OPT -. "Track A: Prompt + Canary Revision" .-> RT
-        OPT -. "Track B: client.skills.update / v2 Rev (Zero Redeploy)" .-> SKREG
+        OPT -. "Track B: client.skills.update / rev-2 (Zero Redeploy)" .-> SKREG
     end
 
     subgraph HARDEN["6. OPTIONAL HARDENING (Lab 7 - Skippable)"]
@@ -120,18 +120,23 @@ This workshop follows a **Build → Isolate → Persist → Extend → Deploy ON
 
 | Module | Topic & Hands-On Deliverable | Full-Day (7h 00m) | Half-Day Fast-Track (3h 30m) |
 |---|---|---:|---:|
-| **Lab 0** | Overview, GCP APIs, Service Agents, Pre-Flight Quota Check (`00-WORKSHOP-OVERVIEW.md`) | 20 min | 10 min |
-| **[Lab 1](01-LAB-SETUP-AND-BUILD-ADK.md)** | **Build:** Part A — `agents-cli`, Antigravity skills, ADK Architecture Spectrum, Simple `LlmAgent` + `EnvironmentToolset`; Part B — Collaborative, Graph & Dynamic Workflows + Service Registration | 60 min *(30m Part A + 30m Part B)* | 35 min *(30m Part A hands-on + 5m Part B walkthrough)* |
-| **[Lab 2](02-LAB-CUSTOM-SANDBOX-BYOC.md)** | **Scale (Sandboxes):** Standalone Agent Platform instance (`client.runtimes.create()`), Non-root BYOC Dockerfile, Template/Sandbox/Snapshot Lifecycle, Shell vs. BYOC vs. Code Exec, `AgentPlatformSandboxEnvironment`, Egress & Security | 60 min | 40 min *(use pre-pushed image or `solution/` checkpoint if tight)* |
+| **Lab 0** | Overview, Pre-Workshop Checklist, GCP APIs, Service Agents, Pre-Flight Check (`00-WORKSHOP-OVERVIEW.md`) | 20 min | 10 min |
+| **[Lab 1](01-LAB-SETUP-AND-BUILD-ADK.md)** | **Build:** **Part A (Core):** `agents-cli` (optional), Antigravity skills, Simple `LlmAgent` + `EnvironmentToolset`; **Part B (Optional / Stretch):** Collaborative, Graph & Dynamic Workflows + Service Registration | 60 min *(30m Part A Core + 30m Part B Optional/Stretch)* | 35 min *(30m Part A hands-on + 5m Part B overview — skip Part B coding)* |
+| **[Lab 2](02-LAB-CUSTOM-SANDBOX-BYOC.md)** | **Scale (Sandboxes):** Standalone Agent Platform instance (`client.runtimes.create()`), Non-root BYOC Dockerfile, Bangkok Cloud Build + AR → Singapore Sandbox Lifecycle, Shell vs. BYOC vs. Code Exec, `AgentPlatformSandboxEnvironment`, Egress & Security | 60 min | 40 min *(use pre-pushed image or `SANDBOX_MODE=shell` if tight)* |
 | *Break* | *Morning Coffee / Stretch Break* | *10 min* | *10 min* |
 | **[Lab 3](03-LAB-SESSIONS-MEMORY-FEEDBACK.md)** | **Scale (State & Telemetry):** Reuses Lab 2 standalone instance for Managed Sessions, Memory Bank (topics/TTL/retrieval), Feedback Service, OTel Tracing, Logging & PromQL Monitoring | 40 min | 15 min *(instructor live demo + code walkthrough)* |
-| **[Lab 4](04-LAB-SKILLS-AND-AGENT-REGISTRY.md)** | **Extend (Registries):** Skill Registry 16-check ZIP/`SKILL.md` packaging, publish to Vertex AI Skill Registry, wire `GCPSkillRegistry` + `SkillToolset` & `AgentRegistry` discovery before deployment | 40 min | 30 min *(Parts A, B & C hands-on)* |
+| **[Lab 4](04-LAB-SKILLS-AND-AGENT-REGISTRY.md)** | **Extend (Registries):** Skill Registry 16-check ZIP/`SKILL.md` packaging, publish directory to Vertex AI Skill Registry (`us-central1`), wire `GCPSkillRegistry` + `SkillToolset` & Bangkok `AgentRegistry` A2A/MCP discovery (+ optional `global` standalone skills) | 40 min | 30 min *(Parts A, B & C hands-on)* |
 | *Break* | *Lunch Break (Full-Day only)* | *40 min* | *—* |
-| **[Lab 5](05-LAB-DEPLOY-RUNTIME-TERRAFORM.md)** | **Scale (Deploy ONCE via Runtime & Terraform):** Build & push complete Labs 1–4 Coding Agent image **once**, `agents-cli deploy --dry-run` + Terraform `google_vertex_ai_reasoning_engine` (Custom SA + `roles/aiplatform.memoryUser` + dual service-agent `depends_on` + unified vs. decoupled `REASONING_ENGINE_NAME`), Revisions & Emergency Stop | 45 min | 30 min |
-| **[Lab 6](06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md)** | **Optimize:** GenAI Observability, Split Offline/Simulated/Online Eval, Failure Clustering, Quality Alerts (`monitoring_v3`), Prompt Optimization Flywheel | 40 min | 15 min *(instructor live demo + walkthrough)* |
-| **[Lab 7](07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md)** *(Optional / Skippable)* | **Govern & SecOps Hardening (Optional):** Agent Registry `ENABLED_BLOCKING` scanning & lifecycle, Semantic Governance (NLC) & Model Armor, SPIFFE `AGENT_IDENTITY` + Agent Gateway Terraform upgrade path, Multi-Tenant IAM Conditions, Memory Poisoning audit, CMEK/VPC-SC, WORM Audit + SIEM + Agent Anomaly Detection → SCC | 35 min *(optional — skip to finish at 6h 25m)* | *— (Skipped — self-paced)* |
-| **[Lab 8](08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md)** | **Architecture Decision:** Agent Runtime + Managed Sandbox vs. Self-Hosted GKE + `kubernetes-sigs/agent-sandbox` + Agent Substrate (14-Dimension Matrix) | 30 min | 25 min *(executive + engineering Q&A)* |
-| **Total** | | **420 min (7h 00m)** *(370m labs + 50m breaks; 385m / 6h 25m skipping Optional Lab 7)* | **210 min (3h 30m)** *(200m labs/demos + 10m break; skips Optional Lab 7 cleanly)* |
+| **[Lab 5](05-LAB-DEPLOY-RUNTIME-TERRAFORM.md)** | **Scale (Deploy ONCE via Runtime & Terraform):** Build & push complete Labs 1–4 Coding Agent image **once** to Bangkok AR, `agents-cli deploy --dry-run` + Terraform `google_vertex_ai_reasoning_engine` in Singapore (`dynamic "env"` + Custom SA + `roles/aiplatform.memoryUser` + dual service-agent `depends_on`), Revisions & Emergency Stop | 45 min | 30 min |
+| **[Lab 6](06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md)** | **Optimize:** GenAI Observability, Split Offline/Simulated/Online Eval (`global`), Failure Clustering, Quality Alerts (`monitoring_v3`), Dual-Track Prompt & Skill Optimization Flywheel | 40 min | 15 min *(instructor live demo + walkthrough)* |
+| **[Lab 7](07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md)** *(Optional / Stretch)* | **Govern & SecOps Hardening (Optional / Skippable):** Agent Registry `ENABLED_BLOCKING` scanning (`global`), Semantic Governance (NLC) & Model Armor, SPIFFE `AGENT_IDENTITY` + Agent Gateway Terraform upgrade, Multi-Tenant IAM Conditions, Memory Poisoning audit, CMEK/VPC-SC, WORM Audit + SIEM + Agent Anomaly Detection → SCC | 35 min *(optional/stretch — skip cleanly to finish at 6h 25m)* | *— (Skipped — self-paced)* |
+| **[Lab 8](08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md)** | **Architecture Decision:** Agent Runtime + Managed Sandbox vs. Self-Hosted GKE in Bangkok (`asia-southeast3`) + `kubernetes-sigs/agent-sandbox` + Agent Substrate (14-Dimension Matrix) | 30 min | 25 min *(executive + engineering Q&A)* |
+| **Total** | | **420 min (7h 00m)** *(Core Labs 1A–6 + 8: 5h 05m labs + 50m breaks = 5h 55m; add Lab 1B +30m and Lab 7 +35m as time permits)* | **210 min (3h 30m)** *(Cut line: Lab 1 Part A + Labs 2, 4, 5 hands-on; Labs 3 & 6 live demos; Lab 1B & Lab 7 skipped cleanly; Lab 8 Q&A)* |
+
+> [!IMPORTANT]
+> **Clear Cut Lines for Tight Schedules (Full-Day vs. Half-Day):**
+> - **Core Path (Never Skip):** Lab 1 **Part A**, Lab 2, Lab 3 *(hands-on or live demo)*, Lab 4, Lab 5, Lab 6 *(hands-on or live demo)*, and Lab 8.
+> - **Optional / Stretch Modules (Zero Downstream Breakage):** **Lab 1 Part B** (4 ADK 2.0 architectures — reset `AGENT_ARCHITECTURE=simple` before Lab 2 anyway) and **Lab 7** (Security & Governance Hardening — `0` starter TODOs). Skipping either or both leaves Labs 1–6 and `make verify-lab LAB=all` **100% green**.
 
 > [!TIP]
 > **Two Classroom Modes: Focused Manual Coding vs. Antigravity AI-Assisted Mode**
@@ -144,6 +149,15 @@ This workshop follows a **Build → Isolate → Persist → Extend → Deploy ON
 ---
 
 ## GCP Prerequisites & Environment Setup
+
+### Pre-Workshop Checklist (Run Before Lab 1)
+
+Complete these four quick steps before starting Lab 1 so downloads and CLI components never eat into lab time:
+
+- [ ] **Authenticate GCP + ADC** against a **Standard billing-enabled GCP project** (`gcloud auth login && gcloud auth application-default login && gcloud config set project YOUR_PROJECT_ID`).
+- [ ] **Install `gcloud alpha` component:** Run `gcloud components install alpha --quiet` *(required for `gcloud alpha agent-registry skills` in Labs 4, 6 & 7)*.
+- [ ] **Pre-sync Python dependencies (`make install`):** Run `cp .env.example .env`, set `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_PROJECT_NUMBER`, then run **`make install`** (`uv sync --dev` across `starter/` and `solution/`).
+- [ ] **Optional `google/agents-cli`:** Run `uvx google-agents-cli setup` (or `uv tool install google-agents-cli`) if you want `agents-cli` playground/deploy/eval shortcuts on your `PATH`. *(All labs run cleanly via `uv`, `gcloud`, and Terraform even without `agents-cli` installed.)*
 
 > [!TIP]
 > **No Local Docker Required!** Every lab in this workshop is designed for **100% zero-Docker attendee execution** (`docker` CLI is strictly optional):
@@ -168,23 +182,23 @@ Gemini Enterprise Agent Platform offers an **Express Mode** free tier (`GOOGLE_G
 - **Lab 1 only:** You may use AI Studio (`GEMINI_API_KEY`) or Express Mode strictly for local ADK prototyping if your GCP project is still provisioning.
 - **Labs 2–8:** Require a **Standard GCP project with billing enabled** and Application Default Credentials (`gcloud auth application-default login`).
 
-### Regional Availability Matrix (Bangkok Primary + Singapore Secondary)
+### Regional Availability Matrix (Bangkok First with Minimal Fallbacks)
 
-This workshop standardizes on **Bangkok (`asia-southeast3`) as the Primary Region** paired with **Singapore (`asia-southeast1`) as the Secondary Agent Platform Region**, plus two explicit service-mandated overrides (`us-central1` and `global`). Every placement below is source-verified against Google Cloud's live regional availability tables:
+This workshop aims for **Bangkok (`asia-southeast3`) first** for every service that supports it — **not** an intentional multi-region split. We only fall back to **Singapore (`asia-southeast1`)** for Agent Platform / Gemini services not yet launched in Bangkok, and to **`us-central1` / `global`** strictly where Google Cloud mandates it:
 
-| Region / Env Var | Role in This Workshop | Services Hosted Here | Verified Availability Notes |
+| Priority / Scope | Region & Env Var | Services Hosted Here | Verified Availability & Live Rehearsal Notes |
 |---|---|---|---|
-| **Bangkok (`asia-southeast3`)**<br/>`PRIMARY_REGION=asia-southeast3`<br/>`AR_LOCATION=asia-southeast3`<br/>`BUILD_LOCATION=asia-southeast3`<br/>`AGENT_REGISTRY_LOCATION=asia-southeast3`<br/>`GKE_LOCATION=asia-southeast3` | **Primary Region** *(Build, Artifacts, Secrets, Agent Registry & Self-Hosted GKE)* | • **Artifact Registry** (`asia-southeast3-docker.pkg.dev`)<br/>• **Cloud Build** (`--region=asia-southeast3`, zero local Docker!)<br/>• **Secret Manager** (`asia-southeast3` / automatic)<br/>• **Agent Registry** (discovery, standalone skills & `ENABLED_BLOCKING` scanning)<br/>• **Lab 8 Self-Hosted GKE + GKE Agent Sandbox** | Keeps container builds, image storage, secrets, registry catalog, and optional self-hosted GKE clusters in Bangkok (ideal for Thailand PDPA / Bank of Thailand compute residency). *(Optional: set `AR_LOCATION=asia-southeast1` if you prefer strict same-region image pulls into Singapore Agent Runtime/Sandboxes.)* |
-| **Singapore (`asia-southeast1`)**<br/>`GOOGLE_CLOUD_LOCATION=asia-southeast1` | **Secondary / Nearest Supported Agent Platform Region** | • **Agent Runtime** (`ReasoningEngine`)<br/>• **Managed Sandboxes** (Shell, BYOC, Code Exec)<br/>• **Managed Sessions** (`VertexAiSessionService`)<br/>• **Memory Bank** (`VertexAiMemoryBankService`)<br/>• **Agent Gateway** & **Gemini 2.5 Flash** | All Agent Platform Runtime, Sandbox, State, Gateway, and Gemini 2.5 Flash capabilities are **officially live in `asia-southeast1` with zero restrictions** — and are **not yet launched in `asia-southeast3`** (Bangkok). |
-| **Iowa (`us-central1`)**<br/>`SKILL_REGISTRY_LOCATION=us-central1` | **Service-Mandated Override (Lab 4)** | • **Vertex AI Skill Registry** (`aiplatform.googleapis.com/v1beta1`) | Preview is strictly limited to **3 regions**: `us-central1`, `europe-west4`, and `us-east5`. Keeping `SKILL_REGISTRY_LOCATION=us-central1` explicitly in `.env` ensures Lab 4 succeeds cleanly from APAC. |
-| **Global (`global`)**<br/>`EVAL_LOCATION=global` | **Service-Mandated Override (Lab 6)** | • **Gen AI Evaluation Service** (offline, simulated, `generate_loss_clusters` / `agents-cli eval analyze`) | Managed Evaluation supports **14 US/EU regions + `global`** (not yet `asia-southeast1`/`asia-southeast3`). Using `EVAL_LOCATION=global` is 100% APAC-ready AND runs `generate_loss_clusters` in the same client without `Unsupported region` errors! |
+| **1. Default (Bangkok)** | **`asia-southeast3`**<br/>`PRIMARY_REGION=asia-southeast3`<br/>`AR_LOCATION=asia-southeast3`<br/>`BUILD_LOCATION=asia-southeast3`<br/>`AGENT_REGISTRY_LOCATION=asia-southeast3`<br/>`GKE_LOCATION=asia-southeast3` | • **Artifact Registry** (`asia-southeast3-docker.pkg.dev`)<br/>• **Cloud Build** (`--region=asia-southeast3`, zero local Docker)<br/>• **Secret Manager** (`asia-southeast3` / automatic)<br/>• **Agent Registry A2A/MCP Discovery** (`gcloud agent-registry agents` / ADK `AgentRegistry`)<br/>• **Lab 8 Self-Hosted GKE + GKE Agent Sandbox** | Keeps builds, images, secrets, A2A/MCP catalog discovery, and self-hosted GKE in Bangkok (Thailand PDPA / BoT compute residency). **Empirically verified:** Bangkok Artifact Registry (`asia-southeast3-docker.pkg.dev`) pulls cleanly into **both** Singapore Agent Runtime and Singapore BYOC Sandboxes — **no second AR repo is needed**. |
+| **2. Fallback Where Unavailable (Singapore)** | **`asia-southeast1`**<br/>`GOOGLE_CLOUD_LOCATION=asia-southeast1` | • **Agent Runtime** (`ReasoningEngine`)<br/>• **Managed Sandboxes** (Shell, BYOC, Code Exec)<br/>• **Managed Sessions** (`VertexAiSessionService`)<br/>• **Memory Bank** (`VertexAiMemoryBankService`)<br/>• **Agent Gateway** & **Gemini 2.5 Flash** | Used **only because** Agent Platform Runtime, Sandboxes, Sessions, Memory Bank, Agent Gateway, and Gemini 2.5 Flash are not yet launched in `asia-southeast3`. All of them are officially live in `asia-southeast1` with zero restrictions. |
+| **3. GCP-Mandated Preview (`us-central1`)** | **`us-central1`**<br/>`SKILL_REGISTRY_LOCATION=us-central1` | • **Vertex AI Skill Registry** (`aiplatform.googleapis.com/v1beta1`, Lab 4) | Preview is strictly limited to **3 regions**: `us-central1`, `europe-west4`, and `us-east5`. Keeping `SKILL_REGISTRY_LOCATION=us-central1` ensures Lab 4 succeeds cleanly from APAC. |
+| **4. GCP-Mandated Global (`global`)** | **`global`**<br/>`EVAL_LOCATION=global`<br/>`AGENT_REGISTRY_SKILLS_LOCATION=global` | • **Gen AI Evaluation Service** (Lab 6: offline, simulated, `generate_loss_clusters`)<br/>• **Agent Registry Standalone Skills** (`gcloud alpha agent-registry skills`, Labs 4, 6 & 7) | Managed Evaluation supports 14 US/EU regions + `global` (`global` is APAC-ready and runs `generate_loss_clusters` in the same client). Agent Registry standalone skills (`gcloud alpha agent-registry skills`) currently time out in `asia-southeast3` and are empirically verified working end-to-end in **`global`** (while A2A/MCP discovery stays in Bangkok `asia-southeast3`). |
 
 Additional verified regional boundaries to keep in mind:
 - **Memory Bank is NOT available** in `asia-southeast2`, `australia-southeast2`, or `northamerica-northeast2` (fully supported in **`asia-southeast1`**).
 - **Agent Gateway is NOT available** in `asia-east2`, `asia-northeast3`, or `asia-southeast2` (fully supported in **`asia-southeast1`**).
 - **Semantic Governance Policy Engine (Optional Lab 7 NLC)** is currently available in 8 US/EU regions (`us-central1`, `us-east1`, `us-east4`, `us-west1`, `europe-southwest1`, `europe-west1`, `europe-west4`, `europe-west8`).
-- **`global`** supports Memory Bank, Sessions, and Gen AI Evaluation (`generate_loss_clusters` / `agents-cli eval analyze` are **`global`-only**), but does **not** support `client.runtimes.create()` deployment or CMEK.
-- *(Running a cohort in Americas or EMEA instead of APAC? You can optionally set all regional env vars to a single golden region — `us-central1` or `europe-west4` — while keeping `EVAL_LOCATION=global` for `generate_loss_clusters`.)*
+- **`global`** supports Memory Bank, Sessions, Gen AI Evaluation (`generate_loss_clusters` / `agents-cli eval analyze` are **`global`-only**), and Agent Registry standalone skills, but does **not** support `client.runtimes.create()` deployment or CMEK.
+- *(Running a cohort in Americas or EMEA instead of APAC? You can optionally set all regional env vars to a single golden region — `us-central1` or `europe-west4` — while keeping `EVAL_LOCATION=global` for `generate_loss_clusters` and `AGENT_REGISTRY_SKILLS_LOCATION=global` for standalone skills.)*
 - See [Supported locations](https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/agent-locations) for the full 23-region matrix.
 
 ### 1. Set Core Environment Variables
@@ -193,22 +207,23 @@ Additional verified regional boundaries to keep in mind:
 export GOOGLE_CLOUD_PROJECT="YOUR_PROJECT_ID"
 export GOOGLE_CLOUD_PROJECT_NUMBER="$(gcloud projects describe "$GOOGLE_CLOUD_PROJECT" --format='value(projectNumber)')"
 
-# Bangkok (asia-southeast3) Primary: Artifact Registry, Cloud Build, Secret Manager, Agent Registry, Lab 8 GKE
+# Bangkok (asia-southeast3) default: Artifact Registry (verified with SG Runtime & Sandboxes!), Cloud Build, Secret Manager, Agent Registry A2A/MCP, Lab 8 GKE
 export PRIMARY_REGION="asia-southeast3"
-export AR_LOCATION="asia-southeast3"             # Optional: set asia-southeast1 for same-region AR pulls
+export AR_LOCATION="asia-southeast3"
 export BUILD_LOCATION="asia-southeast3"
 export AGENT_REGISTRY_LOCATION="asia-southeast3"
 export GKE_LOCATION="asia-southeast3"
 
-# Singapore (asia-southeast1) Secondary: Agent Runtime, Sandboxes, Sessions, Memory Bank, Gateway, Gemini 2.5 Flash
+# Singapore (asia-southeast1) fallback ONLY for services not yet in Bangkok: Agent Runtime, Sandboxes, Sessions, Memory Bank, Gateway, Gemini 2.5 Flash
 export GOOGLE_CLOUD_LOCATION="asia-southeast1"
 
-# Service-mandated overrides: Skill Registry (3-region Preview) & Gen AI Evaluation (APAC-ready + loss clustering)
+# GCP-mandated overrides: Vertex AI Skill Registry (3-region Preview), Gen AI Evaluation (global), Agent Registry standalone skills (global)
 export SKILL_REGISTRY_LOCATION="us-central1"
 export EVAL_LOCATION="global"
+export AGENT_REGISTRY_SKILLS_LOCATION="global"
 
 gcloud config set project "$GOOGLE_CLOUD_PROJECT"
-echo "Project: $GOOGLE_CLOUD_PROJECT (#${GOOGLE_CLOUD_PROJECT_NUMBER}) | Primary: $PRIMARY_REGION | Agent Platform: $GOOGLE_CLOUD_LOCATION | Skill Registry: $SKILL_REGISTRY_LOCATION | Eval: $EVAL_LOCATION"
+echo "Project: $GOOGLE_CLOUD_PROJECT (#${GOOGLE_CLOUD_PROJECT_NUMBER}) | Bangkok Default: $PRIMARY_REGION | Agent Platform Fallback: $GOOGLE_CLOUD_LOCATION | Skill Registry: $SKILL_REGISTRY_LOCATION | Eval & Standalone Skills: $EVAL_LOCATION"
 ```
 
 ### 2. Enable Required Google Cloud APIs
@@ -262,8 +277,9 @@ Manually trigger service identity creation upfront so IAM bindings never race ah
 
 ```bash
 # Triggers provisioning of Vertex AI & Reasoning Engine Service Agents
-# (CLI output may display only the Vertex AI Service Agent, but gcp-sa-aiplatform-re is also created)
-gcloud beta services identity create \
+# (Uses `gcloud alpha`, already verified by `make preflight`; CLI output may display
+#  only the Vertex AI Service Agent, but gcp-sa-aiplatform-re is also created)
+gcloud alpha services identity create \
   --service=aiplatform.googleapis.com \
   --project="$GOOGLE_CLOUD_PROJECT"
 ```

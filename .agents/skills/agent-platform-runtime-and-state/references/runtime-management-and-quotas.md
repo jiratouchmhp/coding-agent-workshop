@@ -192,10 +192,12 @@ Custom containers MUST bind **`0.0.0.0:8080`** (default `PORT=8080`) and answer 
 - `api_mode: "stream"` or `"async_stream"` -> `POST /api/stream_reasoning_engine` -> `200 OK` NDJSON (`{"output": ...}\n`) converted to SSE
 - `api_mode: "bidi_stream"` -> `POST /api/bidi_reasoning_engine` (max 10 min)
 
+> **FastAPI `0.163.1` `:query` Compatibility Trap:** When Agent Runtime proxies `:query` / `:streamQuery` calls to `POST /api/reasoning_engine` and `POST /api/stream_reasoning_engine`, declaring `req: QueryRequest` directly triggers FastAPI `0.163.1` strict content-type parsing and fails with HTTP 400/422 (`model_attributes_type: Input should be a valid dictionary or object to extract fields from`). Always accept `raw_req: Request` and parse `QueryRequest.model_validate(json.loads(await raw_req.body()))` manually!
+
 ```python
 import inspect, json, os, uvicorn
-from fastapi import FastAPI, encoders, responses
-from pydantic import BaseModel
+from fastapi import FastAPI, Request, encoders, responses
+from pydantic import BaseModel, ValidationError
 
 app = FastAPI()
 
@@ -222,6 +224,13 @@ async def _ndjson(stream):
     async for chunk in stream:
         yield json.dumps(encoders.jsonable_encoder(chunk)) + "\n"
 
+async def _parse_query_request(raw_req: Request) -> QueryRequest:
+    body = await raw_req.body()
+    payload = json.loads(body.decode("utf-8")) if body else {}
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    return QueryRequest.model_validate(payload)
+
 @app.get("/")
 def health():
     return {"status": "ok"}
@@ -233,17 +242,25 @@ def keep_alive():
     return responses.JSONResponse(status_code=412, content={"status": "idle"})
 
 @app.post("/api/reasoning_engine")
-async def unary(req: QueryRequest):
+async def unary(raw_req: Request):
+    try:
+        req = await _parse_query_request(raw_req)
+    except (json.JSONDecodeError, ValidationError) as exc:
+        return responses.JSONResponse(status_code=400, content={"error": f"Invalid payload: {exc}"})
     fn = getattr(agent, req.class_method, None)
     if fn is None:
         return responses.JSONResponse(status_code=400, content={"error": f"Unknown method {req.class_method}"})
     return responses.JSONResponse(content=encoders.jsonable_encoder({"output": await _invoke(fn, req.input or {})}))
 
 @app.post("/api/stream_reasoning_engine")
-async def stream(req: QueryRequest):
+async def stream(raw_req: Request):
+    try:
+        req = await _parse_query_request(raw_req)
+    except (json.JSONDecodeError, ValidationError) as exc:
+        return responses.StreamingResponse(iter([json.dumps({"error": f"Invalid payload: {exc}"}) + "\n"]), status_code=400, media_type="application/json")
     fn = getattr(agent, req.class_method, None)
     if fn is None:
-        return responses.StreamingResponse(iter([json.dumps({"error": f"Unknown method {req.class_method}"})]), status_code=400, media_type="application/json")
+        return responses.StreamingResponse(iter([json.dumps({"error": f"Unknown method {req.class_method}"}) + "\n"]), status_code=400, media_type="application/json")
     return responses.StreamingResponse(_ndjson(await _invoke(fn, req.input or {})), media_type="application/json")
 
 if __name__ == "__main__":

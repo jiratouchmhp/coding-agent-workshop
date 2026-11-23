@@ -25,8 +25,8 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, encoders, responses
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Request, encoders, responses
+from pydantic import BaseModel, ValidationError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("coding_agent_runtime")
@@ -42,6 +42,47 @@ class QueryRequest(BaseModel):
 
     input: dict[str, Any] | None = None
     class_method: str
+
+
+async def _parse_query_request(request: Request) -> QueryRequest:
+    """Parse Agent Runtime ``:query`` / ``:streamQuery`` payloads robustly.
+
+    FastAPI >= 0.163 strictly enforces ``Content-Type`` when injecting Pydantic body
+    models, which can pass a raw JSON string to Pydantic when Agent Runtime proxies
+    requests and trigger ``422 model_attributes_type``. Reading ``await request.body()``
+    directly, unwrapping once if double-encoded as a JSON string, and validating via
+    ``QueryRequest.model_validate`` handles both standard and proxied payloads cleanly.
+    """
+    raw_body = await request.body()
+    if not raw_body:
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+
+    try:
+        payload: Any = json.loads(raw_body.decode("utf-8"))
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Malformed JSON request body: {exc}",
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Request payload must decode to a JSON object with "
+                "'class_method' and optional 'input'."
+            ),
+        )
+
+    try:
+        return QueryRequest.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=encoders.jsonable_encoder(exc.errors()),
+        ) from exc
 
 
 def _encode_ndjson_chunk(chunk: Any) -> str | None:
@@ -95,12 +136,26 @@ def get_runtime_app() -> Any:
     Lazy initialization ensures the container passes startup health probes (``GET /``)
     even on first deploy under Agent Identity before env vars/secrets are attached.
     """
+    # Defensively pop empty or whitespace-only GOOGLE_CLOUD_AGENT_ENGINE_ID so an
+    # exported `GOOGLE_CLOUD_AGENT_ENGINE_ID=` in `.env` or a local shell never
+    # triggers `ValueError: agent_engine_id is required for VertexAiMemoryBankService.`
+    # inside `AdkApp.set_up()` (which checks `"GOOGLE_CLOUD_AGENT_ENGINE_ID" in os.environ`).
+    # Keep this cleanup AFTER importing `coding_agent.agent` (which may load `.env`)
+    # and BEFORE instantiating `AdkApp` / calling `runtime_app.set_up()`.
+    if not os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID", "").strip():
+        os.environ.pop("GOOGLE_CLOUD_AGENT_ENGINE_ID", None)
+
     # TODO(lab-5): Import `app as adk_app` and `root_agent` from `coding_agent.agent`,
     # import `AdkApp` from `agentplatform.frameworks` (falling back to
-    # `vertexai.agent_engines`), inspect `inspect.signature(AdkApp.__init__).parameters`
-    # to pass `AdkApp(app=adk_app)` when supported (else `AdkApp(agent=root_agent)`
-    # with `plugins=list(adk_app.plugins)` if available), call `set_up()` if present,
-    # and return the initialized `AdkApp` instance.
+    # `vertexai.agent_engines`), defensively pop empty or whitespace-only
+    # `GOOGLE_CLOUD_AGENT_ENGINE_ID` from `os.environ` BEFORE instantiating `AdkApp` /
+    # calling `runtime_app.set_up()` (`if not os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID", "").strip():
+    # os.environ.pop("GOOGLE_CLOUD_AGENT_ENGINE_ID", None)`) so an empty
+    # `GOOGLE_CLOUD_AGENT_ENGINE_ID=` in `.env` or the shell never triggers
+    # `ValueError: agent_engine_id is required for VertexAiMemoryBankService.`, inspect
+    # `inspect.signature(AdkApp.__init__).parameters` to pass `AdkApp(app=adk_app)` when
+    # supported (else `AdkApp(agent=root_agent)` with `plugins=list(adk_app.plugins)` if
+    # available), call `set_up()` if present, and return the initialized `AdkApp` instance.
     raise NotImplementedError(
         "Complete TODO(lab-5) in starter/main.py: get_runtime_app()."
     )
@@ -121,12 +176,14 @@ def health_check() -> dict[str, str]:
 
 
 @app.post("/api/reasoning_engine")
-async def query_endpoint(request: QueryRequest) -> responses.JSONResponse:
+async def query_endpoint(request: Request) -> responses.JSONResponse:
     """Serve unary and async ``class_method`` invocations (``:query``)."""
-    # TODO(lab-5): Resolve `request.class_method` on `get_runtime_app()` using
-    # `_resolve_public_method(...)` (returning HTTP 400 JSON `{"error": ...}` if missing),
-    # invoke it via `await _invoke_method(method, request.input or {})`, and return
-    # `responses.JSONResponse(content=encoders.jsonable_encoder({"output": output}))`.
+    # TODO(lab-5): Parse `query_req = await _parse_query_request(request)` (uses raw
+    # `request.body()` + `QueryRequest.model_validate` to avoid FastAPI 0.163+ strict
+    # proxy content-type 422 errors), resolve `query_req.class_method` on
+    # `get_runtime_app()` using `_resolve_public_method(...)` (returning HTTP 400 JSON
+    # `{"error": ...}` if missing), invoke via `await _invoke_method(method, query_req.input or {})`,
+    # and return `responses.JSONResponse(content=encoders.jsonable_encoder({"output": output}))`.
     _ = request
     raise NotImplementedError(
         "Complete TODO(lab-5) in starter/main.py: POST /api/reasoning_engine."
@@ -134,11 +191,12 @@ async def query_endpoint(request: QueryRequest) -> responses.JSONResponse:
 
 
 @app.post("/api/stream_reasoning_engine")
-async def stream_query_endpoint(request: QueryRequest) -> responses.StreamingResponse:
+async def stream_query_endpoint(request: Request) -> responses.StreamingResponse:
     """Serve streaming ``class_method`` invocations (``:streamQuery?alt=sse``) as NDJSON."""
-    # TODO(lab-5): Resolve `request.class_method` on `get_runtime_app()` using
-    # `_resolve_public_method(...)` (returning HTTP 400 StreamingResponse if missing),
-    # invoke it via `await _invoke_method(method, request.input or {})`, and return
+    # TODO(lab-5): Parse `query_req = await _parse_query_request(request)`, resolve
+    # `query_req.class_method` on `get_runtime_app()` using `_resolve_public_method(...)`
+    # (returning HTTP 400 StreamingResponse if missing), invoke it via
+    # `await _invoke_method(method, query_req.input or {})`, and return
     # `responses.StreamingResponse(content=_ndjson_stream(output), media_type="application/json")`.
     _ = request
     raise NotImplementedError(

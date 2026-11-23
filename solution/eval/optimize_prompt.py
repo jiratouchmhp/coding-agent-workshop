@@ -24,10 +24,11 @@ Closes the Optimize Pillar loop across TWO tracks:
      writes candidate ``artifacts/optimized_skills/<skill_name>/SKILL.md``.
   3. Re-validates all 16 atomic Skill Registry ZIP checks via
      ``scripts/package_registry_skill.py`` and hot-updates Vertex AI Skill Registry
-     with ``client.skills.update(...)`` (ZERO agent container rebuild!), plus prints
-     exact Agent Registry immutable revision rollout (``revisions create v2`` ->
-     ``skills update --default-revision=.../revisions/v2``) and 1-command rollback
-     to ``v1``.
+     with ``client.skills.update(..., config={"local_path": str(skill_dir.resolve())})``
+     (ZERO agent container rebuild!), plus prints exact Agent Registry alpha CLI
+     two-step skill creation / immutable revision rollout (``revisions create rev-2`` ->
+     ``skills update --default-revision=.../revisions/rev-2``), 1-command rollback to
+     ``rev-1``, and ordered cleanup (``revisions delete`` before ``skills delete``).
 """
 
 from __future__ import annotations
@@ -166,7 +167,7 @@ def fetch_negative_feedback(
 
     entries = list(
         client.feedback_entries.list(
-            name=runtime_name,
+            parent=runtime_name,
             config={
                 "filter": 'feedback_type="THUMBS_DOWN"',
                 "order_by": "create_time desc",
@@ -509,14 +510,20 @@ def publish_updated_skill(
     with **zero agent container rebuild** because ``GCPSkillRegistry`` + ``SkillToolset``
     fetches skills dynamically at runtime.
     """
-    if not (skill_dir / "SKILL.md").is_file():
-        raise FileNotFoundError(f"Skill directory missing SKILL.md: {skill_dir}")
+    resolved_skill_dir = skill_dir.resolve()
+    if not resolved_skill_dir.is_dir():
+        raise ValueError(
+            "Vertex AI Skill Registry `local_path` must be a skill directory containing "
+            f"`SKILL.md` at the directory root (not a `.zip` file): {resolved_skill_dir}."
+        )
+    if not (resolved_skill_dir / "SKILL.md").is_file():
+        raise FileNotFoundError(f"Skill directory missing SKILL.md: {resolved_skill_dir}")
 
     packager = REPO_ROOT / "scripts" / "package_registry_skill.py"
     if not packager.is_file():
         raise FileNotFoundError(f"Skill packager script not found: {packager}")
 
-    resolved_display, resolved_desc = _read_skill_metadata(skill_dir)
+    resolved_display, resolved_desc = _read_skill_metadata(resolved_skill_dir)
     final_display = display_name or resolved_display
     final_desc = description or resolved_desc
     target_project = project_id or "PROJECT_ID"
@@ -525,7 +532,7 @@ def publish_updated_skill(
     )
 
     zip_path = zip_output_path or (REPO_ROOT / "dist" / f"{skill_id}.zip")
-    cmd = [sys.executable, str(packager), str(skill_dir)]
+    cmd = [sys.executable, str(packager), str(resolved_skill_dir)]
     if dry_run:
         cmd.append("--dry-run")
     else:
@@ -535,7 +542,7 @@ def publish_updated_skill(
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if proc.returncode != 0:
         raise RuntimeError(
-            f"Skill Registry 16-rule validation failed for {skill_dir}:\n"
+            f"Skill Registry 16-rule validation failed for {resolved_skill_dir}:\n"
             f"{proc.stdout}\n{proc.stderr}"
         )
 
@@ -547,11 +554,12 @@ def publish_updated_skill(
             "skill_resource_name": resource_name,
             "display_name": final_display,
             "description": final_desc,
-            "local_path": str(skill_dir),
+            "local_path": str(resolved_skill_dir),
+            "agent_registry_zip_path": str(zip_path),
             "sdk_call": (
                 f'client.skills.update(name="{resource_name}", '
                 f'config={{"display_name": "{final_display}", '
-                f'"description": "{final_desc}", "local_path": "{zip_path}"}})'
+                f'"description": "{final_desc}", "local_path": "{resolved_skill_dir}"}})'
             ),
         }
 
@@ -562,12 +570,14 @@ def publish_updated_skill(
     import agentplatform
 
     client = agentplatform.Client(project=project_id, location=skill_location)
+    # Vertex AI Skill Registry (`agentplatform==2.10.0`) zips the validated skill directory
+    # directly; passing a `.zip` file raises `ValueError: Path is not a directory`.
     updated = client.skills.update(
         name=resource_name,
         config={
             "display_name": final_display,
             "description": final_desc,
-            "local_path": str(zip_path),
+            "local_path": str(resolved_skill_dir),
         },
     )
     return {
@@ -575,6 +585,7 @@ def publish_updated_skill(
         "validation_passed": True,
         "zero_agent_container_rebuild": True,
         "skill_resource_name": getattr(updated, "name", resource_name),
+        "local_path": str(resolved_skill_dir),
         "zip_path": str(zip_path),
     }
 
@@ -585,7 +596,7 @@ def _build_reference_commands(
     project_id: str,
     location: str,
     skill_location: str,
-    agent_registry_location: str,
+    agent_registry_skills_location: str = "global",
     runtime_name: str,
     skill_id: str,
 ) -> dict[str, Any]:
@@ -595,6 +606,7 @@ def _build_reference_commands(
         or f"projects/{proj}/locations/{location}/reasoningEngines/ENGINE_ID"
     )
     private_skill_id = skill_id if skill_id.startswith("private-") else f"private-{skill_id}"
+    skills_loc_expr = f"${{AGENT_REGISTRY_SKILLS_LOCATION:-{agent_registry_skills_location}}}"
     return {
         "working_directory": f"{track_name}/",
         "adk_optimize_cli": (
@@ -641,20 +653,48 @@ def _build_reference_commands(
             f'"zippedFilesystem":"\'"$(base64 -w 0 ../dist/{skill_id}.zip)"\'"}} \' '
             f'"https://{skill_location}-aiplatform.googleapis.com/v1beta1/projects/{proj}/locations/{skill_location}/skills/{skill_id}?updateMask=displayName,description,zippedFilesystem"'
         ),
-        "agent_registry_revision_create_v2": (
-            f"gcloud agent-registry skills revisions create v2 "
+        "agent_registry_skill_create": (
+            f"gcloud alpha agent-registry skills create {skill_id} "
+            f'--project={proj} --location="{skills_loc_expr}"'
+        ),
+        "agent_registry_revision_create_rev1": (
+            f"gcloud alpha agent-registry skills revisions create rev-1 "
             f"--skill={private_skill_id} --project={proj} "
-            f"--location={agent_registry_location} --payload=\"../dist/{skill_id}.zip\""
+            f'--location="{skills_loc_expr}" --payload="../dist/{skill_id}.zip"'
         ),
-        "agent_registry_revision_promote_v2": (
-            f"gcloud agent-registry skills update {private_skill_id} "
-            f"--project={proj} --location={agent_registry_location} "
-            f'--default-revision="projects/{proj}/locations/{agent_registry_location}/skills/{private_skill_id}/revisions/v2"'
+        "agent_registry_revision_create_rev2": (
+            f"gcloud alpha agent-registry skills revisions create rev-2 "
+            f"--skill={private_skill_id} --project={proj} "
+            f'--location="{skills_loc_expr}" --payload="../dist/{skill_id}.zip"'
         ),
-        "agent_registry_revision_rollback_v1": (
-            f"gcloud agent-registry skills update {private_skill_id} "
-            f"--project={proj} --location={agent_registry_location} "
-            f'--default-revision="projects/{proj}/locations/{agent_registry_location}/skills/{private_skill_id}/revisions/v1"'
+        "agent_registry_revision_describe_rev2": (
+            f"gcloud alpha agent-registry skills revisions describe rev-2 "
+            f"--skill={private_skill_id} --project={proj} "
+            f'--location="{skills_loc_expr}"'
+        ),
+        "agent_registry_scan_policy_note": (
+            "Under ENABLED_BLOCKING, promoting --default-revision fails with "
+            "FAILED_PRECONDITION until `revisions describe` shows "
+            "`scanResult.scanState: SUCCEEDED` (or pass "
+            "`--scanning-policy=enabled-nonblocking` when creating a rapid workshop demo skill)."
+        ),
+        "agent_registry_revision_promote_rev2": (
+            f"gcloud alpha agent-registry skills update {private_skill_id} "
+            f'--project={proj} --location="{skills_loc_expr}" '
+            f'--default-revision="projects/{proj}/locations/{skills_loc_expr}/skills/{private_skill_id}/revisions/rev-2"'
+        ),
+        "agent_registry_revision_rollback_rev1": (
+            f"gcloud alpha agent-registry skills update {private_skill_id} "
+            f'--project={proj} --location="{skills_loc_expr}" '
+            f'--default-revision="projects/{proj}/locations/{skills_loc_expr}/skills/{private_skill_id}/revisions/rev-1"'
+        ),
+        "agent_registry_cleanup": (
+            f"gcloud alpha agent-registry skills revisions delete rev-2 "
+            f'--skill={private_skill_id} --project={proj} --location="{skills_loc_expr}" --quiet && '
+            f"gcloud alpha agent-registry skills revisions delete rev-1 "
+            f'--skill={private_skill_id} --project={proj} --location="{skills_loc_expr}" --quiet && '
+            f"gcloud alpha agent-registry skills delete {private_skill_id} "
+            f'--project={proj} --location="{skills_loc_expr}" --quiet'
         ),
     }
 
@@ -753,7 +793,7 @@ def main(argv: list[str] | None = None) -> int:
     project_id = args.project or settings.google_cloud_project
     location = args.location or settings.google_cloud_location
     skill_location = settings.skill_registry_location or "us-central1"
-    agent_registry_location = settings.agent_registry_location or "asia-southeast3"
+    agent_registry_skills_location = settings.agent_registry_skills_location or "global"
     runtime_name = settings.reasoning_engine_name
 
     sampler_path = (
@@ -796,7 +836,7 @@ def main(argv: list[str] | None = None) -> int:
         project_id=project_id,
         location=location,
         skill_location=skill_location,
-        agent_registry_location=agent_registry_location,
+        agent_registry_skills_location=agent_registry_skills_location,
         runtime_name=runtime_name,
         skill_id=args.skill_id,
     )

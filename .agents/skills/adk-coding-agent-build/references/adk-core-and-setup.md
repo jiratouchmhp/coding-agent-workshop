@@ -50,7 +50,7 @@ Google Cloud and ADK documentation span **five Python package/import namespaces*
   - **Agent Identity (Recommended):** Per-agent principal with default `roles/aiplatform.agentDefaultAccess` (logging + model calls) and `roles/aiplatform.agentContextEditor` (own sessions, memories, sandboxes).
   - **Reasoning Engine Service Agent:** `service-PROJECT_NUMBER@gcp-sa-aiplatform-re.iam.gserviceaccount.com` (`roles/aiplatform.reasoningEngineServiceAgent`). Pre-provision before granting AR/Secret Manager roles via:
     ```bash
-    gcloud beta services identity create --service=aiplatform.googleapis.com --project=PROJECT_ID
+    gcloud alpha services identity create --service=aiplatform.googleapis.com --project=PROJECT_ID
     ```
   - **Agent Platform Service Agent:** `service-PROJECT_NUMBER@gcp-sa-aiplatform.iam.gserviceaccount.com` (used for CMEK, cross-project AR/GCS, and cross-project SA token creation).
 

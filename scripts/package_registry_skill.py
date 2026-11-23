@@ -154,12 +154,15 @@ def _parse_skill_md(content: str) -> tuple[dict[str, Any], str]:
 
     try:
         import yaml  # type: ignore[import-untyped]
-
-        parsed = yaml.safe_load(raw_yaml)
-        if not isinstance(parsed, dict):
-            raise ValueError("YAML frontmatter did not deserialize to a mapping.")
     except ImportError:
         parsed = _parse_yaml_fallback(raw_yaml)
+    else:
+        try:
+            parsed = yaml.safe_load(raw_yaml)
+        except yaml.YAMLError as exc:
+            raise ValueError(f"Malformed YAML frontmatter: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise TypeError("YAML frontmatter did not deserialize to a mapping.")
 
     return parsed, body
 
@@ -466,7 +469,7 @@ def validate_zip_payload(
         try:
             skill_md_text = zf.read(target_skill_md).decode("utf-8")
             frontmatter, body = _parse_skill_md(skill_md_text)
-        except Exception as exc:
+        except (UnicodeDecodeError, ValueError, TypeError, KeyError, OSError) as exc:
             add_check("R12_skill_md_frontmatter_and_body", False, f"SKILL.md parse error: {exc}")
             for rid in (
                 "R13_frontmatter_name",

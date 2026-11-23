@@ -205,24 +205,28 @@ Quality alerts trigger Cloud Monitoring **incidents** when Online Monitor scores
 
 ### `gcloud` CLI Workflow (`policy.yaml`)
 
+> **CRITICAL Cloud Monitoring HTTP 400 Traps on `online_evaluator/scores`:**
+> 1. **Always include `resource.type="aiplatform.googleapis.com/OnlineEvaluator"` in `filter`:** Omitting it fails with HTTP 400 (`must specify a restriction on "resource.type" in the filter`).
+> 2. **Never use `ALIGN_MEAN` on `online_evaluator/scores`:** Because the metric has kind `DELTA` and value type `DISTRIBUTION`, `ALIGN_MEAN` fails with HTTP 400 (`The aligner cannot be applied to metrics with kind DELTA and value type DISTRIBUTION`). Use **`ALIGN_PERCENTILE_50`** (or `ALIGN_DELTA` + `REDUCE_PERCENTILE_50`).
+
 ```yaml
-# policy.yaml — alerts if mean Task Success drops below 0.80 for 30 minutes
+# policy.yaml — alerts if median (p50) Task Success drops below 0.80 for 30 minutes
 displayName: "Low Task Success Score"
 conditions:
-- displayName: "Task Success < 0.8"
+- displayName: "Task Success (p50) < 0.8"
   conditionThreshold:
     filter: >
-      metric.type="aiplatform.googleapis.com/online_evaluator/scores"
+      resource.type="aiplatform.googleapis.com/OnlineEvaluator"
+      AND metric.type="aiplatform.googleapis.com/online_evaluator/scores"
       AND metric.labels.evaluation_metric_name="task_success"
     # Optional multi-agent scoping (verified in monitoring/api/metrics_gcp_a_b):
-    # AND resource.type="aiplatform.googleapis.com/OnlineEvaluator"
     # AND metric.labels.agent_resource_name="projects/YOUR_PROJECT_ID/locations/asia-southeast1/reasoningEngines/ENGINE_ID"
     comparison: COMPARISON_LT
     thresholdValue: 0.8
     duration: 1800s
     aggregations:
     - alignmentPeriod: 60s
-      perSeriesAligner: ALIGN_MEAN
+      perSeriesAligner: ALIGN_PERCENTILE_50
 combiner: OR
 enabled: true
 notificationChannels:
@@ -245,13 +249,13 @@ project_name = "projects/YOUR_PROJECT_ID"
 policy = {
     "display_name": "Agent Quality Drift",
     "conditions": [{
-        "display_name": "Low Evaluation Score",
+        "display_name": "Low Evaluation Score (p50)",
         "condition_threshold": {
             "filter": (
-                'metric.type="aiplatform.googleapis.com/online_evaluator/scores"'
-                # Optional narrowing filters verified from monitoring/api/metrics_gcp_a_b:
-                # ' AND resource.type="aiplatform.googleapis.com/OnlineEvaluator"'
+                'resource.type="aiplatform.googleapis.com/OnlineEvaluator"'
+                ' AND metric.type="aiplatform.googleapis.com/online_evaluator/scores"'
                 ' AND metric.labels.evaluation_metric_name="task_success"'
+                # Optional narrowing filters verified from monitoring/api/metrics_gcp_a_b:
                 # ' AND metric.labels.agent_resource_name="projects/YOUR_PROJECT_ID/locations/asia-southeast1/reasoningEngines/ENGINE_ID"'
                 # ' AND metric.labels.runtime_revision_id="REVISION_ID"'
             ),
@@ -260,7 +264,8 @@ policy = {
             "duration": {"seconds": 3600},
             "aggregations": [{
                 "alignment_period": {"seconds": 60},
-                "per_series_aligner": monitoring_v3.Aggregation.Aligner.ALIGN_MEAN,
+                # CRITICAL: DELTA/DISTRIBUTION rejects ALIGN_MEAN (HTTP 400); use ALIGN_PERCENTILE_50!
+                "per_series_aligner": monitoring_v3.Aggregation.Aligner.ALIGN_PERCENTILE_50,
             }],
         },
     }],
