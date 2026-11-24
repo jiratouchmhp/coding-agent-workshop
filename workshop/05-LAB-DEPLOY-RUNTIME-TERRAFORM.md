@@ -1,529 +1,193 @@
-# Lab 5: Deploy & Manage the Complete Coding Agent on Agent Runtime (CLI & Terraform)
+# Lab 5: Deploy Your Coding Agent to Agent Runtime with Terraform
 
-> **Pillar:** Scale (Agent Runtime, Declarative IaC, Lifecycle & Traffic Management)  
-> **Duration:** 45 minutes (Full-Day Track) | 30 minutes (Half-Day Fast-Track)  
-> **Antigravity Skill Companion:** [`.agents/skills/agent-platform-runtime-and-state/SKILL.md`](../.agents/skills/agent-platform-runtime-and-state/SKILL.md) *(complements the built-in `google-agents-cli-deploy` skill)*  
-> **Previous Lab:** [Lab 4: Extend with Skill Registry & Agent Registry](./04-LAB-SKILLS-AND-AGENT-REGISTRY.md) | **Next Lab:** [Lab 6: Optimize Pillar — Observability, Evaluation, Quality Alerts & Prompt Optimization](./06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md)  
-> **Files You Will Inspect & Edit:** `starter/Dockerfile`, `starter/main.py`, `starter/requirements.txt`, `starter/terraform/main.tf`, `starter/terraform/variables.tf`, `starter/terraform/outputs.tf`, `starter/terraform/terraform.tfvars`
+In Labs 1 through 4 you built the full coding agent locally: ADK 2.0 core, managed sandbox execution, sessions and memory, and skill registries. Now you'll wire the Agent Runtime HTTP server, build the container remotely with Cloud Build (no local Docker needed), and deploy it to Vertex AI Agent Runtime in `asia-southeast1` with Terraform.
 
----
+**Duration:** 45 min (Full-Day) | 30 min (Fast-Track) | **Previous:** [Lab 4: Skill Registry & Agent Registry](./04-LAB-SKILLS-AND-AGENT-REGISTRY.md) | **Next:** [Lab 6: Observability, Evaluation & Quality Alerts](./06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md)
 
-> [!TIP]
-> **Build Complete Locally, Ship ONCE — Zero Local Docker Required!**
-> Across Labs 1–4 you built a 100% feature-complete Coding Agent locally — **ADK 2.0 core + BYOC Managed Sandbox + Managed Sessions, Memory Bank & OTel/Feedback + Skill Registry & Agent Registry**. In Lab 5, choose from **THREE Zero-Docker Deployment Paths** to ship to **Singapore (`asia-southeast1`)** without ever installing or running a local Docker daemon:
->
-> | Zero-Docker Path | Workflow Commands | Local Docker? | Artifact Registry Push? | Best For |
-> |---|---|:---:|:---:|---|
-> | **Path 1 (Default — Declarative Production IaC)** | `make test-agent-local` (pure-Python FastAPI localhost smoke test) → `make push-agent` (Cloud Build `--region=asia-southeast3` → Bangkok AR) → `make tf-apply` (Terraform `container_spec` → Singapore `asia-southeast1` fallback) | **No** | Yes *(Bangkok `asia-southeast3` — empirically verified with Singapore Agent Runtime; no second AR repo needed!)* | Production CI/CD, Terraform IAM `depends_on`, Secret Manager & repeatable promotions |
-> | **Path 2 (Zero-Docker AND Zero-AR Push)** | `make test-agent-local` → `make pack-agent-source` (level-0 `coding_agent_source.tar.gz`, <= 8 MB) → Terraform `source_code_spec` + empty `image_spec {}` | **No** | **No!** *(Agent Runtime builds remotely from `./Dockerfile`)* | Teams wanting declarative Terraform IaC without managing a separate Artifact Registry image push step |
-> | **Path 3 (Rapid Imperative Dev)** | `agents-cli deploy --region asia-southeast1` | **No** | Handled remotely | Fastest single-command dev prototyping (see Part A ordering rule before mixing with Terraform!) |
+## Files You Will Edit
 
-## Learning Objectives
+| Step | File | Where to edit | What you're adding |
+|---|---|---|---|
+| Step 1 | [starter/main.py](../starter/main.py) | `get_runtime_app()`, `query_endpoint()`, `stream_query_endpoint()` (`# TODO(lab-5)`) | Lazy `AdkApp` loader and unary/streaming HTTP endpoints |
+| Step 3 | `starter/terraform/terraform.tfvars` (copied from [terraform.tfvars.example](../starter/terraform/terraform.tfvars.example)) | Project, image URI, and sandbox variables | Your GCP project ID/number, pushed image URI, and optional Lab 2 sandbox template |
+| Step 4 | [starter/terraform/main.tf](../starter/terraform/main.tf) | 5 `# TODO(lab-5)` blocks (`runtime_sa_roles`, AR service-agent IAM, `container_spec`, `deployment_spec`, `depends_on`) | Memory Bank role, Artifact Registry pull IAM, container spec, runtime env/secrets, and IAM ordering |
 
-By the end of this lab, you will be able to:
+**Already built for you (no edits needed):** [starter/Dockerfile](../starter/Dockerfile), [starter/requirements.txt](../starter/requirements.txt), [starter/terraform/versions.tf](../starter/terraform/versions.tf), [starter/terraform/variables.tf](../starter/terraform/variables.tf), [starter/terraform/outputs.tf](../starter/terraform/outputs.tf), and `_parse_query_request()`, `_resolve_public_method()`, `_invoke_method()`, and `_ndjson_stream()` in [starter/main.py](../starter/main.py).
 
-1. Deploy your complete Labs 1–4 ADK Coding Agent to **Gemini Enterprise Agent Platform (Agent Runtime)** using both imperative **`agents-cli deploy`** workflows and declarative **Terraform (`google_vertex_ai_reasoning_engine`)**.
-2. Configure **BYOC prebuilt containers (`container_spec`)** and **Dockerfile builds (`source_code_spec` + empty `image_spec {}`)**, avoiding the root-of-tar archive failure mode.
-3. Prevent `IMAGE_PULL_BACKOFF` and secret-fetch race conditions by binding IAM roles for the Google-managed service agents (`gcp-sa-aiplatform-re`, `gcp-sa-aiplatform`, and `gcp-sa-vertex-sandbox`) with explicit Terraform `depends_on` ordering.
-4. Wire a **friction-free dedicated least-privilege runtime service account** (`coding-agent-runtime-sa`, including `roles/aiplatform.memoryUser` for Lab 3 Memory Bank and conditional `roles/agentregistry.viewer` when Lab 4 Skill Registry is enabled) alongside **Secret Manager** (`secret_env`) and Lab 3/4 runtime toggles (`enable_memory_bank`, `enable_skill_registry`, `skill_registry_location`), while understanding the upgrade path to immutable **SPIFFE `AGENT_IDENTITY` + Agent Gateway** in [Lab 7 (Optional)](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md).
-5. Understand the **Agent Runtime HTTP/NDJSON contract** (`0.0.0.0:8080`, `GET /`, `/api/reasoning_engine`, `/api/stream_reasoning_engine`, `keep_alive_probe`) and container sizing constraints.
-6. Operate deployed agents in production: CRUD management (`list`, `get`, `update`, `delete`), long-running async query jobs, **revisions & canary traffic splitting (`v1beta1`)**, revision garbage collection, and **emergency stop** playbooks.
+**Need a hand or fell behind?** Ask Antigravity to use [`.agents/skills/agent-platform-runtime-and-state`](../.agents/skills/agent-platform-runtime-and-state/SKILL.md), or run `make fast-forward LAB=5` to sync Lab 5 from `solution/` without touching Lab 6.
 
 ---
 
-## Quick-Run TL;DR (Classroom Fast Path)
+## Step 1: Wire the Agent Runtime HTTP Server (`starter/main.py`)
 
-- **Focused Exercises (High-Signal TODOs):** `starter/main.py` (`get_runtime_app`, `query_endpoint`, `stream_query_endpoint`) + `starter/terraform/main.tf` (5 focused uncomment blocks: `roles/aiplatform.memoryUser`, dual service-agent AR bindings, `container_spec`, runtime `env` & `secret_env`, and IAM `depends_on`) — *(Dockerfile, variables & outputs pre-filled!)*
-- **Key Commands (Zero Local Docker — Choose `push-agent` OR Zero-AR `pack-agent-source`):**
-  ```bash
-  make test-agent-local                                     # Pure-Python FastAPI smoke test (GET / + POST /api/reasoning_engine; zero Docker!)
-  make push-agent                                           # Remote Cloud Build (--region=asia-southeast3) — OR: make pack-agent-source (zero AR!)
-  make tf-plan && make tf-apply                             # Declarative deploy to Singapore (asia-southeast1) with IAM depends_on
-  make verify-lab LAB=5
-  ```
-- **Antigravity AI-Assisted Mode (`.agents/skills/agent-platform-runtime-and-state`):** *"Using `agent-platform-runtime-and-state`, complete the `# TODO(lab-5)` handlers in `starter/main.py` and uncomment the 5 IAM/`container_spec`/`depends_on` blocks in `starter/terraform/main.tf` without triggering `IMAGE_PULL_BACKOFF`."*
-- **Fell Behind? Instant Catch-Up:** `make fast-forward LAB=5` *(syncs only Lab 5 without spoiling Labs 6–8 TODOs).*
+**File:** [starter/main.py](../starter/main.py) (`get_runtime_app()`, `query_endpoint()`, `stream_query_endpoint()`, `# TODO(lab-5)`)
 
----
+Agent Runtime calls your container on `0.0.0.0:8080`: health probes hit `GET /` (already wired), unary `:query` calls hit `POST /api/reasoning_engine`, and streaming `:streamQuery` calls hit `POST /api/stream_reasoning_engine`. You'll complete three functions so FastAPI lazily loads your `AdkApp` and routes method calls to it.
 
-## Half-Day Fast-Track Path
+- **`get_runtime_app()`:** Import `app as adk_app` and `root_agent` from `coding_agent.agent`, and `AdkApp` from `agentplatform.frameworks` (falling back to `vertexai.agent_engines`).
+- **Empty env-var quirk:** Right *after* importing `coding_agent.agent` (which may load `.env`) and *before* creating `AdkApp`, pop `GOOGLE_CLOUD_AGENT_ENGINE_ID` if empty or whitespace. Otherwise `AdkApp.set_up()` checks `"GOOGLE_CLOUD_AGENT_ENGINE_ID" in os.environ` and crashes locally with `ValueError: agent_engine_id is required for VertexAiMemoryBankService`.
+- **SDK compatibility:** Inspect `AdkApp.__init__` and pass `AdkApp(app=adk_app)` when `"app"` is supported (preserving `ResumabilityConfig` and plugins); otherwise pass `AdkApp(agent=root_agent)` (plus `plugins` if accepted), call `set_up()`, and return it.
+- **`query_endpoint()` and `stream_query_endpoint()`:** Keep `request: Request` and call the pre-filled `await _parse_query_request(request)` helper (changing the type to `QueryRequest` causes FastAPI `0.163+` to fail proxied `:query` calls with HTTP 422). Resolve the method with `_resolve_public_method(...)`, invoke it with `await _invoke_method(...)`, and return JSON (`{"output": output}`) or `_ndjson_stream(output)`.
 
-If you are running on the **3.5-hour Half-Day Fast-Track** (30 minutes):
-- Complete **Part A** (dry-run & review `agents-cli deploy` flags — Path 3), **Step B0** (complete `# TODO(lab-5)` in `starter/main.py`, verify locally with `make test-agent-local`, and build/push `AGENT_IMAGE_URI` via remote Cloud Build `make push-agent` — zero local Docker! — or point `agent_image_uri` at your facilitator's pre-pushed image), and **Steps B1–B4** (implement `# TODO(lab-5)` in `starter/terraform/main.tf` and run `make tf-plan`).
-- Kick off **one** live deployment into **Singapore (`asia-southeast1`)** (`make tf-apply` or `agents-cli deploy --no-wait`) and while it provisions (5–10 minutes), read **Part C (Runtime Contract)** and **Part D (Revisions, Traffic Splitting & Emergency Stop)**.
-- Verify with `./scripts/verify_lab.sh 5` (`make verify-lab LAB=5`).
+<details>
+<summary>Stuck? Peek at the code</summary>
 
----
+```python
+@functools.lru_cache(maxsize=1)
+def get_runtime_app() -> Any:
+    from coding_agent.agent import app as adk_app
+    from coding_agent.agent import root_agent
+    try:
+        from agentplatform.frameworks import AdkApp
+    except ImportError:
+        from vertexai.agent_engines import AdkApp
 
-## Architecture Overview
+    if not os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID", "").strip():
+        os.environ.pop("GOOGLE_CLOUD_AGENT_ENGINE_ID", None)
 
-```mermaid
-flowchart LR
-    Dev["Developer / CI Pipeline (Zero Local Docker!)"] -->|"Path 3: Rapid Dev"| CLI["agents-cli deploy"]
-    Dev -->|"Path 1 & 2: Declarative IaC"| TF["Terraform (starter/terraform/)"]
+    init_params = inspect.signature(AdkApp.__init__).parameters
+    if "app" in init_params:
+        runtime_app = AdkApp(app=adk_app)
+    else:
+        kwargs: dict[str, Any] = {"agent": root_agent}
+        app_plugins = getattr(adk_app, "plugins", None)
+        if app_plugins and "plugins" in init_params:
+            kwargs["plugins"] = list(app_plugins)
+        runtime_app = AdkApp(**kwargs)
 
-    TF -->|"depends_on IAM"| IAM["Service Agent & Runtime SA IAM"]
-    TF -->|"secret_env"| SM["Secret Manager (asia-southeast3)"]
-    IAM -->|"gcp-sa-aiplatform-re (AR Reader — Pull from Bangkok AR)"| AR["Artifact Registry (Bangkok asia-southeast3)<br/>Built via Cloud Build --region=asia-southeast3"]
-    IAM -->|"gcp-sa-vertex-sandbox (AR Reader)"| SandboxAR["Artifact Registry (Bangkok asia-southeast3 Sandbox Image)"]
-    IAM -->|"gcp-sa-aiplatform (Secret Accessor / Cross-Project AR)"| SM
+    setup_fn = getattr(runtime_app, "set_up", None)
+    if callable(setup_fn):
+        setup_fn()
+    return runtime_app
 
-    CLI --> Runtime["Agent Runtime (ReasoningEngine — Singapore asia-southeast1 Fallback)"]
-    TF -->|"container_spec OR source_code_spec"| Runtime
-    AR -->|"container_spec.image_uri"| Runtime
+@app.post("/api/reasoning_engine")
+async def query_endpoint(request: Request) -> responses.JSONResponse:
+    query_req = await _parse_query_request(request)
+    method = _resolve_public_method(get_runtime_app(), query_req.class_method)
+    if method is None:
+        return responses.JSONResponse(status_code=400, content={"error": f"Method {query_req.class_method!r} not found on agent"})
+    output = await _invoke_method(method, query_req.input or {})
+    return responses.JSONResponse(content=encoders.jsonable_encoder({"output": output}))
 
-    subgraph ControlPlane["Runtime Contract & Operations"]
-        Runtime --> Health["GET / (200 OK on 0.0.0.0:8080)"]
-        Runtime --> Unary["POST /api/reasoning_engine (JSON)"]
-        Runtime --> Stream["POST /api/stream_reasoning_engine (NDJSON -> SSE, max 15m)"]
-        Runtime --> Revs["Revisions & Traffic Split (v1beta1, max 950/agent)"]
-    end
+@app.post("/api/stream_reasoning_engine")
+async def stream_query_endpoint(request: Request) -> responses.StreamingResponse:
+    query_req = await _parse_query_request(request)
+    method = _resolve_public_method(get_runtime_app(), query_req.class_method)
+    if method is None:
+        return responses.StreamingResponse(
+            content=iter([json.dumps({"error": f"Method {query_req.class_method!r} not found"}) + "\n"]),
+            status_code=400, media_type="application/json",
+        )
+    output = await _invoke_method(method, query_req.input or {})
+    return responses.StreamingResponse(content=_ndjson_stream(output), media_type="application/json")
 ```
 
+Full reference file: [`solution/main.py`](../solution/main.py).
+
+</details>
+
+**Check it works:**
+
+```bash
+make test-agent-local
+```
+
+This runs Uvicorn locally in pure Python (no Docker) and prints `[PASS]` for `GET /` (`200 {"status":"ok"}`) plus three `POST /api/reasoning_engine` (`list_sessions`) calls across `application/json`, missing `Content-Type`, and `text/plain` headers.
+
 ---
 
-## Prerequisites & Workspace Check
+## Step 2: Build and Push the Agent Image via Cloud Build
 
-Confirm your shell environment and variables from **Labs 1–4** are loaded:
+Now build `starter/` (`Dockerfile`, `main.py`, `requirements.txt`, `coding_agent/`, and `skills_to_register/`) remotely with Cloud Build in `asia-southeast3`. This trusted image (`coding-agent:v1`) is separate from Lab 2's untrusted sandbox image (`coding-sandbox:v1`), and Agent Runtime in `asia-southeast1` pulls directly from your `asia-southeast3` Artifact Registry repo with no second repo needed.
 
 ```bash
 source .env
 gcloud config set project "${GOOGLE_CLOUD_PROJECT}"
-terraform version   # Requires >= 1.5.0
-agents-cli info
+gcloud artifacts repositories create coding-agent-repo \
+  --repository-format=docker --location="${AR_LOCATION:-asia-southeast3}" \
+  --project="${GOOGLE_CLOUD_PROJECT}" || true
+
+export AGENT_IMAGE_URI="${AR_LOCATION:-asia-southeast3}-docker.pkg.dev/${GOOGLE_CLOUD_PROJECT}/coding-agent-repo/coding-agent:v1"
+make push-agent
+echo "AGENT_IMAGE_URI=${AGENT_IMAGE_URI}" >> .env
 ```
 
-Verify the following values in `.env`:
-- `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_PROJECT_NUMBER`
-- `PRIMARY_REGION`, `AR_LOCATION`, `BUILD_LOCATION`, and `AGENT_REGISTRY_LOCATION` (**`asia-southeast3`** — Bangkok default for Artifact Registry, Cloud Build, Secret Manager & Agent Registry A2A/MCP discovery; **empirically verified:** Bangkok AR pulls cleanly into Singapore Agent Runtime and Singapore BYOC Sandboxes, so no second AR repo is needed!)
-- `GOOGLE_CLOUD_LOCATION` (**`asia-southeast1`** — Singapore fallback used only because Agent Runtime & Managed Sandboxes are not yet launched in Bangkok)
-- `MODEL_NAME` (**`gemini-4-hydrogen`**), `REASONING_MODEL_NAME` (**`gemini-4-neon`**), `MODEL_LOCATION` (**`global`** — or `asia-southeast1` with `gemini-4-argon` for strict regional inference residency), `THINKING_LEVEL` (**`MEDIUM`** from `LOW|MEDIUM|HIGH|XHIGH`), and `AGY_EXECUTION_MODE` (**`auto`**)
-- `SANDBOX_IMAGE_URI` (`asia-southeast3-docker.pkg.dev/.../coding-agent-repo/coding-sandbox:v1`) and `SANDBOX_TEMPLATE_NAME` (from Lab 2, or `SANDBOX_MODE=shell`)
-- `ENABLE_TELEMETRY_CALLBACKS`, `ENABLE_MEMORY_BANK`, and your Lab 2/3 standalone `REASONING_ENGINE_NAME` (in `asia-southeast1`)
-- `ENABLE_SKILL_REGISTRY`, `SKILL_REGISTRY_LOCATION` (**`us-central1`** — 3-region Preview), `AGENT_REGISTRY_LOCATION` (**`asia-southeast3`** — Bangkok A2A/MCP), and `AGENT_REGISTRY_SKILLS_LOCATION` (**`global`** — standalone skills)
-- `AGENT_IMAGE_URI` (built and pushed remotely via Cloud Build `--region=asia-southeast3` in Step B0 below — zero local Docker!)
-
-> [!IMPORTANT]
-> **No `gcloud` Deploy Command for Agent Runtime:** Unlike Cloud Run, there is **no `gcloud` CLI command to deploy an Agent Runtime instance** (`gcloud ai reasoning-engines` only supports `describe` and `beta ... add-iam-policy-binding`). Deploy via **`agents-cli deploy`**, **Terraform (`google_vertex_ai_reasoning_engine`)**, or the **Python/REST SDK (`agentplatform.Client`)**.
-
-> [!NOTE]
-> **SDK Namespace Convention:** This workshop standardizes on **`agentplatform.Client`** (`google-cloud-agentplatform>=2.0.1`, also re-exported by `google-cloud-aiplatform>=1.154.0`) and **`from agentplatform.frameworks import AdkApp`**.
+**Check it works:** Cloud Build finishes with `STATUS: SUCCESS` and prints the image digest for `coding-agent:v1`.
 
 ---
 
-## Part A: Path 3 — Rapid Imperative Deployment with `agents-cli deploy` (Zero Docker)
+## Step 3: Create `starter/terraform/terraform.tfvars`
 
-`agents-cli deploy` packages your ADK project, builds the container image remotely (zero local Docker required — or deploys a prebuilt `--image`), injects secrets and environment variables, and provisions an Agent Runtime instance in **Singapore (`asia-southeast1`)**.
+**File:** `starter/terraform/terraform.tfvars` (copied from [starter/terraform/terraform.tfvars.example](../starter/terraform/terraform.tfvars.example))
 
-### Step A1: Understand the Critical Infra Ordering Rule
-
-> [!CAUTION]
-> **Terraform vs. Imperative Ordering Trap:** If you use `agents-cli infra single-project --apply` for Terraform-managed observability (prompt-response logging or `--bq-analytics`), you **MUST** run `agents-cli infra single-project --apply` **before** your first `agents-cli deploy`. Never apply Terraform *after* an imperative `agents-cli deploy` onto the same Agent Runtime resource, as state ownership conflicts will require deleting and recreating the engine. In this lab, we inspect `agents-cli deploy` with `--dry-run` first, then provision our production instance declaratively in **Part B** using `starter/terraform/`.
-
-### Step A2: Dry-Run and Inspect `agents-cli deploy` Flags
-
-Preview the exact build and deployment plan without mutating cloud resources:
+Copy the example file and fill in your `project_id`, `project_number`, the `AGENT_IMAGE_URI` you just pushed, and optionally your Lab 2 `sandbox_template_name` (leave it `""` to auto-select `SANDBOX_MODE=shell`). Keep `location = "asia-southeast1"` because Agent Runtime is not yet in `asia-southeast3`, and keep `enable_memory_bank = false` and `enable_skill_registry = false` for a clean initial deploy. Never commit `terraform.tfvars`.
 
 ```bash
-cd starter
-agents-cli deploy \
-  --project "${GOOGLE_CLOUD_PROJECT}" \
-  --region "${GOOGLE_CLOUD_LOCATION}" \
-  --service-name "coding-agent-cli" \
-  --cpu 2 \
-  --memory 4Gi \
-  --concurrency 5 \
-  --min-instances 0 \
-  --max-instances 10 \
-  --env-vars "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=true,OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental,OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=EVENT_ONLY" \
-  --dry-run
+cp starter/terraform/terraform.tfvars.example starter/terraform/terraform.tfvars
 ```
 
-#### Key `agents-cli deploy` Flags & Gotchas
+Key lines to update:
 
-| Flag | Default / Behavior | Production Notes & Gotchas |
-|---|---|---|
-| `--cpu`, `--memory`, `--concurrency` | `--cpu 1 --memory 4Gi --concurrency 8` | Platform API defaults differ (`cpu=4`, `memory=4Gi`, `concurrency=9`, `min_instances=1`). Recommended concurrency: `2 * cpu + 1`. |
-| `--min-instances`, `--max-instances` | `--min-instances 0 --max-instances 10` | Generated Terraform `service.tf` sets `min_instances = 1`. Platform hard bounds: `min_instances` `[0, 75]`, `max_instances` `[1, 1000]` (**`[1, 100]`** under VPC-SC or PSC-I). |
-| `--secrets` / `--update-secrets` | Secret Manager bindings (`ENV=secret:version`) | **CRITICAL:** On Cloud Run `--secrets` appends, whereas on **Agent Runtime `--secrets` replaces the entire secrets map**! Always use `--update-secrets` for incremental changes. |
-| `--agent-identity` / `--no-agent-identity` | Opts into/out of SPIFFE Agent Identity | When `--agent-identity` is enabled, `--service-account` is ignored. Required (and **immutable**) for Agent Gateway bindings and Semantic Governance ([Optional Lab 7](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md)). |
-| `--agent-gateway-egress`, `--agent-gateway-ingress` | Binds Agent Gateway | Supported on Agent Runtime with `--agent-identity` only. |
-| `--network-attachment`, `--dns-peering-*` | [Private Service Connect Interface (PSC-I)](https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/runtime/private-service-connect-interface) | Engines with PSC-I have **no default internet egress** even without VPC-SC (requires RFC 1918 proxy VM + Cloud NAT). |
-| `--key` | CMEK KMS key | **Create-only** on Agent Runtime (immutable after creation; single-region only). |
-| `--image` vs `--build-args` | Prebuilt image URI vs Dockerfile build args | Cannot combine `--image` with `--build-args`. |
-| `--no-wait`, `--status`, `--list` | Async deploy + polling | **Workshop Tip:** Agent Runtime deployments typically take **5–10 minutes**. Always use `--no-wait` and poll with `agents-cli deploy --status` every ~60 seconds. |
+```hcl
+project_id            = "YOUR_PROJECT_ID"
+project_number        = "YOUR_PROJECT_NUMBER"
+location              = "asia-southeast1"
+agent_image_uri       = "asia-southeast3-docker.pkg.dev/YOUR_PROJECT_ID/coding-agent-repo/coding-agent:v1"
+sandbox_template_name = "" # Paste Lab 2 template name for BYOC, or leave "" for shell mode
+api_key_value         = "replace-with-workshop-placeholder-value"
+```
 
-#### Reserved & Auto-Injected Environment Variables
-
-Never pass any of these **forbidden** environment variables in `--env-vars` or Terraform `deployment_spec.env`:
-- `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_QUOTA_PROJECT`, `GOOGLE_CLOUD_LOCATION`
-- `PORT`, `K_SERVICE`, `K_REVISION`, `K_CONFIGURATION`, `GOOGLE_APPLICATION_CREDENTIALS`
-- Avoid custom variables starting with the prefix `GOOGLE_CLOUD_AGENT_ENGINE` (except documented platform flags like `GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY`).
-
-Agent Runtime automatically injects `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, and `GOOGLE_CLOUD_AGENT_ENGINE_ID` into your container at startup.
-
-> [!TIP]
-> **Deploying Any of the 5 Lab 1 ADK Architectures Without Changing the Container Contract:**
-> Because `starter/coding_agent/agent.py` resolves `root_agent` dynamically via `build_root_agent()` and exposes `app = App(...)` (with `ResumabilityConfig(is_resumable=True)` and `GlobalInstructionPlugin` across `collaborative`, `graph`, `dynamic`, and **`agy_harness`** modes), `main.py` forwards `coding_agent.agent.app` via `AdkApp(app=adk_app)` whenever the installed `AdkApp` signature supports `app=` (falling back cleanly to `AdkApp(agent=root_agent)` — plus `plugins=...` if supported — on older SDKs). That means you can switch your deployed Coding Agent between `simple` (default), `collaborative`, `graph`, `dynamic`, and `agy_harness` purely through environment variables — pass `AGENT_ARCHITECTURE`, `AGY_EXECUTION_MODE`, `MAX_FIX_ROUNDS`, and `ENABLE_HITL_APPROVAL` via Terraform `deployment_spec.env` (or `agents-cli deploy --env-vars "AGENT_ARCHITECTURE=agy_harness,AGY_EXECUTION_MODE=local,MAX_FIX_ROUNDS=3"`) with **zero changes** to `starter/Dockerfile`, `starter/main.py`, or the Agent Runtime HTTP/NDJSON contract! *(Note: if you pin an older SDK build whose `AdkApp` only accepts `agent=`, pass `plugins` explicitly on `AdkApp` when deploying remote HITL or collaborative workflows. Keep `AGENT_ARCHITECTURE=simple` as the default for Labs 1–6 unless you intentionally want to benchmark a multi-agent/graph/`agy_harness` revision via canary traffic splitting in Step D2.)*
-
-*(Optional — if you want to deploy an imperative prototype engine right now before Part B, remove `--dry-run` and add `--no-wait`, then poll with `agents-cli deploy --status`. Otherwise proceed directly to Part B so Terraform owns the lifecycle cleanly.)*
+**Check it works:** `grep -E 'your-gcp-project-id|123456789012' starter/terraform/terraform.tfvars || echo "tfvars ready"` prints `tfvars ready`.
 
 ---
 
-## Part B: Declarative Production Deployment with Terraform (`starter/terraform/`)
+## Step 4: Finish the 5 `# TODO(lab-5)` Blocks in `starter/terraform/main.tf`
 
-Enterprise teams deploy Agent Runtime declaratively via Terraform so IAM bindings, Secret Manager versions, Artifact Registry permissions, and container specs move cleanly across dev, staging, and prod with zero drift.
+**File:** [starter/terraform/main.tf](../starter/terraform/main.tf) (5 `# TODO(lab-5)` blocks)
 
-### Step B0: Smoke-Test Locally (`make test-agent-local`) & Push via Cloud Build (`make push-agent` — Zero Local Docker!)
+Most of `main.tf` is already wired: the custom runtime SA (`coding-agent-runtime-sa`), Secret Manager secret, `deletion_policy = "FORCE"`, `class_methods`, OTel telemetry env vars, and `AGY_PROJECT_ID = var.project_id` (required because Agent Runtime injects your numeric project number into `GOOGLE_CLOUD_PROJECT`, which `agy` rejects). Complete the 5 `# TODO(lab-5)` blocks in order:
 
-Before running `terraform plan` or `terraform apply` with Path 1 (`container_spec`), verify `starter/main.py` locally with pure Python (**zero local Docker!**), then build and push the **Agent Runtime** container image (`coding-agent:v1`) remotely via **Cloud Build in Bangkok (`--region=asia-southeast3`)** into your unified `coding-agent-repo` Artifact Registry repository. *(Or jump to Option 2 below to deploy via `make pack-agent-source` + Terraform `source_code_spec` with **zero Docker AND zero Artifact Registry push**!)*
-
-> [!IMPORTANT]
-> **Two Completely Separate Images in `coding-agent-repo`:**
-> - **Lab 2 Untrusted Sandbox (`starter/sandbox_image/` -> `coding-sandbox:v1`, `SANDBOX_IMAGE_URI`):** Runs untrusted LLM-generated commands via `/exec` inside gVisor with zero IAM roles. Pulled by **`gcp-sa-vertex-sandbox`**.
-> - **Lab 5 Trusted Agent Runtime (`starter/Dockerfile`, `starter/main.py`, `starter/requirements.txt`, `starter/coding_agent/`, `starter/skills_to_register/` -> `coding-agent:v1`, `AGENT_IMAGE_URI`):** Packages your complete Labs 1–4 Coding Agent (ADK 2.0 + Managed Sandbox adapters + Sessions/Memory/OTel/Feedback + Skills & Agent Registry, including bundled local skill fallback) behind the trusted FastAPI/ADK HTTP server implementing `GET /`, `POST /api/reasoning_engine`, and `POST /api/stream_reasoning_engine` on `0.0.0.0:8080`. Pulled by **`gcp-sa-aiplatform-re`**.
-
-1. Inspect the three runtime server files at the root of `starter/`:
-   - [`starter/Dockerfile`](../starter/Dockerfile) — Non-root (`USER appuser`) Python 3.11+ container packaging `main.py`, `requirements.txt`, the complete `coding_agent/` package, `skills_to_register/` (for Lab 4 local skill fallback parity), **and opt-in `/usr/local/bin/agy` (`ARG INSTALL_AGY_CLI=true`)** installed via the official static Go script — built remotely in Bangkok Cloud Build (`make push-agent`) or Agent Runtime `source_code_spec` (`make pack-agent-source`) with **zero local Docker**, starting Uvicorn on `0.0.0.0:8080`. *(Benign build log note: `agy_install.sh --dir /usr/local/bin` installs the working binary at `/usr/local/bin/agy` with mode `0755` for `appuser` even though its internal self-install step may also log `/root/.local/bin/agy`.)*
-   - [`starter/main.py`](../starter/main.py) — FastAPI/ADK HTTP adapter implementing `GET /` (`200 OK`), `POST /api/reasoning_engine` (JSON), and `POST /api/stream_reasoning_engine` (NDJSON) — contains **3 `# TODO(lab-5)` blocks** (`get_runtime_app()`, `query_endpoint()`, `stream_query_endpoint()`).
-   - [`starter/requirements.txt`](../starter/requirements.txt) — Pinned runtime dependencies (including **`google-genai>=2.34.0`** for Gemini 4 1M-token automatic long decodes) shared by both Option 1 (`container_spec`) and Option 2 (`source_code_spec`).
-
-> [!CAUTION]
-> **Agent Runtime `agy` Authentication, Numeric Project ID Trap & Enterprise ToS Boundary (`AGY_ADC_AUTH=true` + `AGY_PROJECT_ID`):**
-> - Inside the deployed Agent Runtime container, `/usr/local/bin/agy` runs as non-root `appuser` authenticated **exclusively via `AGY_ADC_AUTH=true`** backed by the runtime's dedicated least-privilege Custom Service Account (`coding-agent-runtime-sa`), with `AGY_CLI_DISABLE_AUTO_UPDATE=true` and `GOOGLE_CLOUD_LOCATION=global` scoped per `agy` subprocess invocation (preserving Agent Runtime's own auto-injected `GOOGLE_CLOUD_LOCATION=asia-southeast1` for Sessions, Memory Bank & Sandboxes!).
-> - **CRITICAL Live Runtime Gotcha (`AGY_PROJECT_ID`):** Agent Runtime auto-injects your **numeric project number** into `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_QUOTA_PROJECT` (and its GCE metadata server returns an internal Google tenant project `...-tp`), whereas `agy 1.5.15` **rejects numeric project IDs with exit code `3` (`invalid project ID: "<PROJECT_NUMBER>"`)**! Because `GOOGLE_CLOUD_PROJECT` is a reserved env var in `deployment_spec.env`, Terraform injects the non-reserved **`AGY_PROJECT_ID = var.project_id`** (your string project ID), and `build_local_agy_env()` passes that non-numeric ID as `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_QUOTA_PROJECT` strictly inside `agy` subprocesses!
-> - **Air-Gapped BYOC Split:** When `SANDBOX_MODE=byoc` runs air-gapped (`internet_access=false`), `AGY_EXECUTION_MODE=local` (or `auto` with `AGY_ADC_AUTH=true` and no BYOC API key override) runs `agy` in the trusted Agent Runtime under Custom SA ADC while routing untrusted `pytest`/`ruff`/`bandit` into the air-gapped BYOC gVisor sandbox.
-> - **NEVER** proxy, copy, or relay a developer's personal `agy` OAuth credentials inside a shared or multi-tenant Agent Runtime! Use Custom SA ADC (`AGY_ADC_AUTH=true`) or native ADK 2.0 `LlmAgent` / `ManagedAgent` / `google-antigravity` SDK.
-
-2. Complete the 3 `# TODO(lab-5)` blocks in [`starter/main.py`](../starter/main.py) **before** building the image (compare with [`solution/main.py`](../solution/main.py) if you get stuck):
-
-   ```python
-   @functools.lru_cache(maxsize=1)
-   def get_runtime_app() -> Any:
-       from coding_agent.agent import app as adk_app
-       from coding_agent.agent import root_agent
-
-       try:
-           from agentplatform.frameworks import AdkApp
-       except ImportError:
-           from vertexai.agent_engines import AdkApp
-
-       # CRITICAL ORDERING GUARD: Keep this pop() AFTER importing `coding_agent.agent`
-       # (which may load `.env`) and BEFORE instantiating `AdkApp` / calling `set_up()`!
-       # `AdkApp.set_up()` checks `"GOOGLE_CLOUD_AGENT_ENGINE_ID" in os.environ` (truthy
-       # even on `""`), which raises `ValueError: agent_engine_id is required for
-       # VertexAiMemoryBankService.` during local smoke tests when exported as empty/whitespace.
-       if not os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID", "").strip():
-           os.environ.pop("GOOGLE_CLOUD_AGENT_ENGINE_ID", None)
-
-       init_params = inspect.signature(AdkApp.__init__).parameters
-       if "app" in init_params:
-           runtime_app = AdkApp(app=adk_app)
-       else:
-           kwargs: dict[str, Any] = {"agent": root_agent}
-           app_plugins = getattr(adk_app, "plugins", None)
-           if app_plugins and "plugins" in init_params:
-               kwargs["plugins"] = list(app_plugins)
-           runtime_app = AdkApp(**kwargs)
-
-       setup_fn = getattr(runtime_app, "set_up", None)
-       if callable(setup_fn):
-           setup_fn()
-       return runtime_app
-   ```
-
-   > [!WARNING]
-   > **FastAPI `0.163.1` Strict Content-Type Gotcha on `:query` Proxy Requests:**
-   > When Vertex AI Agent Runtime proxies `:query` / `:streamQuery` calls to `POST /api/reasoning_engine` and `POST /api/stream_reasoning_engine`, declaring `request: QueryRequest` directly causes FastAPI `0.163.1`'s strict content-type body parser to hand Pydantic a raw JSON string, failing live `:query` calls with **HTTP 400/422** (`model_attributes_type: Input should be a valid dictionary or object to extract fields from`). Both `starter/main.py` and `solution/main.py` pre-fill `await _parse_query_request(request)` (reading raw `await request.body()`, unwrapping once if double-encoded, and validating via `QueryRequest.model_validate(...)`) — call it directly from both endpoints!
-
-   ```python
-   @app.post("/api/reasoning_engine")
-   async def query_endpoint(request: Request) -> responses.JSONResponse:
-       """Serve unary and async ``class_method`` invocations (``:query``)."""
-       query_req = await _parse_query_request(request)
-       runtime_app = get_runtime_app()
-       method = _resolve_public_method(runtime_app, query_req.class_method)
-       if method is None:
-           return responses.JSONResponse(
-               status_code=400,
-               content={"error": f"Method {query_req.class_method!r} not found on agent"},
-           )
-
-       output = await _invoke_method(method, query_req.input or {})
-       try:
-           serialized = encoders.jsonable_encoder({"output": output})
-       except ValueError:
-           logger.exception("Failed to JSON-encode unary response for %s", query_req.class_method)
-           raise
-       return responses.JSONResponse(content=serialized)
-
-
-   @app.post("/api/stream_reasoning_engine")
-   async def stream_query_endpoint(request: Request) -> responses.StreamingResponse:
-       """Serve streaming ``class_method`` invocations (``:streamQuery?alt=sse``) as NDJSON."""
-       query_req = await _parse_query_request(request)
-       runtime_app = get_runtime_app()
-       method = _resolve_public_method(runtime_app, query_req.class_method)
-       if method is None:
-           return responses.StreamingResponse(
-               content=iter(
-                   [json.dumps({"error": f"Method {query_req.class_method!r} not found"}) + "\n"]
-               ),
-               status_code=400,
-               media_type="application/json",
-           )
-
-       output = await _invoke_method(method, query_req.input or {})
-       return responses.StreamingResponse(
-           content=_ndjson_stream(output),
-           media_type="application/json",
-       )
-   ```
-
-3. Run the pure-Python local FastAPI smoke test (**zero Docker!**), then build and push `AGENT_IMAGE_URI` to `coding-agent-repo` remotely via **Cloud Build in Bangkok (`--region=asia-southeast3`)**:
-
-   ```bash
-   source .env
-
-   # 1. Pure-Python local FastAPI/Uvicorn smoke test (verifies BOTH GET / -> 200 {"status":"ok"}
-   #    AND POST /api/reasoning_engine with and without Content-Type: application/json — ZERO Docker!)
-   make test-agent-local
-
-   # 2. Aim for Bangkok (asia-southeast3) first for Artifact Registry & Cloud Build.
-   #    Empirically verified: Singapore (asia-southeast1) Agent Runtime pulls cleanly from
-   #    Bangkok Artifact Registry (`asia-southeast3-docker.pkg.dev`) — no second AR repo needed!
-   export AR_LOCATION="${AR_LOCATION:-asia-southeast3}"
-   export BUILD_LOCATION="${BUILD_LOCATION:-asia-southeast3}"
-
-   # Ensure coding-agent-repo exists (already created in Lab 2)
-   gcloud artifacts repositories create coding-agent-repo \
-     --repository-format=docker \
-     --location="${AR_LOCATION}" \
-     --project="${GOOGLE_CLOUD_PROJECT}" || true
-
-   export AGENT_IMAGE_URI="${AR_LOCATION}-docker.pkg.dev/${GOOGLE_CLOUD_PROJECT}/coding-agent-repo/coding-agent:v1"
-   echo "AGENT_IMAGE_URI=${AGENT_IMAGE_URI}"
-
-   # 3. Build and push the Agent Runtime BYOC image remotely via Cloud Build (ZERO local Docker required!)
-   make push-agent
-   # Equivalent direct Cloud Build command from the repository root:
-   # gcloud builds submit starter --region="${BUILD_LOCATION}" --tag="${AGENT_IMAGE_URI}" --project="${GOOGLE_CLOUD_PROJECT}"
-   ```
-
-4. Save `AGENT_IMAGE_URI` into `.env` so `starter/terraform/terraform.tfvars` and downstream verification scripts pick it up automatically.
-
-### Step B1: Inspect the Starter Terraform Layout
-
-Review the files in `starter/terraform/`:
-- [`starter/terraform/versions.tf`](../starter/terraform/versions.tf) — Terraform and Google provider constraints (`hashicorp/google >= 6.0.0` and `hashicorp/google-beta >= 6.0.0`, required for `spec.container_spec`; note upstream `use-terraform` docs still print `>= 5.28.0`)
-- [`starter/terraform/variables.tf`](../starter/terraform/variables.tf) — Input variables (`project_id`, `project_number`, `location` defaulting to `asia-southeast1` Singapore fallback, `agent_image_uri` in Bangkok `asia-southeast3-docker.pkg.dev`, `sandbox_template_name`, Frontier Gemini 4 & `agy` variables **`model_name`** [`"gemini-4-hydrogen"`], **`reasoning_model_name`** [`"gemini-4-neon"`], **`model_location`** [`"global"`], **`thinking_level`** [`"MEDIUM"`], **`agy_execution_mode`** [`"auto"`], `api_key_value`, plus optional Lab 3/4 feature variables `enable_memory_bank`, `enable_skill_registry`, `skill_registry_location` defaulting to `us-central1`, `agent_registry_location` defaulting to `asia-southeast3`, and `agent_registry_skills_location` defaulting to `global`). *(Note: `repository_name` and `sandbox_image_uri` are also declared in `variables.tf` / `terraform.tfvars.example` as reference inputs alongside `agent_image_uri` — they do not need to be wired directly into `google_vertex_ai_reasoning_engine` because Lab 2 already binds `sandbox_image_uri` into `sandbox_template_name`.)*
-- [`starter/terraform/main.tf`](../starter/terraform/main.tf) — Service accounts, Secret Manager, dual service agent IAM bindings, and `google_vertex_ai_reasoning_engine` (contains `# TODO(lab-5)` markers)
-- [`starter/terraform/outputs.tf`](../starter/terraform/outputs.tf) — Exports `reasoning_engine_id`, `reasoning_engine_resource_name`, `agent_runtime_service_account`, and `api_key_secret_id`
-- [`starter/terraform/terraform.tfvars.example`](../starter/terraform/terraform.tfvars.example) — Sample variables template
-
-### Step B2: Understand the Service Agent IAM Matrix & `depends_on` Race Condition
-
-> [!CAUTION]
-> **Prevent `IMAGE_PULL_BACKOFF` and Secret-Fetch Races:** Container provisioning on Agent Runtime will race ahead of IAM propagation if you do not explicitly bind Google-managed service agents **and** list those IAM resources in `depends_on = [...]` on `google_vertex_ai_reasoning_engine`.
-
-| Service Agent / Principal | Exact Email Format | Role Required | When Mandatory in `depends_on` |
-|---|---|---|---|
-| **Agent Runtime Service Agent** | `service-${var.project_number}@gcp-sa-aiplatform-re.iam.gserviceaccount.com` | `roles/artifactregistry.reader` | **Always** for BYOC `container_spec` pulling from same-project Artifact Registry. Also requires `roles/cloudkms.cryptoKeyEncrypterDecrypter` for CMEK and `roles/storage.objectCreator` for async query job output buckets. |
-| **Agent Platform Service Agent** | `service-${var.project_number}@gcp-sa-aiplatform.iam.gserviceaccount.com` | `roles/secretmanager.secretAccessor` / `roles/artifactregistry.reader` / `roles/iam.serviceAccountTokenCreator` | Required when: (1) using `secret_env` with `identity_type = "AGENT_IDENTITY"` (Optional Lab 7); (2) pulling a BYOC image from a **cross-project** Artifact Registry repo; (3) using a cross-project custom SA; or (4) binding a cross-project Agent Gateway. |
-| **Agent Sandbox Service Agent** *(Lab 2)* | `service-${var.project_number}@gcp-sa-vertex-sandbox.iam.gserviceaccount.com` | `roles/artifactregistry.reader` | Required whenever the Coding Agent provisions BYOC Managed Sandboxes (`SandboxEnvironmentTemplate`). |
-| **Dedicated Custom Runtime SA** *(Default)* | `${google_service_account.agent_runtime_sa.email}` | `roles/secretmanager.secretAccessor`, `roles/aiplatform.user`, **`roles/aiplatform.memoryUser`** (Lab 3 Memory Bank), conditional **`roles/agentregistry.viewer`** (Lab 4 Skill Registry when `enable_skill_registry = true`), `roles/logging.logWriter`, `roles/cloudtrace.agent`, `roles/telemetry.tracesWriter`, `roles/monitoring.metricWriter`, plus self `roles/iam.serviceAccountTokenCreator` (for BYOC `generate_access_token()`) | Default friction-free runtime identity (`service_account = ...`). Deployer also needs `roles/iam.serviceAccountUser` on this SA. |
-
-### Step B3: Complete `# TODO(lab-5)` in `starter/terraform/main.tf`
-
-Open [`starter/terraform/main.tf`](../starter/terraform/main.tf) and complete the `# TODO(lab-5)` sections to match the verified production configuration below (compare with [`solution/terraform/main.tf`](../solution/terraform/main.tf) if you get stuck).
+1. **`runtime_sa_roles`:** Add `"roles/aiplatform.memoryUser"` so the runtime SA can access Lab 3 Memory Bank when enabled.
+2. **Service-agent Artifact Registry IAM:** Uncomment `re_service_agent_ar_reader` (`gcp-sa-aiplatform-re`) and `sandbox_service_agent_ar_reader` (`gcp-sa-vertex-sandbox`) so Google's service agents can pull your runtime and sandbox images.
+3. **`container_spec`:** Uncomment `container_spec { image_uri = var.agent_image_uri }` inside `google_vertex_ai_reasoning_engine.coding_agent` (`class_methods = jsonencode(local.adk_class_methods)` is already uncommented right below `deployment_spec`).
+4. **`deployment_spec`:** Uncomment the sandbox env vars (`SANDBOX_MODE`, `dynamic "env"` for `SANDBOX_TEMPLATE_NAME`, `SANDBOX_SERVICE_ACCOUNT_EMAIL`), Lab 3/4 flags (`ENABLE_MEMORY_BANK`, `ENABLE_SKILL_REGISTRY`, and the three `dynamic "env"` registry location blocks), and `secret_env` (`CODING_AGENT_API_KEY`).
+5. **`depends_on`:** Expand `depends_on` with all 6 remaining IAM bindings (`re_service_agent_ar_reader`, `sandbox_service_agent_ar_reader`, `runtime_sa_roles`, `runtime_sa_self_token_creator`, `runtime_sa_secret_accessor`, `platform_service_agent_secret_accessor`) alongside `runtime_sa_agentregistry_viewer` and `coding_agent_api_key_v1`. Without this, container pulls can race IAM propagation and fail with `IMAGE_PULL_BACKOFF`.
 
 > [!WARNING]
-> **Verified Terraform Schema Attribute (`region`, NOT `location`):** One upstream example in the official docs accidentally prints `location = var.location` on `google_vertex_ai_reasoning_engine`. The actual Terraform provider schema attribute is **`region = var.location`**. Always use `region`.
+> **Two Terraform schema gotchas:** `google_vertex_ai_reasoning_engine` uses **`region = var.location`** (not `location`), and Vertex AI rejects empty-string env values with HTTP 400. Always keep optional vars like `SANDBOX_TEMPLATE_NAME` wrapped in `dynamic "env"` blocks.
 
-#### 1. Dedicated Runtime Service Account, Secret Manager & Service Agent IAM
+<details>
+<summary>Stuck? Peek at the 5 completed HCL blocks</summary>
 
 ```hcl
-# Dedicated least-privilege Runtime Service Account (friction-free default for Labs 5-6)
-resource "google_service_account" "agent_runtime_sa" {
-  account_id   = "coding-agent-runtime-sa"
-  display_name = "Coding Agent Runtime Identity"
-  project      = var.project_id
-}
-
-resource "google_project_iam_member" "runtime_sa_roles" {
+# 1. Add "roles/aiplatform.memoryUser" inside google_project_iam_member.runtime_sa_roles
   for_each = toset([
-    "roles/aiplatform.user",
-    "roles/aiplatform.memoryUser",
-    "roles/logging.logWriter",
-    "roles/cloudtrace.agent",
-    "roles/telemetry.tracesWriter",
-    "roles/monitoring.metricWriter",
+    "roles/aiplatform.user", "roles/aiplatform.memoryUser", "roles/logging.logWriter",
+    "roles/cloudtrace.agent", "roles/telemetry.tracesWriter", "roles/monitoring.metricWriter",
   ])
-  project = var.project_id
-  role    = each.value
-  member  = "serviceAccount:${google_service_account.agent_runtime_sa.email}"
-}
 
-# Grant Agent Registry read access when Lab 4 Skill Registry integration is enabled
-# so the Custom SA can read from `agentregistry.googleapis.com`.
-resource "google_project_iam_member" "runtime_sa_agentregistry_viewer" {
-  count = var.enable_skill_registry ? 1 : 0
-
-  project = var.project_id
-  role    = "roles/agentregistry.viewer"
-  member  = "serviceAccount:${google_service_account.agent_runtime_sa.email}"
-}
-
-# Allow runtime SA to call sandboxes.generate_access_token(service_account_email=...) in BYOC mode
-resource "google_service_account_iam_member" "runtime_sa_self_token_creator" {
-  service_account_id = google_service_account.agent_runtime_sa.name
-  role               = "roles/iam.serviceAccountTokenCreator"
-  member             = "serviceAccount:${google_service_account.agent_runtime_sa.email}"
-}
-
-# Secret Manager secret + version injected via deployment_spec.secret_env
-resource "google_secret_manager_secret" "coding_agent_api_key" {
-  secret_id = "coding-agent-api-key"
-  project   = var.project_id
-  replication {
-    auto {}
-  }
-}
-
-resource "google_secret_manager_secret_version" "coding_agent_api_key_v1" {
-  secret      = google_secret_manager_secret.coding_agent_api_key.id
-  secret_data = var.api_key_value
-}
-
-resource "google_secret_manager_secret_iam_member" "runtime_sa_secret_accessor" {
-  secret_id = google_secret_manager_secret.coding_agent_api_key.id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.agent_runtime_sa.email}"
-}
-
-# SERVICE AGENT #1: Agent Runtime Service Agent (pulls BYOC container from AR)
+# 2. Uncomment both Artifact Registry service-agent bindings
 resource "google_project_iam_member" "re_service_agent_ar_reader" {
   project = var.project_id
   role    = "roles/artifactregistry.reader"
   member  = "serviceAccount:service-${var.project_number}@gcp-sa-aiplatform-re.iam.gserviceaccount.com"
 }
-
-# SERVICE AGENT #2: Agent Platform Service Agent (required for secret_env with AGENT_IDENTITY / cross-project AR)
-resource "google_secret_manager_secret_iam_member" "platform_service_agent_secret_accessor" {
-  secret_id = google_secret_manager_secret.coding_agent_api_key.id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:service-${var.project_number}@gcp-sa-aiplatform.iam.gserviceaccount.com"
-}
-
-# SERVICE AGENT #3: Agent Sandbox Service Agent (pulls BYOC sandbox image from Lab 2)
 resource "google_project_iam_member" "sandbox_service_agent_ar_reader" {
   project = var.project_id
   role    = "roles/artifactregistry.reader"
   member  = "serviceAccount:service-${var.project_number}@gcp-sa-vertex-sandbox.iam.gserviceaccount.com"
 }
-```
 
-#### 2. `google_vertex_ai_reasoning_engine` — Option 1: BYOC Prebuilt Container (`container_spec`)
-
-Wire `deletion_policy = "FORCE"` (prevents `terraform destroy` HTTP 400 failures once child sessions/memories exist), `class_methods`, `container_spec`, `deployment_spec` (with telemetry env vars and `secret_env`), `service_account` (or `identity_type = "AGENT_IDENTITY"`), and **`depends_on`**:
-
-```hcl
-locals {
-  resolved_sandbox_mode = var.sandbox_mode != "" ? var.sandbox_mode : (var.sandbox_template_name != "" ? "byoc" : "shell")
-
-  adk_class_methods = [
-    { "name" = "get_session", "api_mode" = "" },
-    { "name" = "list_sessions", "api_mode" = "" },
-    { "name" = "create_session", "api_mode" = "" },
-    { "name" = "delete_session", "api_mode" = "" },
-    { "name" = "async_get_session", "api_mode" = "async" },
-    { "name" = "async_list_sessions", "api_mode" = "async" },
-    { "name" = "async_create_session", "api_mode" = "async" },
-    { "name" = "async_delete_session", "api_mode" = "async" },
-    { "name" = "async_add_session_to_memory", "api_mode" = "async" },
-    { "name" = "async_search_memory", "api_mode" = "async" },
-    { "name" = "stream_query", "api_mode" = "stream" },
-    { "name" = "async_stream_query", "api_mode" = "async_stream" },
-    { "name" = "streaming_agent_run_with_events", "api_mode" = "async_stream" }
-  ]
-}
-
-resource "google_vertex_ai_reasoning_engine" "coding_agent" {
-  display_name = var.display_name
-  description  = "Enterprise ADK Coding Agent deployed declaratively with Terraform BYOC container_spec"
-  project      = var.project_id
-  region       = var.location
-  # Prevents `terraform destroy` from failing with HTTP 400 ("The ReasoningEngine contains
-  # child resources: sessions") once live sessions or memories exist on the runtime.
-  deletion_policy = "FORCE"
-
-  spec {
-    agent_framework = "google-adk"
-    # Pass ONLY the email (NOT a full projects/... URI).
-    # Default friction-free identity for Labs 5-6; see Lab 7 (Optional) to upgrade
-    # to immutable SPIFFE `identity_type = "AGENT_IDENTITY"` + Agent Gateway.
-    service_account = google_service_account.agent_runtime_sa.email
-
+# 3. Uncomment container_spec inside spec {}
     container_spec {
       image_uri = var.agent_image_uri
     }
 
-    deployment_spec {
-      env {
-        name  = "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY"
-        value = "true"
-      }
-      env {
-        name  = "OTEL_SEMCONV_STABILITY_OPT_IN"
-        value = "gen_ai_latest_experimental"
-      }
-      env {
-        name  = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
-        value = "EVENT_ONLY"
-      }
-      env {
-        name  = "GOOGLE_GENAI_USE_ENTERPRISE"
-        value = "TRUE"
-      }
-      env {
-        name  = "MODEL_NAME"
-        value = var.model_name # Default "gemini-4-hydrogen" (or "gemini-4-argon" with model_location="asia-southeast1")
-      }
-      env {
-        name  = "REASONING_MODEL_NAME"
-        value = var.reasoning_model_name # Default "gemini-4-neon"
-      }
-      env {
-        name  = "MODEL_LOCATION"
-        value = var.model_location # Default "global" (decoupled from auto-injected GOOGLE_CLOUD_LOCATION=asia-southeast1)
-      }
-      env {
-        name  = "THINKING_LEVEL"
-        value = upper(var.thinking_level) # Strictly LOW | MEDIUM | HIGH | XHIGH
-      }
-      env {
-        name  = "AGY_EXECUTION_MODE"
-        value = var.agy_execution_mode # auto | local | sandbox
-      }
-      env {
-        name  = "AGY_PROJECT_ID"
-        value = var.project_id # Non-numeric string project ID for `agy` subprocesses (overrides Agent Runtime's numeric GOOGLE_CLOUD_PROJECT!)
-      }
-      env {
-        name  = "AGY_ADC_AUTH"
-        value = "true" # Uses Custom SA ADC (`coding-agent-runtime-sa`), never personal OAuth!
-      }
-      env {
-        name  = "AGY_CLI_DISABLE_AUTO_UPDATE"
-        value = "true"
-      }
+# 4. Uncomment sandbox/registry env vars + secret_env inside deployment_spec {}
       env {
         name  = "SANDBOX_MODE"
         value = local.resolved_sandbox_mode
       }
-      # CRITICAL: Vertex AI rejects empty-string env values with HTTP 400
-      # (`reasoning_engine.spec.deployment_spec.env[...].value: Required field is not set`).
-      # Always gate optional variables like SANDBOX_TEMPLATE_NAME behind `dynamic "env"`.
       dynamic "env" {
         for_each = var.sandbox_template_name != "" ? [1] : []
         content {
@@ -535,8 +199,6 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
         name  = "SANDBOX_SERVICE_ACCOUNT_EMAIL"
         value = google_service_account.agent_runtime_sa.email
       }
-      # Optional Lab 3 (Memory Bank) & Lab 4 (Skill Registry) toggles
-      # (ENABLE_TELEMETRY_CALLBACKS defaults to true in coding_agent/config.py)
       env {
         name  = "ENABLE_MEMORY_BANK"
         value = tostring(var.enable_memory_bank)
@@ -549,21 +211,21 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
         for_each = var.skill_registry_location != "" ? [1] : []
         content {
           name  = "SKILL_REGISTRY_LOCATION"
-          value = var.skill_registry_location # Default "us-central1" (3-region Preview)
+          value = var.skill_registry_location
         }
       }
       dynamic "env" {
         for_each = var.agent_registry_location != "" ? [1] : []
         content {
           name  = "AGENT_REGISTRY_LOCATION"
-          value = var.agent_registry_location # Default "asia-southeast3" (Bangkok A2A/MCP discovery)
+          value = var.agent_registry_location
         }
       }
       dynamic "env" {
         for_each = var.agent_registry_skills_location != "" ? [1] : []
         content {
           name  = "AGENT_REGISTRY_SKILLS_LOCATION"
-          value = var.agent_registry_skills_location # Default "global" (standalone skills)
+          value = var.agent_registry_skills_location
         }
       }
       secret_env {
@@ -573,12 +235,8 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
           version = "latest"
         }
       }
-    }
 
-    class_methods = jsonencode(local.adk_class_methods)
-  }
-
-  # CRITICAL: Prevents IMAGE_PULL_BACKOFF and Secret Manager deploy-time races
+# 5. Expand depends_on on google_vertex_ai_reasoning_engine.coding_agent
   depends_on = [
     google_project_iam_member.re_service_agent_ar_reader,
     google_project_iam_member.sandbox_service_agent_ar_reader,
@@ -589,365 +247,159 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
     google_secret_manager_secret_iam_member.platform_service_agent_secret_accessor,
     google_secret_manager_secret_version.coding_agent_api_key_v1,
   ]
-}
 ```
 
-> [!TIP]
-> **Friction-Free Custom SA Now — SPIFFE `AGENT_IDENTITY` + Agent Gateway in Optional Lab 7:** Keep the default dedicated Custom SA (`coding-agent-runtime-sa`) here so Labs 5–6 deploy and verify with zero gateway/org-policy friction. When you are ready to harden your deployment with immutable **SPIFFE `AGENT_IDENTITY`** (`provider = google-beta`, `identity_type = "AGENT_IDENTITY"`) and **Agent Gateway** (Model Armor, IAM UAPs, and Semantic Governance NLC policies), follow the guided Terraform upgrade path in [Lab 7 (Optional): Enterprise Security & Governance Hardening](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md). Remember: `identity_type` is **immutable** at creation time, so Lab 7 provisions a fresh SPIFFE-enabled runtime without disturbing your standalone state instance!
+Full reference file: [`solution/terraform/main.tf`](../solution/terraform/main.tf).
 
-#### 3. Path 2 (Zero-Docker AND Zero-Artifact-Registry Alternative): `make pack-agent-source` + `source_code_spec` + Empty `image_spec {}`
+</details>
 
-When you want declarative Terraform IaC with **zero local Docker AND zero Artifact Registry push step**, Agent Runtime can build directly from a `.tar.gz` archive containing a `Dockerfile` (max **8 MB** archive, no GCS bucket or AR push required):
-
-> [!CAUTION]
-> **Root-of-Tar Archive Trap (Very Common Failure!):** `Dockerfile`, `main.py`, and `requirements.txt` **MUST** reside directly at the **root level** of the `.tar.gz` archive (`./Dockerfile`), **NOT** nested inside a top-level folder (`my-agent/Dockerfile`)! Cloud Build unpacks the tarball into the build workspace root and immediately fails if `./Dockerfile` is not found at level 0.
->
-> Use **`make pack-agent-source`** from the repository root (which packages level-0 entries automatically and validates the 8 MB limit), or archive manually after `cd`-ing into `starter/`:
-> ```bash
-> # Recommended one-command packager (guarantees level-0 ./Dockerfile and <= 8 MB archive):
-> make pack-agent-source
->
-> # Equivalent manual packaging command:
-> # cd starter && tar -czvf terraform/coding_agent_source.tar.gz Dockerfile main.py requirements.txt coding_agent/ skills_to_register/
-> # Verify root-level entries (must NOT show a leading folder prefix for Dockerfile):
-> tar -tzvf starter/terraform/coding_agent_source.tar.gz | head -n 5
-> ```
-
-```hcl
-# Optional alternative to container_spec (documented in starter/terraform/main.tf)
-# spec {
-#   agent_framework = "google-adk"
-#   source_code_spec {
-#     inline_source {
-#       source_archive = filebase64("${path.module}/coding_agent_source.tar.gz")
-#     }
-#     # Empty image_spec {} instructs Agent Runtime to build using ./Dockerfile
-#     image_spec {}
-#   }
-#   class_methods = jsonencode(local.adk_class_methods)
-# }
-```
-
-#### 4. Canonical `starter/terraform/outputs.tf` (`.id` vs. `.name` Trap!)
-
-> [!CAUTION]
-> **Verified `hashicorp/google` `.id` vs. `.name` Output Trap (and Upstream `element(..., -1)` Bug):** In the `google_vertex_ai_reasoning_engine` Terraform provider schema, **`.id`** returns the **full resource path** `projects/{PROJECT}/locations/{LOCATION}/reasoningEngines/{NUMERIC_ID}`, whereas **`.name`** returns only the **short numeric ID** (`use-terraform` docs accidentally swap those two descriptions!). Exporting `.name` as `reasoning_engine_resource_name` breaks downstream REST URLs (`https://.../${REASONING_ENGINE_NAME}`), Lab 6 evaluation, and Online Monitors. Also note that upstream [`agent-identity`](https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/runtime/agent-identity) docs show `element(split("/", ...id), -1)`, which fails at runtime because Terraform's `element()` rejects negative indices — always use `reverse(split("/", ...))[0]` in [`starter/terraform/outputs.tf`](../starter/terraform/outputs.tf):
-
-```hcl
-locals {
-  reasoning_engine_short_id = reverse(split("/", google_vertex_ai_reasoning_engine.coding_agent.id))[0]
-}
-
-output "reasoning_engine_id" {
-  value       = local.reasoning_engine_short_id
-  description = "Short numeric ID of the deployed Agent Runtime instance"
-}
-
-output "reasoning_engine_resource_name" {
-  value       = "projects/${var.project_id}/locations/${var.location}/reasoningEngines/${local.reasoning_engine_short_id}"
-  description = "Canonical full resource name (projects/.../locations/.../reasoningEngines/ID)"
-}
-
-output "agent_runtime_service_account" {
-  value       = google_service_account.agent_runtime_sa.email
-  description = "Dedicated custom runtime service account email"
-}
-
-output "api_key_secret_id" {
-  value       = google_secret_manager_secret.coding_agent_api_key.secret_id
-  description = "Secret Manager secret ID bound to CODING_AGENT_API_KEY"
-}
-```
-
-### Step B4: Plan, Apply, and Smoke-Test Your Deployed Agent
-
-1. Create your `terraform.tfvars` from the template (Bangkok `asia-southeast3` default for AR & Agent Registry A2A/MCP, falling back to Singapore `asia-southeast1` only for Agent Runtime):
-
-   ```bash
-   cp starter/terraform/terraform.tfvars.example starter/terraform/terraform.tfvars
-   ```
-
-   Example `starter/terraform/terraform.tfvars` values:
-   ```hcl
-   project_id              = "YOUR_PROJECT_ID"
-   project_number          = "YOUR_PROJECT_NUMBER"
-   location                = "asia-southeast1"  # Singapore fallback (Agent Runtime not yet in Bangkok asia-southeast3)
-   repository_name         = "coding-agent-repo"
-   display_name            = "coding_agent_byoc_tf"
-   agent_image_uri         = "asia-southeast3-docker.pkg.dev/YOUR_PROJECT_ID/coding-agent-repo/coding-agent:v1"
-   sandbox_image_uri       = "asia-southeast3-docker.pkg.dev/YOUR_PROJECT_ID/coding-agent-repo/coding-sandbox:v1"
-   sandbox_template_name   = ""                 # Paste Lab 2 template name, or leave empty for SANDBOX_MODE=shell (omitted via dynamic "env")
-   sandbox_mode            = ""                 # Empty auto-selects "byoc" when sandbox_template_name is set, else "shell"
-   model_name              = "gemini-4-hydrogen"  # Or "gemini-4-argon" with model_location = "asia-southeast1" for strict regional residency
-   reasoning_model_name    = "gemini-4-neon"
-   model_location          = "global"             # Empirically verified HTTP 200 on global for Hydrogen/Neon
-   thinking_level          = "MEDIUM"             # Strictly LOW | MEDIUM | HIGH | XHIGH
-   agy_execution_mode      = "auto"               # auto | local | sandbox (uses AGY_ADC_AUTH=true on Runtime Custom SA)
-   api_key_value           = "replace-with-workshop-placeholder-value"
-   enable_memory_bank      = false              # Set true to enable live Lab 3 Memory Bank recall inside the runtime
-   enable_skill_registry   = false              # Set true to enable live Lab 4 GCPSkillRegistry (`global`, requires Step B3 `--target-state=active` skill)
-   skill_registry_location        = "us-central1"      # 3-region Vertex AI Skill Registry Preview
-   agent_registry_location        = "asia-southeast3"  # Bangkok default for A2A/MCP discovery
-   agent_registry_skills_location = "global"           # Standalone Agent Registry skills (`gcloud alpha`)
-   ```
-
-2. Format, validate, and plan:
-
-   ```bash
-   make tf-plan
-   # Equivalent direct commands:
-   # terraform -chdir=starter/terraform init
-   # terraform -chdir=starter/terraform fmt -check
-   # terraform -chdir=starter/terraform validate
-   # terraform -chdir=starter/terraform plan
-   ```
-
-3. Apply the configuration (allow **5–10 minutes** for container provisioning):
-
-   ```bash
-   make tf-apply
-   # Capture both the canonical full resource name and short numeric ID into your shell and .env:
-   export REASONING_ENGINE_NAME="$(terraform -chdir=starter/terraform output -raw reasoning_engine_resource_name)"
-   export REASONING_ENGINE_ID="$(terraform -chdir=starter/terraform output -raw reasoning_engine_id)"
-   echo "Deployed: ${REASONING_ENGINE_NAME} (ID=${REASONING_ENGINE_ID})"
-   ```
-
-   > [!IMPORTANT]
-   > **Choosing Your `REASONING_ENGINE_NAME` Binding After `terraform apply`:**
-   > You now have **two** Agent Platform instances in your project: the lightweight standalone instance from Labs 2–3 and the freshly deployed Terraform Agent Runtime. Choose the binding pattern that matches your goal:
-   > 1. **Unified Runtime Binding *(Recommended for Lab 6)*:** Update `REASONING_ENGINE_NAME` (and `REASONING_ENGINE_ID`) in `.env` to Terraform's output above. Sessions, Memory Bank, Feedback entries, Cloud Trace spans, and Lab 6 Online Evaluation Monitors all correlate together on your deployed runtime's single Cloud Console page.
-   > 2. **Decoupled Standalone State Instance *(Enterprise Pattern)*:** Keep Lab 2/3's standalone instance ID dedicated to Memory Bank and Managed Sessions (wired via `memory_service_builder` / explicit engine ID) while targeting Terraform's deployed `REASONING_ENGINE_NAME` for live inference — ensuring long-term user memories survive blue/green redeploys or [Lab 7 (Optional)](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md)'s immutable SPIFFE `AGENT_IDENTITY` upgrade!
-
-4. **Run the Verified Post-Deploy Smoke-Test Suite (Unary `:query`, Streaming `:streamQuery?alt=sse`, BYOC Sandbox, Skill Registry & Memory Bank):**
-
-   ```bash
-   # (a) Unary :query — create a Managed Session and capture SESSION_ID (verifies FastAPI /api/reasoning_engine + AdkApp)
-   SESSION_JSON=$(curl -sS -X POST \
-     -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-     -H "Content-Type: application/json; charset=utf-8" \
-     -d '{
-       "class_method": "create_session",
-       "input": {"user_id": "terraform_test_user"}
-     }' \
-     "https://${GOOGLE_CLOUD_LOCATION}-aiplatform.googleapis.com/v1/projects/${GOOGLE_CLOUD_PROJECT}/locations/${GOOGLE_CLOUD_LOCATION}/reasoningEngines/${REASONING_ENGINE_ID}:query")
-   echo "${SESSION_JSON}"
-   export SESSION_ID="$(echo "${SESSION_JSON}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["output"]["id"])')"
-
-   # (b) Streaming :streamQuery?alt=sse — verifies Gemini 4 (global) + BYOC/Shell Sandbox (asia-southeast1)
-   #     (and live GCPSkillRegistry list_skills/search_skills/load_skill if enable_skill_registry=true!)
-   curl -sS -X POST \
-     -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-     -H "Content-Type: application/json; charset=utf-8" \
-     -d '{
-       "class_method": "async_stream_query",
-       "input": {
-         "user_id": "terraform_test_user",
-         "session_id": "'"${SESSION_ID}"'",
-         "message": "Create calc.py with add(a, b) and test_calc.py, run pytest -q and ruff check, and summarize the verified test output."
-       }
-     }' \
-     "https://${GOOGLE_CLOUD_LOCATION}-aiplatform.googleapis.com/v1/projects/${GOOGLE_CLOUD_PROJECT}/locations/${GOOGLE_CLOUD_LOCATION}/reasoningEngines/${REASONING_ENGINE_ID}:streamQuery?alt=sse"
-   ```
-
-   *(Optional — if `enable_memory_bank = true`)* verify live Memory Bank consolidation & cross-session search via `:query`:
-   ```bash
-   # CRITICAL AdkApp signature note: `async_search_memory` accepts `(user_id, query)` ONLY
-   # (passing `app_name` raises TypeError!).
-   curl -sS -X POST \
-     -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-     -H "Content-Type: application/json; charset=utf-8" \
-     -d '{
-       "class_method": "async_search_memory",
-       "input": {
-         "user_id": "terraform_test_user",
-         "query": "coding conventions and pytest workflow"
-       }
-     }' \
-     "https://${GOOGLE_CLOUD_LOCATION}-aiplatform.googleapis.com/v1/projects/${GOOGLE_CLOUD_PROJECT}/locations/${GOOGLE_CLOUD_LOCATION}/reasoningEngines/${REASONING_ENGINE_ID}:query"
-   ```
-
-   *(Optional — when deploying `AGENT_ARCHITECTURE=agy_harness` with `AGY_EXECUTION_MODE=local` or `auto`)*: your container's baked `/usr/local/bin/agy` runs directly under `coding-agent-runtime-sa` ADC (`AGY_ADC_AUTH=true`) with `GOOGLE_CLOUD_PROJECT=${AGY_PROJECT_ID}`, `GOOGLE_CLOUD_QUOTA_PROJECT=${AGY_PROJECT_ID}`, and `GOOGLE_CLOUD_LOCATION=global` — verified live for both `agy models` and `agy -p ... --output-format stream-json --model gemini-4-hydrogen --effort medium [--sandbox]`!
-
----
-
-## Part C: The Agent Runtime Contract & Container Sizing
-
-When deploying BYOC containers (`container_spec` or `Dockerfile`), Agent Runtime acts as a managed control plane routing requests to your container over HTTP. Your container **must** satisfy this contract:
-
-| Contract Requirement | Specification |
-|---|---|
-| **Listening Address & Port** | Listen on **`0.0.0.0:8080`** (honoring `PORT` env var, default `8080`). |
-| **Health Probe** | Answer `GET /` with **`HTTP 200 OK`**. |
-| **Unary / Async Methods** (`api_mode`: `""` or `"async"`) | Routed to `POST /api/reasoning_engine` with JSON `{"class_method": "...", "input": {...}}`; return `200 OK` JSON `{"output": ...}`. |
-| **Streaming Methods** (`api_mode`: `"stream"` or `"async_stream"`) | Routed to `POST /api/stream_reasoning_engine`; return `200 OK` **NDJSON** (`{"output": ...}\n` per chunk), which the control plane converts to SSE. **Maximum stream duration: 15 minutes.** |
-| **Bidirectional Streaming** (`api_mode`: `"bidi_stream"`) | Routed to `POST /api/bidi_reasoning_engine` (requires `agent_server_mode: AgentServerMode.EXPERIMENTAL`; **maximum timeout: 10 minutes**). |
-| **Keep-Alive Probe (Preview)** | Default idle scale-down is **15 minutes (`900s`)**. Configure `keep_alive_probe` (`GET http_get.path`, polled every **10s** with **1s** timeout; `2xx` = busy, non-`2xx` such as `412` or 3 consecutive timeouts = idle; `max_seconds` in `[900, 3600]`, disables CPU throttling while active). Do **not** use reserved ports `15000, 15001, 15006, 15007, 15020, 15021`. Managed `AdkApp` accepts only `"keep_alive_probe": {}` (`3600s`; custom fields return `400 FAILED_PRECONDITION`). |
-| **Resource Limits & Scaling** | `cpu`: `1, 2, 4, 6, 8` (default `4`); `memory`: `1Gi`–`32Gi` (default `4Gi`); `min_instances`: `[0, 75]` (default `1`); `max_instances`: `[1, 1000]` (default `100`, capped at **`[1, 100]`** with VPC-SC or PSC-I); recommended `container_concurrency`: `2 * cpu + 1` (default `9`, or multiples of `9` such as `36` for async I/O-bound ADK — see [Optimize and Scale](https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/runtime/optimize-and-scale)). |
-| **Agent Gateway BYOC CA Trust** | If binding a BYOC container to an Agent Gateway ([Agent Gateway Runtime Deploy](https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/runtime/agent-gateway-runtime-deploy)), bake `AGENT_GATEWAY_ROOT_CERTIFICATES` into `/usr/local/share/ca-certificates/agw-*.crt`, run `update-ca-certificates`, and set **`SSL_CERT_FILE`**, **`REQUESTS_CA_BUNDLE`**, **`GRPC_DEFAULT_SSL_ROOTS_FILE_PATH`**, and **`AGENT_GATEWAY_ROOT_CERT_302034098528`** to `/etc/ssl/certs/ca-certificates.crt`. |
-
----
-
-## Part D: Managing Deployed Agents, Revisions, Traffic Splitting & Emergency Stop
-
-### Step D1: Lifecycle CRUD Operations (`scale/runtime/manage-deployed-agents`)
-
-Use `agentplatform.Client` (or equivalent REST `v1` endpoints under `https://LOCATION-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/LOCATION/reasoningEngines`) to inspect, update, and clean up deployed engines:
-
-```python
-import os
-import agentplatform
-
-client = agentplatform.Client(
-    project=os.environ["GOOGLE_CLOUD_PROJECT"],
-    location=os.environ["GOOGLE_CLOUD_LOCATION"],
-)
-
-# 1. List deployed agents (filtered by display_name)
-for engine in client.runtimes.list(
-    config={"filter": 'display_name="coding_agent_byoc_tf"'}
-):
-    print(engine.api_resource.name, engine.api_resource.display_name)
-
-# 2. Get a specific deployed agent and inspect its effective identity & schemas
-runtime_name = os.environ["REASONING_ENGINE_NAME"]
-deployed = client.runtimes.get(name=runtime_name)
-print("Effective identity:", deployed.api_resource.spec.effective_identity)
-print("Operations:", deployed.operation_schemas())
-
-# 3. Update metadata or container spec (always pass `name=`, NOT `resource_name=`)
-client.runtimes.update(
-    name=runtime_name,
-    config={"description": "Updated Coding Agent description via SDK"},
-)
-```
-
-#### Long-Running Async Query Jobs (Up to 7 Days)
-
-For coding tasks that exceed the **15-minute** `:streamQuery` limit (such as large multi-repository refactoring runs), engines created on or after **April 22, 2026** support async query jobs lasting up to **7 days**:
-
-```python
-# Prerequisite: grant service-PROJECT_NUMBER@gcp-sa-aiplatform-re.iam.gserviceaccount.com
-# roles/storage.objectCreator on the output GCS bucket (+ roles/storage.objectViewer on
-# the input bucket if separate — note: upstream `use-an-adk-agent` docs contain a typo
-# naming a non-existent `roles/storage.objectReader`; the valid GCP IAM role is `objectViewer`).
-job = client.runtimes.run_query_job(
-    name=runtime_name,
-    config={
-        "query": '{"input":{"user_id":"ci-bot","message":"Audit all modules for unsafe subprocess usage"}}',
-        "output_gcs_uri": f"gs://{os.environ['GOOGLE_CLOUD_PROJECT']}-agent-staging/jobs/audit-out.json",
-    },
-)
-status = client.runtimes.check_query_job(
-    name=job.name,
-    config={"retrieve_result": True},
-)
-# Gotcha: Cancelled jobs complete with error code 1 (CANCELLED), which check_query_job
-# reports as FAILED — inspect the error code to distinguish user cancellation from crash.
-```
-
-### Step D2: Revisions, Garbage Collection & Canary Traffic Splitting (`v1beta1`)
-
-Every update to your Agent Runtime spec creates an immutable **Revision**. Use `v1beta1` to inspect revisions and roll out new coding-agent prompts or container tags safely via canary traffic splitting:
-
-```python
-import os
-import agentplatform
-
-client_beta = agentplatform.Client(
-    project=os.environ["GOOGLE_CLOUD_PROJECT"],
-    location=os.environ["GOOGLE_CLOUD_LOCATION"],
-    http_options={"api_version": "v1beta1"},
-)
-
-runtime_name = os.environ["REASONING_ENGINE_NAME"]
-
-# List revisions for this agent
-revisions = list(client_beta.runtimes.revisions.list(name=runtime_name))
-for rev in revisions:
-    print(rev.name, getattr(rev, "state", "UNKNOWN"))
-```
-
-Split traffic (for example, **90% stable / 10% canary**) via `PATCH` on top-level `trafficConfig` (`?update_mask=traffic_config`) or the Python SDK `client_beta.runtimes.update(..., config={"traffic_config": ...})`:
+**Check it works:**
 
 ```bash
-curl -X PATCH \
-  -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-  -H "Content-Type: application/json; charset=utf-8" \
-  -d "{
-    \"trafficConfig\": {
-      \"trafficSplitManual\": {
-        \"targets\": [
-          {\"runtimeRevisionName\": \"${STABLE_REVISION_NAME}\", \"percent\": 90},
-          {\"runtimeRevisionName\": \"${CANARY_REVISION_NAME}\", \"percent\": 10}
-        ]
-      }
-    }
-  }" \
+make tf-plan
+```
+
+Expected output: `init`, `fmt -check`, `validate`, and `plan` all pass cleanly. If `fmt -check` reports spacing differences, run `terraform -chdir=starter/terraform fmt` and re-run `make tf-plan`.
+
+---
+
+## Step 5: Deploy with Terraform and Save Your Runtime ID
+
+Apply the Terraform plan and export the outputs (first container boot takes 5 to 10 minutes):
+
+```bash
+make tf-apply
+export REASONING_ENGINE_NAME="$(terraform -chdir=starter/terraform output -raw reasoning_engine_resource_name)"
+export REASONING_ENGINE_ID="$(terraform -chdir=starter/terraform output -raw reasoning_engine_id)"
+echo "Deployed: ${REASONING_ENGINE_NAME} (ID=${REASONING_ENGINE_ID})"
+```
+
+> [!IMPORTANT]
+> **Update `.env` for Lab 6:** Save `REASONING_ENGINE_NAME` and `REASONING_ENGINE_ID` into `.env` so Cloud Trace and Lab 6 Online Monitors point at this deployed runtime. Note that `outputs.tf` extracts the short ID from `.id` with `reverse(split("/", ...))[0]`, because in `hashicorp/google` `.id` is the full resource path while `.name` is only the numeric ID (and Terraform's `element(..., -1)` rejects negative indices).
+
+**Check it works:** `echo "${REASONING_ENGINE_NAME}"` prints `projects/<YOUR_PROJECT>/locations/asia-southeast1/reasoningEngines/<NUMERIC_ID>`.
+
+---
+
+## Step 6: Smoke-Test Your Live Deployed Agent
+
+Test unary `:query` (`create_session` and `list_sessions`) and streaming `:streamQuery?alt=sse` (`async_stream_query`) against the live endpoint:
+
+```bash
+# 1. Unary :query -> create a session and list sessions
+SESSION_JSON=$(curl -sS -X POST \
+  -H "Authorization: Bearer $(gcloud auth print-access-token)" -H "Content-Type: application/json; charset=utf-8" \
+  -d '{"class_method": "create_session", "input": {"user_id": "terraform_test_user"}}' \
+  "https://${GOOGLE_CLOUD_LOCATION}-aiplatform.googleapis.com/v1/${REASONING_ENGINE_NAME}:query")
+echo "${SESSION_JSON}"
+export SESSION_ID="$(echo "${SESSION_JSON}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["output"]["id"])')"
+
+curl -sS -X POST \
+  -H "Authorization: Bearer $(gcloud auth print-access-token)" -H "Content-Type: application/json; charset=utf-8" \
+  -d '{"class_method": "list_sessions", "input": {"user_id": "terraform_test_user"}}' \
+  "https://${GOOGLE_CLOUD_LOCATION}-aiplatform.googleapis.com/v1/${REASONING_ENGINE_NAME}:query"
+
+# 2. Streaming :streamQuery?alt=sse -> real coding turn
+curl -sS -X POST \
+  -H "Authorization: Bearer $(gcloud auth print-access-token)" -H "Content-Type: application/json; charset=utf-8" \
+  -d '{"class_method": "async_stream_query", "input": {"user_id": "terraform_test_user", "session_id": "'"${SESSION_ID}"'", "message": "Create calc.py with add(a, b) and test_calc.py, run pytest -q and ruff check, and summarize the output."}}' \
+  "https://${GOOGLE_CLOUD_LOCATION}-aiplatform.googleapis.com/v1/${REASONING_ENGINE_NAME}:streamQuery?alt=sse"
+```
+
+**Check it works:** `:query` returns HTTP 200 JSON with `output.id` and your session in `list_sessions`; `:streamQuery?alt=sse` streams events showing file writes, passing test execution, and a summary.
+
+---
+
+## Lab 5 Checkpoint
+
+Run the automated check from the repo root:
+
+```bash
+make verify-lab LAB=5
+```
+
+This verifies zero remaining `# TODO(lab-5)` markers in [starter/main.py](../starter/main.py) and [starter/terraform/main.tf](../starter/terraform/main.tf), `terraform fmt -check`, and all IAM/env/`depends_on` wiring. Continue to **[Lab 6: Observability, Evaluation & Quality Alerts](./06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md)**.
+
+---
+
+## Optional Reference & Deep Dive
+
+<details>
+<summary>Alternative Deployment Paths: Path 2 (Zero-AR source_code_spec) & Path 3 (agents-cli deploy)</summary>
+
+There is no `gcloud` deploy command for Agent Runtime (`gcloud ai reasoning-engines` only supports `describe` and IAM bindings). Alongside the default Cloud Build + Terraform `container_spec` path above, you have two other zero-Docker options:
+
+- **Path 2 (Zero-Docker AND Zero-Artifact-Registry via `source_code_spec`):** Run `make pack-agent-source` from the repo root to create a `<= 8 MB` `.tar.gz` with `./Dockerfile` at **level 0** (never nested inside a folder like `starter/`, or Cloud Build fails). Then replace `container_spec` in `starter/terraform/main.tf` with:
+  ```hcl
+  source_code_spec {
+    inline_source { source_archive = filebase64("${path.module}/coding_agent_source.tar.gz") }
+    image_spec {} # Empty block tells Agent Runtime to build ./Dockerfile
+  }
+  ```
+- **Path 3 (Imperative Dev Prototyping via `agents-cli deploy`):**
+  ```bash
+  cd starter && agents-cli deploy --project "${GOOGLE_CLOUD_PROJECT}" --region "${GOOGLE_CLOUD_LOCATION}" \
+    --service-name "coding-agent-cli" --cpu 2 --memory 4Gi --concurrency 5 --min-instances 0 --max-instances 10 \
+    --env-vars "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=true,OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental,OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=EVENT_ONLY" \
+    --dry-run
+  ```
+  Key gotchas: run `agents-cli infra single-project --apply` *before* your first `agents-cli deploy` (never apply Terraform on top of an imperative deploy); on Agent Runtime `--secrets` replaces the entire map so use `--update-secrets` for incremental edits; pass `--no-wait` and poll with `--status`; `--key` (CMEK) and `--agent-identity` (SPIFFE, [Lab 7](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md)) are immutable; PSC-I (`--network-attachment`) has no default internet egress. Never set reserved env vars (`GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_QUOTA_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `PORT`, `K_SERVICE`, `K_REVISION`, `K_CONFIGURATION`, `GOOGLE_APPLICATION_CREDENTIALS`). You can switch Lab 1 architectures (`simple`, `collaborative`, `graph`, `dynamic`, `agy_harness`) purely via `AGENT_ARCHITECTURE`, `AGY_EXECUTION_MODE`, `MAX_FIX_ROUNDS`, and `ENABLE_HITL_APPROVAL` env vars with zero `Dockerfile`/`main.py` changes.
+
+</details>
+
+<details>
+<summary>Service Agent IAM Matrix, agy Auth & Optional Memory Bank Query</summary>
+
+| Principal | Email Format | Required Roles | Purpose |
+|---|---|---|---|
+| **Agent Runtime SA** | `service-${var.project_number}@gcp-sa-aiplatform-re.iam.gserviceaccount.com` | `roles/artifactregistry.reader` (+ `cloudkms.cryptoKeyEncrypterDecrypter` for CMEK, `storage.objectCreator` for async jobs) | Pulls BYOC runtime image from Artifact Registry |
+| **Agent Platform SA** | `service-${var.project_number}@gcp-sa-aiplatform.iam.gserviceaccount.com` | `roles/secretmanager.secretAccessor` (+ `artifactregistry.reader` for cross-project AR) | Fetches `secret_env` under `AGENT_IDENTITY` or cross-project pulls |
+| **Agent Sandbox SA** | `service-${var.project_number}@gcp-sa-vertex-sandbox.iam.gserviceaccount.com` | `roles/artifactregistry.reader` | Pulls Lab 2's BYOC sandbox image (`coding-sandbox:v1`) |
+| **Custom Runtime SA** | `coding-agent-runtime-sa@${var.project_id}.iam.gserviceaccount.com` | `aiplatform.user`, `aiplatform.memoryUser`, `agentregistry.viewer` (conditional), `secretmanager.secretAccessor`, `logging.logWriter`, `cloudtrace.agent`, `telemetry.tracesWriter`, `monitoring.metricWriter`, self `iam.serviceAccountTokenCreator` | Default runtime identity for Labs 5 and 6; upgrade to SPIFFE `AGENT_IDENTITY` + Agent Gateway in [Lab 7 (Optional)](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md) |
+
+Inside the container, `/usr/local/bin/agy` runs under `coding-agent-runtime-sa` ADC (`AGY_ADC_AUTH=true`) with `AGY_PROJECT_ID` and `GOOGLE_CLOUD_LOCATION=global` scoped per subprocess. Never copy personal developer OAuth tokens into a shared runtime. When `enable_memory_bank = true`, `AdkApp.async_search_memory` takes only `user_id` and `query` (passing `app_name` raises `TypeError`).
+
+</details>
+
+<details>
+<summary>Agent Runtime HTTP/NDJSON Contract, Container Sizing & Quotas</summary>
+
+| Requirement | Specification |
+|---|---|
+| **Port & Health Probe** | Listen on `0.0.0.0:8080` (`PORT` env var) and return `200 OK` on `GET /`. |
+| **Unary / Async (`""`, `"async"`)** | `POST /api/reasoning_engine` with `{"class_method": "...", "input": {...}}`; return `200 OK` JSON `{"output": ...}`. |
+| **Streaming (`"stream"`, `"async_stream"`)** | `POST /api/stream_reasoning_engine`; return `200 OK` NDJSON (converted to SSE). Max stream duration: **15 minutes**. |
+| **Bidirectional (`"bidi_stream"`)** | `POST /api/bidi_reasoning_engine` (`AgentServerMode.EXPERIMENTAL`). Max timeout: **10 minutes**. |
+| **Keep-Alive Probe (Preview)** | Idle scale-down defaults to 15 min (`900s`). `keep_alive_probe` polls `GET /is_busy` every `10s` (`2xx` = busy, `412` = idle; `max_seconds` in `[900, 3600]`). Avoid reserved ports `15000, 15001, 15006, 15007, 15020, 15021`. |
+| **Resources & Scaling** | `cpu`: `1, 2, 4, 6, 8` (API default `4`); `memory`: `1Gi` to `32Gi` (default `4Gi`); `min_instances`: `[0, 75]`; `max_instances`: `[1, 1000]` (`[1, 100]` with VPC-SC/PSC-I); concurrency: `2 * cpu + 1` (or multiples of `9` for async I/O). |
+| **Agent Gateway BYOC CA Trust** | Bake `AGENT_GATEWAY_ROOT_CERTIFICATES` into `/usr/local/share/ca-certificates/agw-*.crt`, run `update-ca-certificates`, and point `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH`, and `AGENT_GATEWAY_ROOT_CERT_302034098528` to `/etc/ssl/certs/ca-certificates.crt`. |
+| **Default Quotas (per project/region)** | `Query`/`StreamQuery`: **90 req/min**; Create/Update/Delete: **10 req/min**; Max entities: **100**; Concurrent `BidiStreamQuery`: **10/min**. Express Mode Free Tier drops to 10 query/min and 10 entities (see [Lab 8](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md)). |
+
+</details>
+
+<details>
+<summary>Day-2 Operations: CRUD, Async Query Jobs, Canary Traffic Split & Emergency Stop</summary>
+
+**Lifecycle CRUD (`agentplatform.Client`):** Use `client.runtimes.list(...)`, `client.runtimes.get(name=runtime_name)`, and `client.runtimes.update(name=runtime_name, config={...})` (always pass `name=`, not `resource_name=`).
+
+**Long-Running Async Query Jobs (up to 7 days):** For tasks beyond the 15-minute `:streamQuery` limit, grant `gcp-sa-aiplatform-re` `roles/storage.objectCreator` on the output bucket (and `roles/storage.objectViewer` on any input bucket) and call `client.runtimes.run_query_job(...)` + `check_query_job(name=job.name, config={"retrieve_result": True})`. Cancelled jobs report status `FAILED` with error code `1` (`CANCELLED`).
+
+**Revisions & Canary Traffic Splitting (`v1beta1`):** Every spec update creates an immutable revision (limits: 950/agent, 6,000/project/region; configure `revision_garbage_collection_strategy.keep_n_latest.max_revisions`). Percentages must sum to 100 across `ACTIVE` revisions; switch back to `trafficSplitAlwaysLatest: {}` before changing Agent Gateway bindings:
+
+```bash
+curl -X PATCH -H "Authorization: Bearer $(gcloud auth print-access-token)" -H "Content-Type: application/json; charset=utf-8" \
+  -d '{"trafficConfig":{"trafficSplitManual":{"targets":[{"runtimeRevisionName":"'"${STABLE_REVISION_NAME}"'","percent":90},{"runtimeRevisionName":"'"${CANARY_REVISION_NAME}"'","percent":10}]}}}' \
   "https://${GOOGLE_CLOUD_LOCATION}-aiplatform.googleapis.com/v1beta1/${REASONING_ENGINE_NAME}?update_mask=traffic_config"
 ```
 
-#### Critical Revision & Traffic Splitting Constraints
+**Emergency Stop Containment SLAs:**
 
-- **Hard Non-Adjustable Revision Limits:** Maximum **6,000 revisions per project per region** and **950 revisions per agent** (internal system limit).
-- **Configure Revision Garbage Collection:** Set `revision_garbage_collection_strategy.keep_n_latest.max_revisions` (range `[1, 950]`, default **100** for new engines / **950** for existing engines). GC cleans up `ACTIVE` revisions receiving `0%` traffic during updates.
-- **Traffic Split Rules:** Percentages must be integers summing to **100** across **`ACTIVE`** revisions only. Direct revision-targeted queries bypass traffic-splitting rules.
-- **Agent Gateway Binding Gotcha:** Changing an Agent Gateway binding **irreversibly archives** all prior revisions and fails with `FAILED_PRECONDITION` if a manual traffic split is active (even 100% on the latest revision). Switch back to `trafficSplitAlwaysLatest: {}` before modifying gateway bindings.
-
-### Step D3: Emergency Stop Playbook & Propagation SLAs
-
-Know the exact blast-radius containment timeline before going to production:
-
-| Containment Action | Propagation Time | Kills Active Streams / Containers? | Operational Notes |
+| Action | Propagation | Kills Active Streams? | Notes |
 |---|---|---|---|
-| **Delete Runtime (`force=True`)** (`client.runtimes.delete(name=..., force=True)`) | **Seconds to a few minutes** | **Yes** (terminates containers, kills active streams, invalidates SPIFFE identity) | `force=True` is required if child sessions or memories exist. Manually remove defunct SPIFFE principals from IAM UAPs afterward. |
-| **Traffic Rollback (`trafficSplitManual` -> 100% last-known-good)** | **Seconds to a few minutes** | New requests immediately shift; drains old revision | Best zero-downtime mitigation for prompt/tool regressions caught by Lab 6 Quality Alerts. |
-| **IAM Deny / UAP `DENY` at Agent Gateway / Principal Access Boundary (PAB)** | **2–7+ minutes** (group / `principalSet` changes: **minutes to hours**) | **No** (affects new checks only; does **not** terminate open streams) | Always **pair** policy revocation with runtime deletion or traffic rerouting during an active incident. |
+| `client.runtimes.delete(name=..., force=True)` | Seconds to minutes | Yes | `force=True` required if child sessions/memories exist |
+| `trafficSplitManual` -> 100% stable | Seconds to minutes | New traffic shifts immediately | Best zero-downtime rollback for Lab 6 alerts |
+| IAM Deny / Agent Gateway UAP / PAB | 2 to 7+ min (groups: hours) | No | Always pair policy revocations with traffic rollback or runtime delete |
 
-### Step D4: Production Quota Awareness (Preview for Lab 8)
+**Official Docs:** [Deploy with Terraform](https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/runtime/use-terraform) | [Runtime Contract](https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/runtime/runtime-contract) | [Manage Deployed Agents](https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/runtime/manage-deployed-agents) | [Revisions & Traffic](https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/runtime/manage-revisions-and-traffic) | [Quotas](https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/agent-quotas)
 
-Before moving past a single workshop user, keep these default per-project, per-region Agent Runtime quotas in mind (we derive full capacity math in [Lab 8](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md)):
-- **`Query` / `StreamQuery`:** **90 requests/min** (`aiplatform.googleapis.com/reasoning_engine_service_query_requests`)
-- **Runtime Create/Update/Delete:** **10 requests/min**; **Max entities:** **100**
-- **Concurrent `BidiStreamQuery`:** **10/min**
-- *(Express Mode Free Tier drops these sharply to **10 query/min**, **10 entities**, and **1 concurrent bidi/min** — never benchmark load on Express Mode!)*
-
----
-
-## Lab 5 Verification Checkpoint
-
-Run the automated Lab 5 verification script to check HCL formatting, Terraform validation, required dual service agent `depends_on` bindings, and optional live endpoint health:
-
-```bash
-./scripts/verify_lab.sh 5
-# Or via Makefile:
-# make verify-lab LAB=5
-```
-
-Expected pass criteria:
-1. `make test-agent-local` passes locally (zero Docker!) and `terraform -chdir=starter/terraform fmt -check` + `terraform validate` pass cleanly.
-2. Both `starter/main.py` and `starter/terraform/main.tf` contain zero remaining `# TODO(lab-5)` markers; `starter/Dockerfile` bakes opt-in `/usr/local/bin/agy` (`ARG INSTALL_AGY_CLI=true`) as non-root `appuser`; `starter/terraform/main.tf` uses `region = var.location` (`asia-southeast1` Singapore) and `display_name = var.display_name`, wires Frontier Gemini 4 & `agy` env vars (`MODEL_NAME`, `REASONING_MODEL_NAME`, `MODEL_LOCATION`, `THINKING_LEVEL`, `AGY_EXECUTION_MODE`, `AGY_PROJECT_ID`, `AGY_ADC_AUTH=true`), grants `roles/aiplatform.memoryUser`, conditional `roles/agentregistry.viewer` (when `enable_skill_registry = true`), `roles/telemetry.tracesWriter`, and self `roles/iam.serviceAccountTokenCreator` on `coding-agent-runtime-sa`, declares `roles/artifactregistry.reader` for `gcp-sa-aiplatform-re` and `gcp-sa-vertex-sandbox`, wires optional Lab 3/4 variables (`enable_memory_bank`, `enable_skill_registry`, `skill_registry_location`, `agent_registry_location`, and `agent_registry_skills_location`), and lists IAM bindings inside `depends_on`.
-3. *(If applied)* `REASONING_ENGINE_NAME` in Singapore (`asia-southeast1`) responds HTTP 200 to `:query` (`create_session` / `list_sessions`) and `:streamQuery?alt=sse` (`async_stream_query`) with streamed output events.
-
-Need a clean reference? Compare your files against [`solution/main.py`](../solution/main.py) and [`solution/terraform/`](../solution/terraform/).
-
----
-
-## Next Lab
-
-Your complete, sandboxed, stateful, skill-enabled Coding Agent is now live on **Agent Runtime** with OTel GenAI telemetry enabled. Time to inspect live traces, run offline and simulated evaluations, configure Online Evaluation Monitors & Quality Alerts, and close the prompt-optimization flywheel! Continue to **[Lab 6: Optimize Pillar — Observability, Evaluation, Quality Alerts & Prompt Optimization](./06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md)**.
-
----
-
-## Canonical Reference Links
-
-- **Deploy with Terraform:** https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/runtime/use-terraform
-- **Manage Deployed Agents:** https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/runtime/manage-deployed-agents
-- **Deploy an Agent (All 6 Methods):** https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/runtime/deploy-an-agent
-- **Manage Revisions & Traffic Splitting:** https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/runtime/manage-revisions-and-traffic
-- **Agent Runtime Contract & Keep-Alive Probes:** https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/runtime/runtime-contract
-- **Optimize and Scale Agent Runtime (Concurrency & Cold Starts):** https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/runtime/optimize-and-scale
-- **Private Service Connect Interface (PSC-I) for Agent Runtime:** https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/runtime/private-service-connect-interface
-- **Deploy Runtime with Agent Gateway (BYOC CA Trust):** https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/runtime/agent-gateway-runtime-deploy
-- **Agent Identity (SPIFFE):** https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/runtime/agent-identity
-- **Agent Platform Quotas & Limits:** https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/agent-quotas
-- **`google/agents-cli` Repository:** https://github.com/google/agents-cli
+</details>

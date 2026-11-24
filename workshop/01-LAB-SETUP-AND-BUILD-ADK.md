@@ -1,921 +1,444 @@
-# Lab 1 — Setup & Build the ADK Coding Agent (`Build Pillar`)
+# Lab 1: Setup and Build the ADK Coding Agent
 
-> **Pillar:** Build (Frontier **Gemini 4** `client_kwargs` Factory, `google/agents-cli`, **5** Google ADK 2.0 Python Agent Architectures — Simple, Collaborative, Graph, Dynamic & **`agy` Headless CLI Harness**, `EnvironmentToolset`, Service Registration, Antigravity `.agents/skills/`)  
-> **Duration:** 30 minutes Core (Part A) + 30 minutes Optional/Stretch (Part B) in Full-Day Track | 35 minutes (Half-Day Fast-Track — Part A 30 min hands-on, Part B 5 min walkthrough)  
-> **Antigravity Skill Companion:** [`.agents/skills/adk-coding-agent-build/SKILL.md`](../.agents/skills/adk-coding-agent-build/SKILL.md) *(with modular references [`agent-architectures-and-workflows.md`](../.agents/skills/adk-coding-agent-build/references/agent-architectures-and-workflows.md), [`graph-and-dynamic-workflows.md`](../.agents/skills/adk-coding-agent-build/references/graph-and-dynamic-workflows.md) & [`agy-headless-cli-harness.md`](../.agents/skills/adk-coding-agent-build/references/agy-headless-cli-harness.md); complements the built-in `google-agents-cli-adk-code` & `google-agents-cli-scaffold` skills)*  
-> **Previous:** [00 — Workshop Overview](./00-WORKSHOP-OVERVIEW.md) | **Next Lab:** [Lab 2: Custom Sandbox (BYOC), Lifecycle & Execution](./02-LAB-CUSTOM-SANDBOX-BYOC.md)  
-> **Files You Will Inspect & Edit:** `.env`, `starter/agents-cli-manifest.yaml`, `starter/coding_agent/config.py`, `starter/coding_agent/models.py`, `starter/coding_agent/agent.py`, *(Optional Part B)* `starter/coding_agent/architectures.py`, `starter/coding_agent/tools/agy_headless_harness.py`, `starter/services.yaml`, `starter/services.py`
+In this lab, you'll configure your workspace for Gemini 4, wire a local coding agent with Google ADK 2.0 and `EnvironmentToolset`, and verify it live in `adk web`. If you have extra time, the optional stretch steps walk through multi-agent teams, declarative graphs, dynamic workflows, and the Antigravity (`agy`) headless CLI harness.
 
----
+**Duration:** 30 min Core (Part A, Steps 1-5) + 30 min Optional Stretch (Part B, Steps 6-8) | **Previous:** [Workshop Overview](./00-WORKSHOP-OVERVIEW.md) | **Next:** [Lab 2: Custom Sandbox (BYOC)](./02-LAB-CUSTOM-SANDBOX-BYOC.md)
 
-## Learning Objectives
+## Files You Will Edit
 
-By the end of Lab 1, you will:
-
-1. Install and configure **`google/agents-cli`** alongside its 7 global IDE workflow skills and verify **Antigravity `.agents/skills/`** auto-discovery (with zero co-trigger shadowing).
-2. Wire **Frontier Gemini 4 models** (`MODEL_NAME=gemini-4-hydrogen` + `REASONING_MODEL_NAME=gemini-4-neon` on **`MODEL_LOCATION=global`** via ADK 2.0 `Gemini(model=..., client_kwargs=...)` and `THINKING_LEVEL=MEDIUM`, replacing retired `gemini-2.5-flash`) while keeping `GOOGLE_CLOUD_LOCATION=asia-southeast1` for Agent Platform state and sandboxes (or using `gemini-4-argon` for strict Singapore inference residency).
-3. Choose the right **Google ADK 2.0 agent architecture** across all **5** patterns: **Simple `LlmAgent` → Collaborative Agent Team → Declarative Graph `Workflow` → Dynamic Workflow → Antigravity (`agy`) Headless CLI Harness (`agy_harness`)**, plus evaluate **`ManagedAgent`** (Preview) and **Service Registration** (`services.yaml` / `services.py`).
-4. Implement `# TODO(lab-1)` in [`starter/coding_agent/models.py`](../starter/coding_agent/models.py) and [`starter/coding_agent/agent.py`](../starter/coding_agent/agent.py) (`AGENT_ARCHITECTURE=simple`) using **`LlmAgent`** and **`EnvironmentToolset(LocalEnvironment)`** while avoiding verified `Path`, `App.name`, `client_kwargs`, and Gemini 4 thinking-config pitfalls.
-5. *(Optional / Fast-Track Stretch — Part B)* Evolve your Coding Agent across `collaborative`, `graph`, `dynamic`, and **`agy_harness`** modes in [`starter/coding_agent/architectures.py`](../starter/coding_agent/architectures.py) and [`starter/coding_agent/tools/agy_headless_harness.py`](../starter/coding_agent/tools/agy_headless_harness.py) — including `JoinNode` fan-in, `RetryConfig`/timeouts, `RequestInput` HITL pauses, `agy` 4-tier exit codes (`0/1/2/3`), `--conversation <id>` continuity, and `make test-agy-harness` — and inspect [`starter/services.yaml`](../starter/services.yaml) / [`starter/services.py`](../starter/services.py).
-6. Run and interactively test your Coding Agent locally via **`adk web`** and **`agents-cli run`**, verify why `LocalEnvironment` is not yet production-safe, and pass Checkpoint 1 with `./scripts/verify_lab.sh 1`.
-
----
-
-## Quick-Run TL;DR (Classroom Fast Path)
-
-- **Focused Exercises (High-Signal TODOs):** **Part A (Core):** `starter/coding_agent/models.py` (`build_gemini_model` — with `resolve_model_name`, `validate_model_location`, `_detect_enterprise_client_kwarg`, and `build_gemini4_generate_config` pre-filled!) & `starter/coding_agent/agent.py` (`build_local_environment_toolset`, `_assemble_runtime_components`); **Part B (Optional / Fast-Track Stretch):** `starter/coding_agent/architectures.py` (`build_collaborative_coding_team`, `build_graph_coding_workflow`, `build_dynamic_coding_workflow`, `build_agy_harness_workflow`) & `starter/coding_agent/tools/agy_headless_harness.py` (`build_agy_command`, `parse_agy_stream_json`) — *(config, schemas & boilerplate plumbing pre-filled!)*
-- **Key Commands (Zero Local Docker):**
-  ```bash
-  make preflight && make install
-  make validate-skills
-  make test-agy-harness                                     # Part B: zero-Docker dry-run & exit-code contract check (works before installing agy!)
-  (cd starter && uv run adk web --port 8000)                # Part B: prefix AGENT_ARCHITECTURE=collaborative|graph|dynamic|agy_harness
-  make verify-lab LAB=1
-  ```
-- **Antigravity AI-Assisted Mode (`.agents/skills/adk-coding-agent-build`):** *"Using `adk-coding-agent-build`, help me complete the `# TODO(lab-1)` functions in `starter/coding_agent/models.py`, `agent.py`, `architectures.py`, and `tools/agy_headless_harness.py` with Gemini 4 `client_kwargs`, `LocalEnvironment(working_dir=Path(...))`, and `agy` 4-tier exit-code handling."*
-- **Fell Behind? Instant Catch-Up:** `make fast-forward LAB=1` *(syncs only Lab 1 without spoiling Labs 2–8 TODOs).*
-
----
-
-## Part A — Setup, Antigravity Skills, ADK Architecture Spectrum & Simple Agent (30 min)
-
-### Step 1: Install Standalone `uv`, `google/agents-cli` & Run Pre-Flight
-
-[`google/agents-cli`](https://github.com/google/agents-cli) is Google's official lifecycle CLI for scaffolding, locally running, evaluating, deploying, and publishing ADK agents (requires **Python 3.11+** and **`uv`**).
-
-> [!TIP]
-> **Standalone `uv` — Zero `python3-venv` or Docker Required!** Downloading and running `uv`'s standalone installer bundles its own Python environment management and works cleanly even on fresh Debian/Linux workstations or cloud dev environments without `python3-venv` or local `docker`.
-
-```bash
-# 0. Install standalone uv if not already available (works without python3-venv or docker!)
-command -v uv >/dev/null 2>&1 || (curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv_install.sh && sh /tmp/uv_install.sh && rm -f /tmp/uv_install.sh)
-
-# 1. (Optional) Install google-agents-cli and register its 7 built-in IDE workflow skills
-#    All labs work end-to-end with `uv`, `gcloud`, and Terraform even if `agents-cli` is not on your PATH.
-uvx google-agents-cli setup
-
-# 2. (Optional) Verify CLI path, version, active extensions, and telemetry status
-agents-cli info
-
-# 3. (Optional) Verify GCP authentication (or run `gcloud auth application-default login`)
-agents-cli login --status
-
-# 4. Run the workshop pre-flight validator (checks gcloud, ADC, APIs, uv, and Bangkok-first regional config; zero Docker needed!)
-make preflight
-```
-
-> [!NOTE]
-> **Optional `agents-cli` PATH Warning:** If you skip installing `google/agents-cli` globally, `make verify-lab LAB=1` reports a single non-fatal `WARN: agents-cli not found on PATH`. That warning is expected and completely safe to ignore when running labs via `uv run`, `gcloud`, and Terraform.
-
-> **Optional Telemetry Opt-Out:** To disable anonymous CLI usage metrics in enterprise environments, export `AGENTS_CLI_TELEMETRY=0` (or `DO_NOT_TRACK=1`) in your shell profile.
-
-#### How `agents-cli` Fits Into This Workshop (Greenfield vs. Existing Repo)
-
-In a greenfield project, you scaffold a new ADK repository with:
-
-```bash
-# Example only (do NOT run inside this workshop repo):
-# agents-cli create my-coding-agent --agent adk_python -d agent_runtime -y
-# Or quickstart prototype shortcut:
-# agents-cli create my-coding-agent --adk
-```
-
-Keep these verified `agents-cli` scaffolding rules in mind for your own production projects:
-- Project `<name>` must be **<= 26 characters**, lowercase `a-z`, `0-9`, and `-` only.
-- **Never `mkdir <name>`** before running `agents-cli create` (the CLI creates the folder itself).
-- For an **existing** ADK project whose agent package lives outside the default `app/` directory (like `starter/coding_agent/`), you MUST pass `--agent-directory` when adopting `agents-cli`:
-  ```bash
-  # Example (already pre-configured in starter/agents-cli-manifest.yaml and solution/agents-cli-manifest.yaml):
-  # cd starter && agents-cli scaffold enhance . --from-adk-project --agent-directory coding_agent
-  ```
-  `agents-cli` reads `agent_directory`, `framework`, and `deployment_target` from `agents-cli-manifest.yaml` (defaulting `agent_directory` to `app/` if absent). This workshop ships pre-configured [`starter/agents-cli-manifest.yaml`](../starter/agents-cli-manifest.yaml) and [`solution/agents-cli-manifest.yaml`](../solution/agents-cli-manifest.yaml) pointing at `coding_agent` and `agent_runtime` so `agents-cli playground`, `agents-cli run`, `agents-cli deploy`, and `agents-cli eval` discover your agent immediately.
-
----
-
-### Step 2: Inspect Bundled Antigravity `.agents/skills/`
-
-When you open this repository in **Antigravity**, the IDE automatically discovers every skill folder matching `.agents/skills/<skill-name>/SKILL.md`.
-
-Validate all 6 bundled workshop skills right now from the repository root:
-
-```bash
-# Run the standalone frontmatter, line-limit, and link validator
-make validate-skills
-# Equivalent direct command:
-# python3 scripts/validate_skills.py .agents/skills
-```
-
-Verify that all 6 skills report `PASS` and inspect [`adk-coding-agent-build/SKILL.md`](../.agents/skills/adk-coding-agent-build/SKILL.md):
-
-```bash
-ls -1 .agents/skills/
-```
-
-Expected output:
-
-```text
-adk-coding-agent-build
-agent-platform-governance-and-registries
-agent-platform-optimize-and-eval
-agent-platform-runtime-and-state
-agent-platform-sandbox-byoc
-agent-runtime-vs-gke-architecture
-```
-
-> **Why Anti-Shadowing Matters:** Because `uvx google-agents-cli setup` already installed 7 global skills (`google-agents-cli-workflow`, `google-agents-cli-adk-code`, `google-agents-cli-scaffold`, `google-agents-cli-eval`, `google-agents-cli-deploy`, `google-agents-cli-publish`, `google-agents-cli-observability`), every custom skill under `.agents/skills/` declares strict `Use when:` and `Don't use for:` clauses in its YAML frontmatter. Try asking Antigravity:
-> - *"What are the exact abstract methods on ADK `BaseEnvironment`, and why must `LocalEnvironment.working_dir` be a `Path`?"* -> triggers **`adk-coding-agent-build`**.
-> - *"Compare ADK 2.0 collaborative `task` vs `single_turn` modes and explain why `JoinNode` prevents `ValueError` in parallel workflows."* -> loads **`adk-coding-agent-build`** modular references ([`agent-architectures-and-workflows.md`](../.agents/skills/adk-coding-agent-build/references/agent-architectures-and-workflows.md) and [`graph-and-dynamic-workflows.md`](../.agents/skills/adk-coding-agent-build/references/graph-and-dynamic-workflows.md)).
-
----
-
-### Step 3: Configure `.env` and Explore `starter/coding_agent/`
-
-#### 3.1 Create and Populate `.env`
-
-From the repository root:
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` with your GCP project values (do **not** commit `.env` to Git):
-
-```dotenv
-# Agent Platform / Enterprise ADC mode (recommended for Labs 1-8)
-# Verified standalone on google-adk 2.15.0 / google-genai 2.34.0 — no need to set GOOGLE_GENAI_USE_VERTEXAI!
-GOOGLE_GENAI_USE_ENTERPRISE=TRUE
-GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID
-GOOGLE_CLOUD_PROJECT_NUMBER=YOUR_PROJECT_NUMBER
-
-# Bangkok (asia-southeast3) first — default for Artifact Registry, Cloud Build, Secret Manager, Agent Registry A2A/MCP, Lab 8 GKE
-# Empirically verified: Bangkok AR (`asia-southeast3-docker.pkg.dev`) pulls cleanly into Singapore Agent Runtime & BYOC Sandboxes!
-PRIMARY_REGION=asia-southeast3
-AR_LOCATION=asia-southeast3
-BUILD_LOCATION=asia-southeast3        # Remote Cloud Build region (zero local Docker!)
-AGENT_REGISTRY_LOCATION=asia-southeast3
-GKE_LOCATION=asia-southeast3
-
-# Singapore (asia-southeast1) fallback ONLY for Agent Platform services not yet launched in Bangkok
-# (Agent Runtime, Managed Sandboxes, Sessions, Memory Bank & Agent Gateway)
-GOOGLE_CLOUD_LOCATION=asia-southeast1
-
-# GCP-mandated overrides:
-# - Frontier Gemini 4 Inference: global (gemini-4-hydrogen & gemini-4-neon return HTTP 200 on global,
-#   HTTP 404 on asia-southeast1, HTTP 501 on asia-southeast3; for strict Singapore inference residency,
-#   switch to MODEL_NAME=gemini-4-argon + MODEL_LOCATION=asia-southeast1)
-# - Vertex AI Skill Registry (Lab 4): 3-region Preview (us-central1, europe-west4, us-east5)
-# - Gen AI Evaluation Service (Lab 6): global (APAC-ready + generate_loss_clusters)
-# - Agent Registry standalone skills (Labs 4, 6 & 7): global (`gcloud alpha agent-registry skills`)
-MODEL_LOCATION=global
-SKILL_REGISTRY_LOCATION=us-central1
-EVAL_LOCATION=global
-AGENT_REGISTRY_SKILLS_LOCATION=global
-
-# Frontier Gemini 4 models (replacing retired gemini-2.5-flash — retired Oct 20, 2026)
-MODEL_NAME=gemini-4-hydrogen
-REASONING_MODEL_NAME=gemini-4-neon
-# Strictly LOW | MEDIUM | HIGH | XHIGH (passing MINIMAL or thinking_budget returns HTTP 400!)
-THINKING_LEVEL=MEDIUM
-
-# Lab 1 ADK Architecture mode: simple (default) | collaborative | graph | dynamic | agy_harness
-# Keep `simple` as the default so Labs 2-8 stay 100% backward compatible.
-AGENT_ARCHITECTURE=simple
-MAX_FIX_ROUNDS=3
-ENABLE_HITL_APPROVAL=false
-# Lab 1 Part B / Lab 2 / Lab 5: Antigravity (`agy`) headless CLI execution mode: auto | local | sandbox
-AGY_EXECUTION_MODE=auto
-# Optional non-numeric project ID override for `agy` subprocesses (leave blank locally;
-# Lab 5 Terraform injects AGY_PROJECT_ID = var.project_id to override Agent Runtime's numeric project number):
-# AGY_PROJECT_ID=
-# Optional ADK Python v2.4.0 Preview ManagedAgent ID (global-only backend):
-# MANAGED_AGENT_ID=antigravity-preview-05-2026
-# Optional ADK Python 2.0+ programmatic Service Registration (`services.py` overrides `services.yaml`):
-# ENABLE_CUSTOM_SERVICE_REGISTRY=false
-
-# Lab 1 starts in local mode; Lab 2 switches this to `shell` (zero-build fast-track) or `byoc`
-SANDBOX_MODE=local
-
-# Populated progressively across Labs 2-5:
-# - Lab 2: Standalone backing instance (`REASONING_ENGINE_NAME` in asia-southeast1), BYOC sandbox image (Bangkok asia-southeast3 AR) & template
-# - Lab 3: Reuses Lab 2's standalone `REASONING_ENGINE_NAME` (asia-southeast1) for Managed Sessions & Memory Bank
-# - Lab 4: Vertex AI Skill Registry (`us-central1`), Bangkok Agent Registry A2A/MCP (`asia-southeast3`), optional standalone skills (`global`)
-# - Lab 5: Build `AGENT_IMAGE_URI` (Bangkok Cloud Build + AR) & deploy ONCE to Singapore (`asia-southeast1`) via Terraform
-# - Lab 6: Optimize (`EVAL_LOCATION=global` + Singapore runtime) | Optional Lab 7: Hardening | Lab 8: Bangkok GKE Deep-Dive
-REASONING_ENGINE_NAME=
-SANDBOX_TEMPLATE_NAME=
-SANDBOX_IMAGE_URI=
-AGENT_IMAGE_URI=
-ENABLE_TELEMETRY_CALLBACKS=true
-ENABLE_MEMORY_BANK=false
-ENABLE_SKILL_REGISTRY=false
-```
-
-> [!IMPORTANT]
-> **Verified Gemini 4 & SDK Rules (Replacing Retired `gemini-2.5-flash`, Retired Oct 20, 2026):**
-> 1. **Standalone `GOOGLE_GENAI_USE_ENTERPRISE=TRUE` & `google-genai>=2.34.0`:** Verified on **`google-adk 2.15.0`** / **`google-genai>=2.34.0`** — `GOOGLE_GENAI_USE_ENTERPRISE=TRUE` works standalone without legacy `GOOGLE_GENAI_USE_VERTEXAI=TRUE`, and **`google-genai>=2.34.0`** is **required** for Gemini 4 automatic `continuation_token` long decodes (up to **1M unified context+output tokens**).
-> 2. **Decoupled `MODEL_LOCATION=global` vs. `GOOGLE_CLOUD_LOCATION=asia-southeast1`:** Empirically verified on GCP — **`gemini-4-hydrogen`** (default coding & fast tool-calling) and **`gemini-4-neon`** (frontier deep reasoning, planning & review) return **HTTP 200 on `global`**, **HTTP 404 on `asia-southeast1`**, and **HTTP 501 on `asia-southeast3`**. Pass `client_kwargs={..., "project": settings.google_cloud_project, "location": settings.model_location}` to ADK 2.0 `Gemini(...)` (in `coding_agent/models.py`) so model inference routes to `global` while Agent Runtime, Sandboxes, Sessions, Memory Bank, and Feedback stay in `asia-southeast1`! Need strict Singapore regional inference residency? Switch to **`gemini-4-argon`** (`MODEL_LOCATION=asia-southeast1`, empirically verified HTTP 200 on both `asia-southeast1` and `global`).
-> 3. **Strict Gemini 4 Thinking & Sampling Rules:** Set `THINKING_LEVEL` strictly to **`LOW`**, **`MEDIUM`** *(default)*, **`HIGH`**, or **`XHIGH`** via `types.ThinkingConfig(thinking_level=...)`. Passing `MINIMAL` or legacy `thinking_budget` returns **HTTP 400**! Custom `temperature`, `top_p`, and `top_k` are **ignored** on Gemini 4, and durable implicit caching is enabled automatically.
-
-#### 3.2 Install Dependencies & Explore the Starter Layout
-
-```bash
-# Sync dependencies in starter/ (and solution/) using standalone uv (no python3-venv or Docker required!)
-make install
-```
-
-Explore the core starter package under `starter/`:
-
-| File | Role Across the Workshop |
-|---|---|
-| [`starter/pyproject.toml`](../starter/pyproject.toml) | Python `>=3.11` package manifest (`google-adk[a2a,agent-identity,mcp]>=2.0.0`, **`google-genai>=2.34.0`**, `google-cloud-aiplatform[agent_engines,evaluation]`, OTel, `ruff`, `pytest`) |
-| [`starter/agents-cli-manifest.yaml`](../starter/agents-cli-manifest.yaml) | **Lab 1:** `agents-cli` manifest setting `agent_directory: coding_agent` and `deployment_target: agent_runtime` (required for `agents-cli playground/run/deploy/eval`) |
-| [`starter/services.yaml`](../starter/services.yaml) | **Lab 1 Part B:** Declarative ADK Python 2.0+ custom service registration (`scheme`, `type: session\|artifact\|memory\|task_store`, `class`) for `adk web` / `adk api_server` |
-| [`starter/services.py`](../starter/services.py) | **Lab 1 Part B:** Programmatic ADK Python 2.0+ service registration via `get_service_registry()` (takes precedence over `services.yaml` on duplicate schemes) |
-| [`starter/Dockerfile`](../starter/Dockerfile) | **Lab 5:** Trusted Agent Runtime BYOC container image (non-root `appuser`, listening on `0.0.0.0:8080`, baked `/usr/local/bin/agy` with `AGY_ADC_AUTH=true`) |
-| [`starter/main.py`](../starter/main.py) | **Lab 5:** FastAPI/ADK HTTP server implementing the Agent Runtime contract (`GET /`, `POST /api/reasoning_engine`, `POST /api/stream_reasoning_engine`) |
-| [`starter/requirements.txt`](../starter/requirements.txt) | **Lab 5:** Runtime container dependencies (`google-genai>=2.34.0`) for `container_spec` builds and `source_code_spec` Dockerfile archives |
-| [`starter/coding_agent/config.py`](../starter/coding_agent/config.py) | Typed settings loader reading `.env` (`Settings`: `model_name`, `reasoning_model_name`, `model_location`, `thinking_level`, `agent_architecture`, `agy_execution_mode`, `max_fix_rounds`, `enable_hitl_approval`, `sandbox_mode`) |
-| [`starter/coding_agent/models.py`](../starter/coding_agent/models.py) | **Lab 1 Part A target:** Frontier Gemini 4 ADK 2.0 `Gemini(model=..., client_kwargs=...)` & `ThinkingConfig` factory (version-safe `enterprise`/`vertexai` kwarg check, preserves `@PerLoopCachedProperty`) |
-| [`starter/coding_agent/agent.py`](../starter/coding_agent/agent.py) | **Lab 1 Part A target:** Root ADK `LlmAgent` + `EnvironmentToolset` + `build_root_agent()` dispatcher + resumable `App` entrypoint |
-| [`starter/coding_agent/architectures.py`](../starter/coding_agent/architectures.py) | **Lab 1 Part B target:** ADK 2.0 Collaborative Team, Declarative Graph `Workflow`, Dynamic `@node(rerun_on_resume=True)` Workflow, **`agy` Headless CLI Harness (`build_agy_harness_workflow`)** & optional `ManagedAgent` reference builder |
-| [`starter/coding_agent/tools/agy_headless_harness.py`](../starter/coding_agent/tools/agy_headless_harness.py) | **Lab 1 Part B target:** `AgyHeadlessHarness`, 4-tier `AgyExitCode(IntEnum)` state machine (`0/1/2/3`), NDJSON stream parser, `auto\|local\|sandbox` modes & `--dry-run` CLI |
-| [`starter/coding_agent/tools/sandbox_lifecycle.py`](../starter/coding_agent/tools/sandbox_lifecycle.py) | **Lab 2:** Managed Sandbox, Template & Snapshot lifecycle manager |
-| [`starter/coding_agent/tools/sandbox_execution.py`](../starter/coding_agent/tools/sandbox_execution.py) | **Lab 2:** Shell `execute_bash`, BYOC `/exec`, Code Execution & `AgentPlatformSandboxEnvironment` |
-| [`starter/coding_agent/memory/`](../starter/coding_agent/memory/) | **Lab 3:** Managed Sessions & Memory Bank managers |
-| [`starter/coding_agent/callbacks/telemetry_and_feedback.py`](../starter/coding_agent/callbacks/telemetry_and_feedback.py) | **Lab 3:** OTel tracing, parent runtime sandbox logging & Feedback Service client |
-| [`starter/coding_agent/tools/registry_loader.py`](../starter/coding_agent/tools/registry_loader.py) | **Lab 4:** `GCPSkillRegistry` + `SkillToolset` & `AgentRegistry` loader |
-
----
-
-### Step 4: ADK Agent Architecture Spectrum & Design Decisions
-
-Before writing code, understand **how Google ADK 2.0 structures agents** — and **when** to stay on a single `LlmAgent` versus evolving into multi-agent teams, declarative graphs, or programmatic dynamic workflows.
-
-```mermaid
-flowchart LR
-    S["1. Simple Agent\n(Single LlmAgent + Tools)\nAGENT_ARCHITECTURE=simple"]
-    C["2. Collaborative Team\n(Coordinator + single_turn / task / chat)\nAGENT_ARCHITECTURE=collaborative"]
-    G["3. Declarative Graph Workflow\n(Workflow edges + JoinNode + Event route)\nAGENT_ARCHITECTURE=graph"]
-    D["4. Dynamic Workflow\n(@node rerun_on_resume + ctx.run_node)\nAGENT_ARCHITECTURE=dynamic"]
-    H["5. Antigravity Headless CLI Harness\n(Outer ADK Factory + Inner agy CLI)\nAGENT_ARCHITECTURE=agy_harness"]
-
-    S -- "Specialization &\ncontext isolation" --> C
-    C -- "Deterministic steps,\nfan-out & guardrails" --> G
-    G -- "Bounded loops, complex\nbranching & checkpointing" --> D
-    D -- "Battle-tested coding harness\n+ independent verify/review" --> H
-```
-
-#### 4.1 Simple Agents (`LlmAgent`), `ManagedAgent` & Service Registration
-
-Start with a **Simple Agent (`LlmAgent`)** — an AI model, task instructions, and tools (extendable with custom/pre-built tools, Artifacts, Agent Skills, Plugins, Callbacks, and Service Registration). ADK imposes no hard requirement to split a working single agent, but per the [ADK Agents guide](https://adk.dev/agents/), **four concrete triggers** signal when to evolve into a workflow:
-
-1. **Instruction-following degradation:** Long multi-step prompts cause a single LLM to skip steps or lose reliability.
-2. **Context window limits:** Data required for the task exceeds what fits cleanly inside one agent's context window.
-3. **Code modularity & reuse:** Separating specialized capabilities (e.g., implementation vs. code review) improves maintainability and cross-project reuse.
-4. **Mixing deterministic & non-deterministic tasks:** You want guaranteed code execution (running `pytest`, `ruff`, approval gates) interleaved with AI reasoning rather than hoping the LLM follows prose instructions.
-
-##### `ManagedAgent` (ADK Python v2.4.0 Preview) vs. Custom `LlmAgent` / Workflows
-
-ADK Python v2.4.0 Preview adds [`ManagedAgent`](https://adk.dev/agents/managed-agents/), which implements `BaseAgent` and connects over the **Interactions API** (data plane) to Google's first-party server-hosted agents (such as `antigravity-preview-05-2026`, `environment={"type": "remote"}`). Rather than storing full history locally, ADK persists only `interaction_id` and `environment_id` on local events while Google's managed backend owns the remote interaction state and sandbox.
-
-| Dimension | `ManagedAgent` (ADK Python v2.4.0 Preview) | Custom `LlmAgent` / ADK 2.0 Workflows *(This Workshop)* |
-|---|---|---|
-| **Tools & Execution** | **Server-side tools only** (`google_search`, `types.Tool(code_execution=...)`, `google.adk.tools.RemoteMcpServer`). Client Python callables & raw `types.Tool.mcp_servers` raise `NotImplementedError`. | Full control over custom Python tools, **`EnvironmentToolset`**, **BYOC gVisor sandboxes (Lab 2)**, MCP, `SkillToolset` (Lab 4), and callbacks (Lab 3). |
-| **Agent Platform Region** | **`global`-only** (regional endpoints raise an error). | Regional (`asia-southeast1`, `us-central1`, `europe-west4`, etc.) with CMEK, VPC-SC, PSC-I (Optional Lab 7), and Artifact Registry BYOC containers (Lab 5). |
-| **Transport & State** | **Streaming only** (`stream=True`); server-owned interaction history & remote sandbox. | Unary, streaming, async jobs (up to 7d), Managed Sessions & Memory Bank (Lab 3). |
-| **Composition Pattern** | Composable inline inside an `LlmAgent`'s `sub_agents` via **`mode="single_turn"`**. | Can compose `ManagedAgent(mode="single_turn")` as a grounded web-research helper while keeping code execution inside your enterprise BYOC sandbox! |
-
-> **Why our Coding Agent uses `LlmAgent` / Workflows:** Enterprise coding teams need custom BYOC toolchains (`pytest`, `ruff`, `bandit`), customer VPC egress controls, regional compliance, and parent-runtime audit logging — all of which require `LlmAgent` + `EnvironmentToolset` (with optional `ManagedAgent` delegation for web research).
-
-##### Service Registration (`services.yaml` / `services.py`, ADK Python 2.0+)
-
-Need custom enterprise backends for sessions, artifacts, memory, or A2A task stores? ADK Python 2.0+ supports automatic [Service Registration](https://adk.dev/agents/service-registration/) across `adk run`, `adk web`, and `adk api_server`:
-- **`services.yaml` / `services.yml`:** Declarative URI-scheme mapping (`scheme`, `type: session | artifact | memory | task_store`, `class`) for simple constructors (`MyService(uri="...")`).
-- **`services.py`:** Programmatic factory registration via `from google.adk.cli.service_registry import get_service_registry` (`register_session_service`, `register_artifact_service`, `register_memory_service`).
-- **Discovery & Precedence:** `adk run` discovers files in the **agent directory** (`coding_agent/`); `adk web` and `adk api_server` discover them in the **agents root directory** (`starter/`). When both exist, ADK loads `services.yaml` first and `services.py` second — **`services.py` overrides `services.yaml`** on duplicate schemes. We inspect working workshop templates in Part B (Step 8) and connect them to Managed Sessions & Memory Bank in Lab 3!
-
-#### 4.2 Multi-Agent Workflows: Collaborative Teams, Routing & 7 Patterns
-
-##### Collaborative Agent Teams (ADK Python 2.0+)
-
-In a [collaborative workflow](https://adk.dev/workflows/collaboration/), a coordinator `LlmAgent` declares `sub_agents=[...]` and ADK auto-injects delegation tools named after each subagent. Each subagent runs with an explicit `mode`:
-
-| Collaboration `mode` | Human-in-the-Loop | User Interaction | Control Flow | Parallel Execution | Return to Parent |
-|---|---|---|---|---|---|
-| **`chat`** *(default)* | Full interaction | User chats freely with agent | Agent keeps control until manual handoff | Not supported | Manual (`transfer_to_agent`) |
-| **`task`** | Clarification only | Agent asks clarifying questions as needed | Agent controls until task complete | Not supported | Automatic (`finish_task`) |
-| **`single_turn`** | Disallowed | No user interaction | Returns immediately after task | **Supported** (parallel branches!) | Automatic (with result) |
-
-> [!CAUTION]
-> **Verified Collaborative Team Restrictions:**
-> 1. **Never set `mode` on a root agent** — `mode` applies strictly to subagents invoked by a coordinator.
-> 2. **`task`-mode agents MUST be leaf agents** (they cannot have `sub_agents`), and **`task` mode is disabled in graph-based workflows in ADK Python v2.0.0** (expected to be re-enabled in a future release).
-> 3. **Context Isolation & Shared Guardrails:** `task` and `single_turn` subagents run in **isolated session branches** (parallel peers cannot see each other's events). Apply enterprise-wide rules across all subagents using **`GlobalInstructionPlugin`** on `App` (Python/TS/Java) or `GlobalInstruction` (Go).
-
-##### ADK 2.0 Python Routing: Graph Conditional (`Event(route=...)`) & Dynamic Routing (`if`/`elif`)
-
-ADK 2.0 Python provides two first-class routing primitives depending on whether your branching topology is declarative or computed dynamically at runtime:
-- **Graph Conditional Routing (`Event(route=...)`):** A `@node` router function inspects structured outputs or check results and yields `Event(route="PASS")` (single branch) or `Event(route=["BUG", "SECURITY"])` (parallel multi-branch fan-out), with `DEFAULT_ROUTE` catching unmatched values. Use graph routing for inspectable, deterministic gates — such as switching between read-only planning vs. read-write execution agents, or routing `verdict_router` to `PASS`, `NEEDS_FIX`, or `NEEDS_APPROVAL`.
-- **Dynamic Routing (`if`/`elif` inside `@node(rerun_on_resume=True)`):** When routing depends on runtime complexity classification, bounded iterative loops, or data-driven fan-out, write standard async Python `if`/`elif` logic and invoke the selected specialist via `await ctx.run_node(target_node, payload)` (passing `use_sub_branch=True` for concurrent branches).
-- **Resilience & Failover:** Decorate unreliable specialist or check nodes with `@node(retry_config=RetryConfig(...), timeout=30.0)` so transient errors and `NodeTimeoutError` retry automatically, or catch expected failures inside a dynamic orchestrator to route cleanly to a fallback node.
-
-##### Mapping All 7 Official Multi-Agent Patterns to ADK 2.0
-
-| # | Pattern ([`workflows/patterns/`](https://adk.dev/workflows/patterns/)) | ADK 2.0 Python Primitive | Coding Agent Example |
+| Step | File | Where to edit | What you're adding |
 |---|---|---|---|
-| **1** | **Coordinator & Dispatcher** | Collaborative `LlmAgent` with `sub_agents` (`mode="single_turn"` / `mode="task"`) | `coding_lead` routing to `code_implementer`, `code_reviewer`, `requirements_clarifier` |
-| **2** | **Sequential Pipeline** | `Workflow(edges=[("START", step1, step2, step3)])` | Write code → run checks → summarize report |
-| **3** | **Parallel Fan-Out & Gather** | Graph fan-out + **`JoinNode`** OR Dynamic `@node(rerun_on_resume=True)` with `asyncio.gather(ctx.run_node(..., use_sub_branch=True))` | Run `pytest` and `ruff` concurrently, then merge results |
-| **4** | **Hierarchical Task Decomposition** | Multi-level `LlmAgent` `sub_agents` (`mode="single_turn"`; leaf-only for `mode="task"`) or nested `Workflow`s | High-level planner delegating to specialist sub-teams |
-| **5** | **Generate & Review** | `Workflow(edges=[("START", coder, reviewer)])` with typed `Event(output=...)` | Generate patch → automated static + LLM code review |
-| **6** | **Iterative Refinement** | Dynamic `@node(rerun_on_resume=True)` bounded `for` loop (`ctx.run_node(...)`) OR Graph conditional `Event(route=...)` back-edge | Edit → test/lint → fix loop capped at `MAX_FIX_ROUNDS` |
-| **7** | **Human-in-the-Loop (HITL)** | Graph/Dynamic **`RequestInput`** pause (`ResumabilityConfig(is_resumable=True)`) OR `FunctionTool(require_confirmation=True)` / `tool_context.request_confirmation()` | Pause for engineer sign-off before risky refactors or deploys |
+| Step 1 | `.env` (copy from [`.env.example`](../.env.example)) | Project ID & number | Set `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_PROJECT_NUMBER` |
+| Step 2 | [`starter/coding_agent/models.py`](../starter/coding_agent/models.py) | `build_gemini_model()` (`# TODO(lab-1)`) | Gemini 4 `client_kwargs` routing to `MODEL_LOCATION=global` |
+| Step 3 | [`starter/coding_agent/agent.py`](../starter/coding_agent/agent.py) | `build_local_environment_toolset()`, `_assemble_runtime_components()` (`# TODO(lab-1)`) | Confined `LocalEnvironment(working_dir=Path(...))` wrapped in `EnvironmentToolset` |
+| Step 6 (Part B, Stretch) | [`starter/coding_agent/tools/agy_headless_harness.py`](../starter/coding_agent/tools/agy_headless_harness.py) | `build_agy_command()`, `parse_agy_stream_json()` (`# TODO(lab-1)`) | `agy` CLI flags, `agy 1.5.15` nested NDJSON parsing, and 4-tier exit codes |
+| Step 7 (Part B, Stretch) | [`starter/coding_agent/architectures.py`](../starter/coding_agent/architectures.py) | `build_collaborative_coding_team()`, `build_graph_coding_workflow()`, `build_dynamic_coding_workflow()`, `build_agy_harness_workflow()` (`# TODO(lab-1)`) | Collaborative team, declarative graph, dynamic loop, and `agy` harness workflows |
 
-#### 4.3 ADK 2.0 Graph-Based & Dynamic Workflows
+**Already built for you (no edits needed):** [`starter/coding_agent/config.py`](../starter/coding_agent/config.py), [`starter/agents-cli-manifest.yaml`](../starter/agents-cli-manifest.yaml), [`starter/services.yaml`](../starter/services.yaml), [`starter/services.py`](../starter/services.py), plus validation and formatting helpers inside `models.py`, `agy_headless_harness.py`, and `architectures.py`.
 
-ADK 2.0 (Python GA May 19, 2026; Go GA June 30, 2026; TypeScript GA Aug 21, 2026) replaces opaque prompt chaining with two composable execution engines:
-
-1. **Declarative Graph Workflows ([`graphs/`](https://adk.dev/graphs/), [`graphs/routes/`](https://adk.dev/graphs/routes/)):**
-   - Wire `LlmAgent`s, `@node` / `FunctionNode` Python functions, tools, HITL nodes, and nested `Workflow`s via `Workflow(name=..., edges=[...])`. *(Note: a `Workflow` can be nested inside another `Workflow`, though it cannot yet be added directly to `LlmAgent.sub_agents`.)*
-   - Inside a graph, an `LlmAgent` defaults to **`single_turn` mode**; a `chat`-mode agent is **only allowed directly after `"START"`** (because it consumes conversation history instead of `node_input`). *(Note: some third-party integrations may not yet be compatible with graph-based workflows.)*
-   - **Conditional routing:** Emit `Event(route="PASS")` (or a list `Event(route=["BUG", "SECURITY"])` for multi-branch dispatch; `DEFAULT_ROUTE` catches unmatched values).
-   - **Fan-out & `JoinNode`:** `JoinNode(name="verify_join")` waits for all predecessor branches and passes a `dict` keyed by predecessor node name to the next node. **Every predecessor feeding a `JoinNode` MUST produce an output** — otherwise the join fails downstream!
-   - **Single Terminal Output Rule:** A `Workflow` (including nested workflows, whose inner events bubble up to the parent) may have **at most ONE terminal node producing output**. Two parallel branches terminating with output raise a **`ValueError`** — always converge them with `JoinNode`!
-   - **Unbounded Graph Cycles Caution:** A cycle in `edges` must contain **at least one conditional/routed edge** (unconditional cycles are rejected at build time), and **graph cycles are NOT bounded automatically** — track a counter in session state or move loops to a Dynamic Workflow!
-
-2. **Dynamic Workflows ([`graphs/dynamic/`](https://adk.dev/graphs/dynamic/)):**
-   - Write normal async Python (`for`, `while`, `if`, `asyncio.gather`) inside an orchestrator decorated with **`@node(rerun_on_resume=True)`**, calling child nodes/agents via **`await ctx.run_node(child, payload)`**.
-   - **Automatic Checkpointing:** ADK records every child `ctx.run_node()` result deterministically. When resuming after a HITL pause or failure, already-completed children (including completed parallel workers!) are skipped and replayed from checkpoints — only failed or interrupted nodes re-run!
-   - **Parallel isolation:** Pass **`use_sub_branch=True`** when launching concurrent tasks via `asyncio.gather(*tasks)`.
-   - **Custom `run_id` Warning:** Avoid custom `run_id` unless processing reorderable collections; if required, every custom `run_id` **MUST contain at least one non-numeric character** (e.g., `run_id=f"check-{name}"`) so it never collides with auto-generated sequential IDs (`"1"`, `"2"`, ...).
-
-3. **Data Handling ([`graphs/data-handling/`](https://adk.dev/graphs/data-handling/)):**
-   - Python nodes communicate via **`Event(output=..., message=..., route=..., state=...)`**: `output` flows to successor `node_input`; `message` streams to the user; `route` picks edges; `state` persists key-value entries (`app:`, `user:`, `temp:`, or session-scoped). Keep `state` lightweight — store large files in Artifacts or workspace files.
-   - **Strictly ONE `Event(output=...)` per Python node execution:** You may `yield` multiple progress `Event(message=...)` events, but yielding two `Event(output=...)` events in one node raises a **runtime error**!
-   - **Python `{key}` State vs. `node_input` Trap:** In Python `LlmAgent.instruction`, `{key}` placeholders substitute **session state**, NOT `node_input` (writing `{CityTime.time_info}` leaves it verbatim in the prompt!). Either attach `input_schema=MyPydanticModel` and refer to fields in prose, or emit `Event(state={"code": ..., "findings": ...})` before calling the agent! *(By contrast, ADK TypeScript supports `{Class.field}` and `<Class.field from source_node>` directly.)*
-   - **ADK 2.0 `State` Object API Gotcha (`No .pop()`):** `ctx.state` / `tool_context.state` (`google.adk.sessions.state.State`) supports `.get()`, `.setdefault()`, `.update()`, `.to_dict()`, `__contains__`, `__getitem__`, `__setitem__`, and `__iter__`, but does **NOT** implement `dict.pop()`, `.keys()`, `.items()`, `.values()`, `__delitem__`, or `__len__`. Never call `state.pop(key, None)` (raises `AttributeError`) — clear keys via `state[key] = None` or `yield Event(state={key: ""})`.
-
-4. **Human Input (`RequestInput`) & Tool Confirmation ([`graphs/human-input/`](https://adk.dev/graphs/human-input/)):**
-   - **Workflow HITL:** Yield `RequestInput(message=..., payload=..., response_schema=ApprovalDecision)` (`from google.adk.events import RequestInput`). Leaf HITL nodes use **`rerun_on_resume=False`** (default handoff: user reply flows directly to the successor/caller); parent dynamic orchestrators calling `ctx.run_node()` MUST set **`rerun_on_resume=True`**. **Important:** `response_schema` does **NOT** reformat free-text human replies — collect structured input in your UI or add a formatting agent node after the pause.
-   - **LLM Tool Confirmation:** Use `FunctionTool(fn, require_confirmation=True)` for automatic static yes/no approval, or call `tool_context.request_confirmation(hint=...)` inside a tool (in which case your tool MUST explicitly check both `if not tool_context.tool_confirmation:` and `elif not tool_context.tool_confirmation.confirmed:`).
-
-5. **Node Retries & Timeouts ([`graphs/retry/`](https://adk.dev/graphs/retry/)):**
-   - Decorate unreliable/slow nodes with `@node(retry_config=RetryConfig(max_attempts=3, initial_delay=1.0, max_delay=60.0, backoff_factor=2.0, jitter=1.0, exceptions=[TimeoutError, NodeTimeoutError]), timeout=30.0)` (`from google.adk.workflow import node, RetryConfig, NodeTimeoutError`). Defaults: `max_attempts=5` (includes initial try; `0`/`1` disables), `initial_delay=1.0s`, `max_delay=60.0s`, `backoff_factor=2.0`, `jitter=1.0`, all errors.
-   - `timeout` limits **each attempt separately** (not total retry time) and raises **`NodeTimeoutError`** — include `NodeTimeoutError` in `exceptions` if you want timed-out attempts retried!
-   - **Critical Caveats:** `ctx.attempt_count` (starts at `1`) is **NOT persisted across workflow pauses (HITL) or process restarts** (resumed nodes start fresh at attempt 1). Keep retried nodes idempotent, never catch bare `BaseException` (traps `NodeInterruptedError`), and don't swallow transient exceptions inside broad `except Exception:` blocks.
+**Need help or running behind?** Point Antigravity at [`.agents/skills/adk-coding-agent-build`](../.agents/skills/adk-coding-agent-build/SKILL.md), or run `make fast-forward LAB=1` to sync only Lab 1 without touching Labs 2-8.
 
 ---
 
-### Step 5: Understand ADK `EnvironmentToolset` vs. `ExecuteBashTool`
+## Step 1: Configure `.env`, Install Dependencies, and Validate Skills
 
-ADK Python provides two official ways to give an agent file/shell capabilities locally:
+Run these from the repo root. You do not need local Docker or `python3-venv`; standalone `uv` manages Python 3.11+ environments directly.
 
-```mermaid
-flowchart TD
-    AGENT["ADK Coding Agent\n(Simple / Collaborative / Graph / Dynamic / agy_harness)"]
-    ET["EnvironmentToolset (ADK Python 2.0+)\nExposes: ReadFile, EditFile, WriteFile, Execute"]
-    LE["LocalEnvironment(working_dir=Path(...))\nLab 1: Confined Local Directory"]
-    SE["AgentPlatformSandboxEnvironment(BaseEnvironment)\nLab 2: Remote gVisor Managed Sandbox"]
-    BT["ExecuteBashTool + BashToolPolicy (ADK Python 2.0+)\nPOSIX-only, Mandatory HITL Confirmation, RLIMIT_*"]
+1. Copy `.env.example` to `.env` (never commit `.env`) and fill in `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_PROJECT_NUMBER`:
+   ```bash
+   cp .env.example .env
+   ```
+   Keep the regional defaults: Gemini 4 frontier models (`gemini-4-hydrogen` and `gemini-4-neon`) use `MODEL_LOCATION=global`, while Agent Platform runtime/sandboxes default to `asia-southeast1` and Artifact Registry/Cloud Build default to `asia-southeast3`. (For strict Singapore inference residency, switch to `MODEL_NAME=gemini-4-argon` with `MODEL_LOCATION=asia-southeast1`.)
 
-    AGENT --> ET
-    ET -- "SANDBOX_MODE=local" --> LE
-    ET -- "SANDBOX_MODE=shell | byoc" --> SE
-    AGENT -. "Alternative for strict local HITL shell" .-> BT
-```
+2. Install standalone `uv` if missing, run pre-flight, sync dependencies, and validate the 6 bundled Antigravity skills:
+   ```bash
+   command -v uv >/dev/null 2>&1 || (curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv_install.sh && sh /tmp/uv_install.sh && rm -f /tmp/uv_install.sh)
+   make preflight && make install && make validate-skills
+   ```
+   Installing `google/agents-cli` (`uvx google-agents-cli setup`) is optional; every lab works directly with `uv`, `gcloud`, and Terraform.
 
-Why our Coding Agent uses **`EnvironmentToolset`** across **all five** architectures:
-1. **Four coding-native tools out of the box:** `Execute`, `ReadFile`, `EditFile` (surgical text replacement built on `read_file` + `write_file`), and `WriteFile`.
-2. **Automatic prompt injection:** `EnvironmentToolset.process_llm_request()` injects workspace usage instructions (`ENVIRONMENT_INSTRUCTION` and `ENVIRONMENT_WORKING_DIR_INSTRUCTION`) into the LLM request automatically.
-3. **Clean backend swap across ALL architectures:** In Lab 1 you pass `LocalEnvironment`, and in Lab 2 you swap in `AgentPlatformSandboxEnvironment(BaseEnvironment)` — whether you run `simple`, `collaborative`, `graph`, `dynamic`, or `agy_harness`, zero orchestration logic needs to change!
-4. **Future `SkillToolset` sharing:** In Lab 4, `SkillToolset` shares the exact same `environment=` instance so skill scripts execute inside the same sandbox.
-
-*(Note on `ExecuteBashTool`: If you ever build a local developer CLI agent where every command must pause for Human-in-the-Loop approval, ADK Python 2.0+ offers `ExecuteBashTool(workspace=Path(...), policy=BashToolPolicy(...))`. Always override its dangerous default `allowed_command_prefixes=("*",)` and set `blocked_operators` + `max_memory_bytes`/`max_child_processes` `RLIMIT_*` bounds!)*
+**Check it works:** `make validate-skills` prints `PASS` for all 6 directories under `.agents/skills/`.
 
 ---
 
-### Step 6: Implement `# TODO(lab-1)` in `models.py` & `agent.py` and Test `simple` Mode
+## Step 2: Wire the Gemini 4 Model Factory
 
-Open [`starter/coding_agent/models.py`](../starter/coding_agent/models.py) and [`starter/coding_agent/agent.py`](../starter/coding_agent/agent.py) and locate the `# TODO(lab-1)` markers.
+**File:** [`starter/coding_agent/models.py`](../starter/coding_agent/models.py), function `build_gemini_model()` (`# TODO(lab-1)`)
 
-#### Four Verified ADK 2.0 & Gemini 4 Gotchas to Watch Out For
+Your coding agent uses `gemini-4-hydrogen` for fast coding/tool calls and `gemini-4-neon` for deeper planning and review. Both run on `MODEL_LOCATION=global`, so you'll pass `client_kwargs` to ADK 2.0's `Gemini(...)` class to route model traffic to `global` while keeping `GOOGLE_CLOUD_LOCATION=asia-southeast1` for Agent Platform state and sandboxes.
+
+What goes inside `build_gemini_model()`:
+- Import `Gemini` from `google.adk.models` and `types` from `google.genai`.
+- Resolve the model with pre-filled `resolve_model_name(cfg, role=role, model_override=model_override)` and check the region with `validate_model_location(resolved_model, cfg.model_location)`.
+- When `cfg.google_genai_use_enterprise` is true, build `client_kwargs` using pre-filled `_detect_enterprise_client_kwarg()` (`"enterprise"` on `google-genai>=2.34.0` or `"vertexai"` on older builds), `"location": cfg.model_location`, and `"project": cfg.google_cloud_project` if set.
+- Return `Gemini(model=resolved_model, client_kwargs=client_kwargs, retry_options=types.HttpRetryOptions(initial_delay=initial_retry_delay, attempts=retry_attempts))`.
 
 > [!WARNING]
-> Every pitfall below was verified directly against `google/adk-python`, `google-genai>=2.34.0`, and live GCP Gemini 4 endpoints:
-> 1. **Pass `client_kwargs` to `Gemini(...)` — NEVER override `Gemini.api_client`:** Source-verified in `google.adk.models.google_llm.Gemini`, overriding `api_client` breaks `@PerLoopCachedProperty` and leaks `aiohttp` sessions. Pass `client_kwargs={auth_flag: True, "project": settings.google_cloud_project, "location": settings.model_location}` where `auth_flag = "enterprise" if "enterprise" in inspect.signature(genai.Client.__init__).parameters else "vertexai"` — 100% immune across all `google-genai>=2.34.0` and `3.x` builds while keeping `GOOGLE_CLOUD_LOCATION=asia-southeast1` for Agent Platform state/sandboxes!
-> 2. **Gemini 4 `ThinkingConfig` Rules:** Use `types.ThinkingConfig(thinking_level=settings.thinking_level)` with strictly `LOW | MEDIUM | HIGH | XHIGH` (passing `MINIMAL` or `thinking_budget` returns **HTTP 400**; custom `temperature`/`top_p`/`top_k` are ignored on Gemini 4).
-> 3. **`LocalEnvironment(working_dir=...)` MUST be a `pathlib.Path`, NOT a `str`!** Passing a raw string like `"/tmp/workspace"` raises `AttributeError: 'str' object has no attribute 'resolve'` on the first file read/write; `max_output_chars` belongs on `EnvironmentToolset`, NOT `LocalEnvironment`.
-> 4. **`App(root_agent=root_agent, name="coding_agent")` MUST match the package directory name (`coding_agent`).** Any mismatch causes `"Session not found"` errors in ADK runtime and `agents-cli eval`.
+> **Two Gemini 4 / ADK 2.0 quirks that break calls:**
+> 1. Never override `Gemini.api_client`: it breaks ADK's `@PerLoopCachedProperty` and leaks `aiohttp` sessions. Always use `client_kwargs`.
+> 2. The pre-filled `build_gemini4_generate_config()` below your TODO sets `ThinkingConfig(thinking_level=...)` to strictly `LOW | MEDIUM | HIGH | XHIGH`. Passing `MINIMAL` or legacy `thinking_budget` returns HTTP 400, and custom `temperature`/`top_p`/`top_k` values are ignored.
 
-#### Implementation Reference (`models.py` + `AGENT_ARCHITECTURE=simple`)
-
-Complete `# TODO(lab-1)` in `starter/coding_agent/models.py` (`build_gemini_model()`, using pre-filled `resolve_model_name`, `validate_model_location`, `_detect_enterprise_client_kwarg`, and `build_gemini4_generate_config`) and `starter/coding_agent/agent.py`:
+<details>
+<summary>Stuck? Peek at the code</summary>
 
 ```python
-# starter/coding_agent/models.py (Frontier Gemini 4 ADK 2.0 Factory)
-from typing import Any
-from google.adk.models import Gemini
-from google.genai import types
-
-from coding_agent.config import Settings, get_settings
-
-
 def build_gemini_model(
-    settings: Settings | None = None,
-    *,
-    role: ModelRole = "coding",  # "coding" -> gemini-4-hydrogen | "reasoning" -> gemini-4-neon
-    model_override: str | None = None,
-    retry_attempts: int = 2,
-    initial_retry_delay: float = 1.0,
+    settings: Settings | None = None, *, role: ModelRole = "coding",
+    model_override: str | None = None, retry_attempts: int = 2, initial_retry_delay: float = 1.0,
 ) -> Gemini:
-    """Build an ADK 2.0 Gemini 4 model routed to MODEL_LOCATION (default: global)."""
+    from google.adk.models import Gemini
+    from google.genai import types
+
     cfg = settings or get_settings()
     resolved_model = resolve_model_name(cfg, role=role, model_override=model_override)
     validate_model_location(resolved_model, cfg.model_location)
 
     client_kwargs: dict[str, Any] | None = None
     if cfg.google_genai_use_enterprise:
-        enterprise_kwarg = _detect_enterprise_client_kwarg()  # "enterprise" or "vertexai"
-        client_kwargs = {
-            enterprise_kwarg: True,
-            "location": cfg.model_location,
-        }
+        client_kwargs = {_detect_enterprise_client_kwarg(): True, "location": cfg.model_location}
         if cfg.google_cloud_project:
             client_kwargs["project"] = cfg.google_cloud_project
 
-    return Gemini(
-        model=resolved_model,
-        client_kwargs=client_kwargs,
-        retry_options=types.HttpRetryOptions(
-            initial_delay=initial_retry_delay,
-            attempts=retry_attempts,
-        ),
-    )
-
-# Pre-filled companion helper in models.py:
-# build_gemini4_generate_config(settings) -> types.GenerateContentConfig(
-#     thinking_config=types.ThinkingConfig(thinking_level=level)  # Strictly LOW|MEDIUM|HIGH|XHIGH
-# )
+    gemini_kwargs: dict[str, Any] = {
+        "model": resolved_model,
+        "retry_options": types.HttpRetryOptions(initial_delay=initial_retry_delay, attempts=retry_attempts),
+    }
+    if client_kwargs is not None:
+        model_fields = getattr(Gemini, "model_fields", None)
+        if model_fields is None or "client_kwargs" in model_fields:
+            gemini_kwargs["client_kwargs"] = client_kwargs
+    return Gemini(**gemini_kwargs)
 ```
 
-```python
-# starter/coding_agent/agent.py
-from pathlib import Path
+</details>
 
-from google.adk.environment import LocalEnvironment
-from google.adk.tools.environment import EnvironmentToolset
-
-
-def build_local_environment_toolset(
-    workspace_dir: Path,
-    max_output_chars: int = 12_000,
-) -> EnvironmentToolset:
-    """Create a confined LocalEnvironment wrapped by ADK EnvironmentToolset."""
-    workspace_dir.mkdir(parents=True, exist_ok=True)
-    # CRITICAL: working_dir MUST be a pathlib.Path (raw str raises AttributeError on .resolve())
-    local_env = LocalEnvironment(working_dir=workspace_dir)
-    return EnvironmentToolset(
-        environment=local_env,
-        max_output_chars=max_output_chars,
-    )
-```
-
-Notice how `starter/coding_agent/agent.py` keeps `build_coding_agent()` returning the single `LlmAgent` for `AGENT_ARCHITECTURE=simple`, while `build_root_agent()` dispatches cleanly to `coding_agent/architectures.py` when you switch `AGENT_ARCHITECTURE` in Part B — and wraps `root_agent` in `App(root_agent=root_agent, name="coding_agent", resumability_config=ResumabilityConfig(is_resumable=True))` so HITL pauses and dynamic checkpoints work seamlessly!
-
-#### ADK 2.0 Native Design Rules
-
-Follow these verified [ADK 2.0](https://adk.dev/2.0/) design practices across Labs 1–6:
-- Use **`BeforeAgentCallback` / `AfterAgentCallback` / `BeforeToolCallback` / `AfterToolCallback`** for telemetry, structured logging, and state initialization so the ADK 2.0 Workflow Graph engine executes hooks deterministically.
-- Emit state updates, progress messages, routing decisions, and final outputs via **`yield Event(...)`** from nodes and agents so the ADK 2.0 runtime manages persistence, routing, and streaming cleanly.
-- Let transient exceptions propagate cleanly out of `@node` functions so **`RetryConfig`** can retry them automatically (and never catch bare `BaseException`, which traps `NodeInterruptedError` and breaks HITL pauses).
-- Configure **`App(resumability_config=ResumabilityConfig(is_resumable=True), plugins=[GlobalInstructionPlugin(...)])`** so enterprise guardrails apply uniformly across isolated subagent branches and workflows resume cleanly after `RequestInput` HITL pauses.
-- In ADK Python, `output_schema` and `tools` **can** be combined on Gemini models on Google Cloud (tools remain available while the agent works, and `output_schema` applies only to the final response), whereas other models fall back to an injected `set_model_response` tool that can behave unreliably. As a cross-model reliability best practice, keep tool-heavy coding agents free of `output_schema` and attach `output_schema` on dedicated specialist/formatter agents (such as `code_reviewer` with `output_schema=CodeReviewReport` in Part B).
-
-#### Run & Test `AGENT_ARCHITECTURE=simple` Locally
-
-> [!IMPORTANT]
-> Always run `adk web`, `agents-cli playground`, and `agents-cli run` from the **parent directory** (`starter/`) containing `coding_agent/` and `agents-cli-manifest.yaml`, **never** from inside `starter/coding_agent/`. Confirm `starter/agents-cli-manifest.yaml` exists (otherwise `agents-cli` searches for `app/` by default).
-
+**Check it works:**
 ```bash
-cd starter
-
-# Launch ADK Dev UI on http://localhost:8000 (dev/debug only, not for production)
-uv run adk web --port 8000
-
-# Or single-shot prompt via agents-cli (verbose tool-call trace):
-# agents-cli run -v "Create math_utils.py with safe_divide(a, b) and pytest tests, then run pytest -v."
+(cd starter && uv run python -c "from coding_agent.models import build_gemini_model; m = build_gemini_model(); print(m.model, m.client_kwargs)")
 ```
-
-Open `http://localhost:8000`, select **`coding_agent`** in the top-left dropdown, and send this test prompt:
-
-> *"Create a Python module `math_utils.py` with a `safe_divide(a: float, b: float) -> float` function that raises `ValueError` on division by zero, write a pytest suite `test_math_utils.py` covering normal, negative, and zero-divisor cases, and run `pytest -v` to confirm everything passes."*
-
-Watch the **Events / Trace** tab in the ADK Web UI:
-1. `WriteFile` creates `math_utils.py` and `test_math_utils.py` inside your confined local workspace.
-2. `Execute` runs `pytest -v` and returns exit code `0`.
-3. Follow up with a second turn: *"Add a `moving_average(values: list[float], window: int)` function using EditFile, add unit tests, and run `pytest -v`."* Verify the agent uses **`EditFile`** rather than rewriting the whole file.
-
-> [!NOTE]
-> **Benign `InMemoryRunner` Exit Warning:** If you run single-shot Python turns via `InMemoryRunner` (or stop `adk web`), `google-genai`'s async HTTP client may log a benign `Unclosed client session` warning from `aiohttp` on process exit. This happens during interpreter teardown after the turn has already succeeded and does **not** indicate a bug in your agent.
-
-#### Security Reality Check: Why Local Mode Is NOT Production-Safe Yet
-
-Try asking your local agent: *"Print `whoami`, `pwd`, and check whether `gcloud` credentials exist on this machine."*
-
-Even though `LocalEnvironment._resolve_path()` confines `ReadFile`/`WriteFile` paths to `working_dir`, **`Execute` runs as a local subprocess under your laptop/workstation OS user** (`asyncio.create_subprocess_shell`). That means an LLM prompt injection running inside `LocalEnvironment` can still access your host network, `~/.config/gcloud`, or environment secrets! That is **precisely why** Lab 2 replaces `LocalEnvironment` with a gVisor-isolated **Google Cloud Managed BYOC Sandbox**.
+Expected output: `gemini-4-hydrogen {'enterprise': True, 'location': 'global', 'project': '<your-project-id>'}` (or `'vertexai': True` on older SDKs).
 
 ---
 
-## Part B (Optional / Fast-Track Stretch) — Evolving Across 5 ADK 2.0 Architectures & `agy` Headless CLI Harness (30 min Full-Day Stretch | 5 min Walkthrough Half-Day)
+## Step 3: Add `LocalEnvironment` and `EnvironmentToolset`
 
-> [!TIP]
-> **Optional / Fast-Track Stretch Module (Skip Anytime to Stay on Schedule!):**
-> Part B explores the four advanced ADK 2.0 architectures (`collaborative`, `graph`, `dynamic`, and **`agy_harness`**) plus custom service registration (`services.yaml` / `services.py`). **If you are on the Half-Day Fast-Track OR running short on time in the Full-Day Track**, review the completed patterns in [`solution/coding_agent/architectures.py`](../solution/coding_agent/architectures.py) and [`solution/coding_agent/tools/agy_headless_harness.py`](../solution/coding_agent/tools/agy_headless_harness.py), run `make fast-forward LAB=1` (if you want them pre-filled for `verify-lab LAB=1`), verify `AGENT_ARCHITECTURE=simple` in `.env`, and jump straight to **Step 9** so you reach Lab 2 right on time!
+**File:** [`starter/coding_agent/agent.py`](../starter/coding_agent/agent.py), functions `build_local_environment_toolset()` and `_assemble_runtime_components()` (two `# TODO(lab-1)` markers)
 
-### Step 7: Implement `# TODO(lab-1)` in `starter/coding_agent/architectures.py`
+ADK's `EnvironmentToolset` gives the agent `ReadFile`, `EditFile`, `WriteFile`, and `Execute` out of the box. You'll wire `LocalEnvironment` here now, then swap it for a remote gVisor Managed Sandbox in Lab 2 with zero changes to orchestration logic.
 
-Open [`starter/coding_agent/architectures.py`](../starter/coding_agent/architectures.py) and complete the `# TODO(lab-1)` builders (compare with [`solution/coding_agent/architectures.py`](../solution/coding_agent/architectures.py) anytime). The module imports ADK 2.0 workflow primitives directly at module scope and uses `coding_agent/models.py` (`build_gemini_model` routing `gemini-4-hydrogen` for fast implementation and `gemini-4-neon` for deep planning/review on `MODEL_LOCATION=global`), with shared helpers (`_attach_optional_callbacks`, `_invoke_optional_after_agent_callback`, `_pytest_command`, `_ruff_command`, `_run_workspace_check`, `_coerce_check_outcome`, `_format_check_findings`, `_format_approval_note`, and `_build_final_report`) already pre-filled:
+What to update in `starter/coding_agent/agent.py`:
+- Add `LocalEnvironment` to the top import: `from google.adk.environment import BaseEnvironment, LocalEnvironment`.
+- In `build_local_environment_toolset()`: resolve `workspace_dir` as a `pathlib.Path` (a raw `str` crashes with `AttributeError: 'str' object has no attribute 'resolve'` on the first file call), call `.mkdir(parents=True, exist_ok=True)`, create `LocalEnvironment(working_dir=resolved_dir)`, and return `EnvironmentToolset(environment=local_env, max_output_chars=max_output_chars)` (`max_output_chars` belongs on `EnvironmentToolset`, not `LocalEnvironment`).
+- In `_assemble_runtime_components()`: remove the `# TODO(lab-1)` comment and `try/except NotImplementedError` wrapper so `cfg.sandbox_mode == "local"` calls `build_local_environment_toolset()` directly.
+- Keep `app = App(root_agent=root_agent, name="coding_agent", **_build_app_options())` unchanged: `App.name` must match the `coding_agent` directory name or ADK throws `"Session not found"`.
+
+<details>
+<summary>Stuck? Peek at the code</summary>
 
 ```python
-from google.adk import Context, Event, Workflow
-from google.adk.workflow import JoinNode, NodeTimeoutError, RetryConfig, node
+# Top of starter/coding_agent/agent.py:
+from google.adk.environment import BaseEnvironment, LocalEnvironment
+
+
+def build_local_environment_toolset(workspace_dir: Path, max_output_chars: int = 12_000) -> EnvironmentToolset:
+    resolved_dir = Path(workspace_dir).resolve()
+    resolved_dir.mkdir(parents=True, exist_ok=True)
+    return EnvironmentToolset(environment=LocalEnvironment(working_dir=resolved_dir), max_output_chars=max_output_chars)
+
+
+# Inside _assemble_runtime_components(cfg: Settings):
+    if cfg.sandbox_mode == "local":
+        local_toolset = build_local_environment_toolset(workspace_dir=cfg.local_workspace_path, max_output_chars=cfg.max_output_chars)
+        active_environment = getattr(local_toolset, "_environment", None)
+        tools.append(local_toolset)
 ```
 
-#### Architecture 1: `AGENT_ARCHITECTURE=collaborative` (Collaborative Agent Team)
+</details>
 
-Complete `build_collaborative_coding_team(...)` to create a coordinator `LlmAgent` (the `coding_lead` exposed as root `coding_agent` — **no `mode` on root!**) delegating to three mode-scoped subagents, paired with `GlobalInstructionPlugin` on `App`:
+**Check it works:**
+```bash
+(cd starter && uv run python -c "from coding_agent.agent import app, root_agent; print(app.name, root_agent.name, len(root_agent.tools))")
+```
+Expected output: `coding_agent coding_agent 1`.
+
+---
+
+## Step 4: Test `simple` Mode Locally in `adk web`
+
+Start the local ADK Dev UI and test file writes, surgical edits, and `pytest` runs.
+
+> [!IMPORTANT]
+> Always run `adk web` from `starter/` (the parent of `coding_agent/`), never from inside `starter/coding_agent/`.
+
+```bash
+(cd starter && uv run adk web --port 8000)
+```
+
+Open `http://localhost:8000`, pick **`coding_agent`**, and try two prompts:
+1. *"Create `math_utils.py` with `safe_divide(a: float, b: float) -> float` raising `ValueError` on zero division, add `test_math_utils.py`, and run `pytest -v`."*
+2. *"Use `EditFile` to add `moving_average(values: list[float], window: int)` to `math_utils.py`, add tests, and run `pytest -v`."*
+
+**Check it works:** In the Events/Trace tab, Turn 1 calls `WriteFile` + `Execute` (`pytest` exit 0) and Turn 2 uses `EditFile` instead of rewriting the whole file. (An `Unclosed client session` message on shutdown is a benign `aiohttp` teardown warning.)
+
+**Security reality check:** Ask the agent to run `whoami && ls -la ~/.config/gcloud`. `LocalEnvironment` confines file paths, but `Execute` still runs under your local OS user. Lab 2 fixes that with a gVisor Managed Sandbox.
+
+---
+
+## Step 5: Core Lab Checkpoint (Part A)
+
+Run the Lab 1 verifier from the repo root:
+
+```bash
+make verify-lab LAB=1
+```
+
+All Core (Part A) checks (`models.py`, `agent.py`, `config.py`, `agents-cli-manifest.yaml`, `.agents/skills/`) should print `[PASS]`. If you skip Part B below, you'll see two expected `[FAIL]` lines for `# TODO(lab-1)` in `architectures.py` and `agy_headless_harness.py` (plus a harmless `[WARN]` if `agents-cli` isn't installed).
+
+**Stopping after Part A?** Jump straight to **[Lab 2: Custom Sandbox (BYOC)](./02-LAB-CUSTOM-SANDBOX-BYOC.md)** (Labs 2-8 use `AGENT_ARCHITECTURE=simple`), or run `make fast-forward LAB=1` if you want those two Part B files filled in so `verify-lab LAB=1` and `LAB=all` are 100% green. Otherwise, continue to Part B (Steps 6-8).
+
+---
+
+## Optional Stretch (Part B): Multi-Agent Workflows & `agy` Harness (~30 min)
+
+Steps 6-8 build the Antigravity (`agy`) headless CLI harness and four ADK 2.0 multi-agent architectures (`collaborative`, `graph`, `dynamic`, `agy_harness`) on top of the same Gemini 4 factory and `EnvironmentToolset`.
+
+## Step 6: Build the `agy` Headless CLI Harness
+
+**File:** [`starter/coding_agent/tools/agy_headless_harness.py`](../starter/coding_agent/tools/agy_headless_harness.py), functions `build_agy_command()` and `parse_agy_stream_json()` (`# TODO(lab-1)`)
+
+The `agy` CLI provides a native Go coding loop with streaming NDJSON telemetry (`--output-format stream-json`), session continuation (`--conversation`), and a 4-tier exit-code contract:
+- `0` (`SUCCESS`): Clean run. Keep `agy_error=None` even if `stderr` has warnings.
+- `1` (`FAILURE`): Auth, CLI, or transport fault. Fail fast (no retry).
+- `2` (`UNSUPPORTED_COMMAND`): Bad CLI flag. Never retry.
+- `3` (`AGENT_ERROR`): Model/quota error, timeout, or numeric project ID rejection. Safe for bounded retry and fallback (`gemini-4-neon` -> `gemini-4-hydrogen`).
+
+What goes inside the two TODOs:
+- **`build_agy_command(prompt, config)`**: Reject blank prompts, assemble `[config.agy_bin or "agy", "-p", cleaned_prompt, "--output-format", config.output_format, "--model", config.model, "--effort", config.effort, "--print-timeout", config.print_timeout]`, and conditionally append `--conversation`, `--sandbox`, `--dangerously-skip-permissions`, and `--json-schema`.
+- **`parse_agy_stream_json(...)`**: Parse NDJSON lines (keeping non-JSON lines as plain-text fallback) across both real `agy 1.5.15` nested envelopes (`{"event": "init"|"step_update"|"result", ...}`) and flat `--dry-run` events (`{"type": "session_start"|"tool_use"|"text_delta"|"result"|"error"}`). Use pre-filled `_extract_usage_counts()`, `_extract_agy_error()`, and `_classify_exit_code()` so `should_retry_or_fallback` is `True` only on exit code `3`.
+
+> [!WARNING]
+> **Agent Runtime & Auth Boundary for `agy`:** On deployed Agent Runtime (Lab 5), GCP auto-injects your numeric project number into `GOOGLE_CLOUD_PROJECT`, which `agy 1.5.15` rejects with exit code `3`. Pre-filled `build_local_agy_env()` reads `AGY_PROJECT_ID` (set by Lab 5 Terraform) to pass your string project ID instead. Never relay a developer's personal `agy` OAuth credentials inside a shared service; always use `AGY_ADC_AUTH=true` with a least-privilege Service Account.
+
+<details>
+<summary>Stuck? Peek at the code</summary>
 
 ```python
-from google.adk.agents import LlmAgent
+def build_agy_command(prompt: str, config: AgyHeadlessConfig) -> list[str]:
+    cleaned_prompt = prompt.strip()
+    if not cleaned_prompt:
+        raise ValueError("Prompt passed to build_agy_command() must be non-empty.")
+    cmd = [
+        config.agy_bin or "agy", "-p", cleaned_prompt, "--output-format", config.output_format,
+        "--model", config.model, "--effort", config.effort, "--print-timeout", config.print_timeout,
+    ]
+    if config.conversation_id:
+        cmd.extend(["--conversation", config.conversation_id])
+    if config.enable_sandbox:
+        cmd.append("--sandbox")
+    if config.dangerously_skip_permissions:
+        cmd.append("--dangerously-skip-permissions")
+    if config.json_schema is not None:
+        schema_json = config.json_schema if isinstance(config.json_schema, str) else json.dumps(config.json_schema, separators=(",", ":"))
+        cmd.extend(["--json-schema", schema_json])
+    return cmd
 
-code_implementer = LlmAgent(
-    name="code_implementer",
-    model=_build_gemini_model(settings, role="coding"),  # gemini-4-hydrogen (global)
-    mode="single_turn",  # No user chat; executes edits/tests via EnvironmentToolset & returns automatically
-    description="Implements code changes and runs tests inside the workspace environment.",
-    instruction="Use ReadFile, EditFile, WriteFile, and Execute to implement and test changes.",
-    tools=list(tools),
-    generate_content_config=_build_generate_config(settings),
-)
 
-code_reviewer = LlmAgent(
-    name="code_reviewer",
-    model=_build_gemini_model(settings, role="reasoning"),  # gemini-4-neon (global)
-    mode="single_turn",  # Isolated session branch; can run in parallel with peer single_turn agents
-    description="Reviews diffs and test results for correctness, edge cases, and security issues.",
-    instruction=(
-        "Audit the proposed changes for bugs, missing tests, and security vulnerabilities. "
-        "Return a concise structured CodeReviewReport."
-    ),
-    output_schema=CodeReviewReport,
-    generate_content_config=_build_generate_config(settings),
-)
+def parse_agy_stream_json(
+    stdout: str, stderr: str, exit_code: int, *, model: str = "",
+    execution_mode: str = "local", duration_ms: int = 0, command: list[str] | None = None,
+) -> AgyRunResult:
+    events, stream_parts, plain_lines, tool_calls, event_errors = [], [], [], [], []
+    final_text, conversation_id, token_usage, detected_model = None, None, {}, model
+    for raw_line in (stdout or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            plain_lines.append(raw_line)
+            continue
+        if not isinstance(obj, dict):
+            plain_lines.append(raw_line)
+            continue
+        events.append(obj)
+        n_init = obj.get("init") if isinstance(obj.get("init"), Mapping) else None
+        n_step = obj.get("step_update") if isinstance(obj.get("step_update"), Mapping) else None
+        n_res = obj.get("result") if isinstance(obj.get("result"), Mapping) else None
+        for c in (x for x in (obj, n_res, n_step, n_init) if x is not None):
+            for k in ("conversation_id", "conversationId", "session_id"):
+                if isinstance(c.get(k), str) and c[k].strip():
+                    conversation_id = c[k].strip()
+                    break
+            if not detected_model and isinstance(c.get("model"), str) and c["model"].strip():
+                detected_model = c["model"].strip()
+            for uk in ("usage", "token_usage", "usageMetadata"):
+                if isinstance(c.get(uk), Mapping):
+                    token_usage.update(_extract_usage_counts(c[uk]))
+        ev = str(obj.get("type") or obj.get("event") or "").lower()
+        if ev in {"tool_use", "tool_call", "function_call"}:
+            tool_calls.append({"name": str(obj.get("name", "unknown")), "id": str(obj.get("id", "")), "input": obj.get("input", {})})
+        elif n_step and str(n_step.get("step_type", "")).lower() in {"tool_use", "tool_call", "function_call"}:
+            tool_calls.append({"name": str(n_step.get("name", n_step.get("tool_name", "unknown"))), "id": str(n_step.get("id", "")), "input": n_step.get("input", {})})
+        err_val = obj.get("error") or (n_step.get("error") if n_step else None) or (n_res.get("error") if n_res else None)
+        if ev == "error" or err_val:
+            event_errors.append(str(err_val or obj.get("message") or "agy error").strip())
+        if ev in {"result", "final", "response"}:
+            src = n_res if n_res is not None else obj
+            cand = src.get("response") or src.get("result") or src.get("text")
+            if isinstance(cand, str) and cand.strip():
+                final_text = cand.strip()
+        else:
+            src = n_step if n_step is not None else obj
+            delta = src.get("text_delta") if src.get("text_delta") is not None else src.get("delta")
+            if isinstance(delta, str) and delta:
+                stream_parts.append(delta)
+    response_text = final_text if final_text is not None else ("".join(stream_parts).strip() or "\n".join(plain_lines).strip())
+    status, should_retry, hint = _classify_exit_code(exit_code)
+    agy_error = _extract_agy_error(stderr or "", event_errors) if exit_code != 0 or event_errors else None
+    return AgyRunResult(
+        exit_code=int(exit_code), status=status, response_text=response_text, conversation_id=conversation_id,
+        model=detected_model, execution_mode=execution_mode, tool_calls=tool_calls, token_usage=token_usage,
+        events=events, agy_error=agy_error, stderr=(stderr or "").strip(), duration_ms=max(0, int(duration_ms)),
+        should_retry_or_fallback=should_retry, actionable_hint=hint, command=list(command or []),
+    )
+```
 
-requirements_clarifier = LlmAgent(
-    name="requirements_clarifier",
-    model=_build_gemini_model(settings, role="coding"),
-    mode="task",  # Leaf agent ONLY (no sub_agents); asks clarifying questions & returns via finish_task
-    description="Clarifies ambiguous user requirements before implementation begins.",
-    instruction="Ask focused clarifying questions when specs are ambiguous, then call finish_task.",
-    generate_content_config=_build_generate_config(settings),
-)
+For full structured content-block extraction, see [`solution/coding_agent/tools/agy_headless_harness.py`](../solution/coding_agent/tools/agy_headless_harness.py).
 
-# Coordinator ("coding_lead"): ADK auto-injects delegation tools named after each subagent.
-# CRITICAL: NEVER set `mode=` on the root coordinator agent!
+</details>
+
+**Check it works:** Run the offline dry-run suite (works without Docker or a local `agy` binary):
+```bash
+make test-agy-harness
+```
+Expected output: `[PASS]` for `AgyExitCode` and checks `(1/4)` through `(3/4)` (NDJSON parsing, `--conversation` continuity, and retry matrix `{0: False, 1: False, 2: False, 3: True}`). Check `(4/4)` passes after Step 7.
+
+---
+
+## Step 7: Build the 4 Multi-Agent ADK 2.0 Workflows
+
+**File:** [`starter/coding_agent/architectures.py`](../starter/coding_agent/architectures.py), functions `build_collaborative_coding_team()`, `build_graph_coding_workflow()`, `build_dynamic_coding_workflow()`, and `build_agy_harness_workflow()` (`# TODO(lab-1)`)
+
+`starter/coding_agent/agent.py` already dispatches on `AGENT_ARCHITECTURE`, and all Pydantic schemas (`ApprovalDecision`, `CheckOutcome`, `CodeReviewReport`, `SpecPlan`) and check helpers (`_run_workspace_check`, `_format_check_findings`, `_format_approval_note`, `_build_final_report`, `_format_spec_brief`, `_format_review_section`) are pre-filled.
+
+What each builder adds:
+- **`build_collaborative_coding_team()`**: Coordinator `LlmAgent(name="coding_agent", sub_agents=[...])` (never set `mode` on root) delegating to `code_implementer` (`mode="single_turn"`), `code_reviewer` (`mode="single_turn"`, `role="reasoning"`, `output_schema=CodeReviewReport`), and `requirements_clarifier` (`mode="task"`, leaf-only).
+- **`build_graph_coding_workflow()`**: `Workflow(name="coding_agent", edges=[...])` wiring `coder_agent` (`output_key="latest_code_summary"`) -> parallel `run_pytest_node` (`allow_exit_codes=frozenset({0, 5})`) and `run_ruff_node` (`@node(retry_config=RetryConfig(..., exceptions=[TimeoutError, NodeTimeoutError]), timeout=30.0)`) -> `JoinNode(name="verify_join")` -> bounded `verdict_router` (`fix_attempts < settings.max_fix_rounds`) -> optional `@node(rerun_on_resume=False)` `request_human_approval` (`RequestInput`) -> single terminal `finalize_report` resetting `fix_attempts` to `0`.
+- **`build_dynamic_coding_workflow()`**: `@node(rerun_on_resume=True)` orchestrator calling `ctx.run_node(coder_agent, ...)`, parallel checks via `asyncio.gather(ctx.run_node(..., use_sub_branch=True), ...)`, bounded `for` loop yielding `Event(state={"code": ..., "findings": ..., "fix_attempts": ...})` before calling `fixer_agent` (Python `{key}` templates read session state, not `node_input`), optional HITL, and one terminal `Event`.
+- **`build_agy_harness_workflow()`**: 5-stage workflow pairing `spec_planner` (`gemini-4-neon`, `SpecPlan`), `run_agy_harness_node` (`AgyHeadlessHarness` with `fallback_coder_agent` fallback and fail-fast on exit 1/2), independent parallel `pytest`/`ruff` gates, bounded `--conversation` fix loop, and independent `code_reviewer` (`gemini-4-neon`) + optional HITL.
+
+<details>
+<summary>Stuck? Peek at the core patterns (complete builders in solution/coding_agent/architectures.py)</summary>
+
+```python
+# 1. Collaborative team (set mode ONLY on subagents, never on root):
 coding_lead = LlmAgent(
-    name="coding_agent",
-    model=_build_gemini_model(settings, role="coding"),
-    description="Coding lead coordinating requirements clarification, implementation, and review.",
-    instruction=(
-        "Coordinate the engineering team: delegate ambiguous specs to requirements_clarifier, "
-        "code edits/tests to code_implementer, and independent audits to code_reviewer."
-    ),
+    name="coding_agent", model=_build_gemini_model(settings, role="coding"),
+    instruction="Delegate ambiguous specs to requirements_clarifier, edits to code_implementer, reviews to code_reviewer.",
     sub_agents=[code_implementer, code_reviewer, requirements_clarifier],
     generate_content_config=_build_generate_config(settings),
 )
-```
 
-Test it locally:
+# 2. Declarative Graph Workflow edges (converge parallel checks via JoinNode -> single terminal node):
+return Workflow(name="coding_agent", edges=[
+    ("START", coder_agent),
+    (coder_agent, run_pytest_node, verify_join),
+    (coder_agent, run_ruff_node, verify_join),
+    (verify_join, verdict_router),
+    (verdict_router, {"NEEDS_FIX": coder_agent, "NEEDS_APPROVAL": request_human_approval, "PASS": finalize_report}),
+    (request_human_approval, finalize_report),
+])
 
-```bash
-cd starter
-AGENT_ARCHITECTURE=collaborative uv run adk web --port 8000
-```
-
-#### Architecture 2: `AGENT_ARCHITECTURE=graph` (Declarative Graph Workflow)
-
-Complete `build_graph_coding_workflow(...)` to wire a deterministic ADK 2.0 `Workflow(name="coding_agent", edges=[...])` that guarantees **both `pytest` and `ruff` run in parallel** with retries/timeouts, converge at a **`JoinNode`**, route on a bounded **`verdict_router`**, and optionally pause via **`RequestInput`** for human sign-off:
-
-```mermaid
-flowchart LR
-    START(["START"]) --> CODER["coder_agent\n(LlmAgent: single_turn)"]
-    CODER --> PYTEST["run_pytest_node\n(@node RetryConfig + 30s timeout)"]
-    CODER --> RUFF["run_ruff_node\n(@node RetryConfig + 30s timeout)"]
-    PYTEST --> JOIN["verify_join\n(JoinNode)"]
-    RUFF --> JOIN
-    JOIN --> ROUTER["verdict_router\nEvent(route=PASS | NEEDS_FIX | NEEDS_APPROVAL)"]
-    ROUTER -- "NEEDS_FIX\n(fix_attempts < MAX_FIX_ROUNDS)" --> CODER
-    ROUTER -- "NEEDS_APPROVAL" --> HITL["request_human_approval\n(RequestInput, rerun_on_resume=False)"]
-    HITL --> FINAL["finalize_report\n(Single Event output)"]
-    ROUTER -- "PASS" --> FINAL
-```
-
-Key verified ADK 2.0 patterns you implement in `build_graph_coding_workflow(...)`:
-- **Resilient check nodes & `pytest` exit code 5:** Decorate `run_pytest_node` and `run_ruff_node` with `@node(retry_config=RetryConfig(max_attempts=3, initial_delay=1.0, exceptions=[TimeoutError, NodeTimeoutError]), timeout=30.0)`. The pre-filled `_run_workspace_check(...)` helper accepts `allow_exit_codes=frozenset({0, 5})` so `pytest` exit code `5` (no tests collected yet) is treated cleanly rather than triggering unnecessary fix loops.
-- **Fan-in without `ValueError` & carrying upstream output across `JoinNode` + HITL:** Attach `output_key` on `coder_agent` (or persist summary/findings into `ctx.state`), and connect both parallel check nodes into `JoinNode(name="verify_join")` so every predecessor produces an output and the graph terminates through a single leaf (`finalize_report`). Because a `rerun_on_resume=False` `RequestInput` HITL pause replaces downstream `node_input` with the human's reply, reading persisted summary/findings from `ctx.state` in `finalize_report` preserves the full report across pauses.
-- **Explicitly bounded back-edge & `DEFAULT_ROUTE`:** `verdict_router(ctx, node_input, fix_attempts: int = 0)` receives `fix_attempts` via ADK's automatic session-state parameter binding and routes `"NEEDS_FIX"` directly back to `coder_agent` — emitting `Event(route="NEEDS_FIX", output=fix_prompt, state={"fix_attempts": next_attempt, "latest_findings": findings, "checks_passed": False})` only while `fix_attempts < settings.max_fix_rounds` (preventing unbounded graph cycles!). When wiring partial route dicts, import `DEFAULT_ROUTE` from `google.adk.workflow` (tip: scoping `from google.adk.workflow import DEFAULT_ROUTE` inside `build_graph_coding_workflow()` avoids `ruff` import-sorting conflicts with the top-level `from google.adk.workflow import JoinNode, NodeTimeoutError, RetryConfig, node` line). Also include `{"checks_passed", "findings"}` keys in non-HITL payloads routed from `verdict_router` so pre-filled `_format_approval_note()` distinguishes them cleanly from human HITL replies.
-- **Deterministic HITL gate:** When `ENABLE_HITL_APPROVAL=true`, `verdict_router` routes `"NEEDS_APPROVAL"` to `@node(rerun_on_resume=False)` `request_human_approval`, which yields `RequestInput(message=..., payload=..., response_schema=ApprovalDecision)`.
-- **Single `Event(output=...)` rule, multi-turn state reset & global guardrails:** `finalize_report` formats any HITL response with `_format_approval_note(...)`, renders `_build_final_report(...)`, invokes `_invoke_optional_after_agent_callback(callbacks, ctx)`, and returns strictly **one** `Event(message=report, output=report, state={"fix_attempts": 0, "latest_findings": ""})` — keeping state intact across HITL pauses while guaranteeing Turn 2+ in a multi-turn session starts fresh at `fix_attempts=0`. Meanwhile, `App` attaches `GlobalInstructionPlugin` across `collaborative`, `graph`, `dynamic`, and `agy_harness` workflows.
-
-Test it locally:
-
-```bash
-cd starter
-AGENT_ARCHITECTURE=graph MAX_FIX_ROUNDS=3 uv run adk web --port 8000
-```
-
-#### Architecture 3: `AGENT_ARCHITECTURE=dynamic` (Dynamic Checkpointed Workflow)
-
-Complete `build_dynamic_coding_workflow(...)` mirroring [`adk.dev/graphs/dynamic/#loop-route`](https://adk.dev/graphs/dynamic/#loop-route):
-
-```python
-import asyncio
-from google.adk import Context, Event, Workflow
-from google.adk.workflow import node
-
-
-@node(name="dynamic_coding_workflow", rerun_on_resume=True)  # REQUIRED for any orchestrator calling ctx.run_node()!
+# 3. Dynamic Workflow loop (@node(rerun_on_resume=True) + yield Event(state=...) before fixer_agent):
+@node(name="dynamic_coding_workflow", rerun_on_resume=True)
 async def dynamic_coding_workflow(ctx: Context, node_input: str):
     code_summary = await ctx.run_node(coder_agent, node_input)
-
-    # Run initial pytest and ruff checks concurrently in isolated sub-branches BEFORE entering the fix loop
     pytest_res, ruff_res = await asyncio.gather(
         ctx.run_node(run_pytest_node, code_summary, use_sub_branch=True),
         ctx.run_node(run_ruff_node, code_summary, use_sub_branch=True),
     )
     latest_findings = _format_check_findings(pytest_res, ruff_res)
-    attempts_used = 0
-
     for attempt in range(settings.max_fix_rounds):
         if not latest_findings:
             break
-        attempts_used = attempt + 1
-        # CRITICAL: Python {code}/{findings} instruction templates read session state, NOT node_input!
-        yield Event(
-            state={
-                "code": str(code_summary),
-                "findings": latest_findings,
-                "fix_attempts": attempts_used,
-            }
-        )
-        code_summary = await ctx.run_node(
-            fixer_agent,
-            {"code": str(code_summary), "findings": latest_findings},
-        )
-        # Re-run checks AFTER every fix round so the final fix is always verified
+        yield Event(state={"code": str(code_summary), "findings": latest_findings, "fix_attempts": attempt + 1})
+        code_summary = await ctx.run_node(fixer_agent, {"code": str(code_summary), "findings": latest_findings})
         pytest_res, ruff_res = await asyncio.gather(
             ctx.run_node(run_pytest_node, code_summary, use_sub_branch=True),
             ctx.run_node(run_ruff_node, code_summary, use_sub_branch=True),
         )
         latest_findings = _format_check_findings(pytest_res, ruff_res)
-
-    approval_note = ""
-    if settings.enable_hitl_approval:
-        # On resume after RequestInput pause, all earlier completed ctx.run_node() calls
-        # replay automatically from ADK checkpoints without re-running the LLM or pytest!
-        decision = await ctx.run_node(
-            request_human_approval,
-            {
-                "code_summary": str(code_summary),
-                "findings": latest_findings or "All checks (pytest + ruff) passed cleanly.",
-                "fix_attempts": attempts_used,
-            },
-        )
-        approval_note = _format_approval_note(decision)
-
-    final_report = _build_final_report(
-        code_summary=str(code_summary),
-        findings=latest_findings,
-        fix_attempts=attempts_used,
-        approval_note=approval_note,
-    )
-    await _invoke_optional_after_agent_callback(callbacks, ctx)
-    yield Event(
-        message=final_report,
-        output=final_report,
-        state={"code": "", "findings": "", "fix_attempts": 0},
-    )
-
-
-workflow = Workflow(name="coding_agent", edges=[("START", dynamic_coding_workflow)])
 ```
 
-> **Bonus Reference in `architectures.py`:** Inspect `build_optional_managed_agent()` at the bottom of `architectures.py` to see how a `ManagedAgent(name="managed_research_agent", mode="single_turn", agent_id=..., environment={"type": "remote"}, tools=[google_search])` attaches as an inline single-turn subagent when using the `global` Managed Agents backend (ADK Python v2.4.0 Preview).
+Copy or compare the complete builders in [`solution/coding_agent/architectures.py`](../solution/coding_agent/architectures.py).
 
-Test dynamic mode (optionally with HITL enabled):
+</details>
 
+**Check it works:** Re-run `make test-agy-harness` (all 4/4 checks pass), then switch architectures in `adk web`:
 ```bash
-cd starter
-AGENT_ARCHITECTURE=dynamic ENABLE_HITL_APPROVAL=true uv run adk web --port 8000
-```
-
----
-
-#### 5. Leveraging Antigravity (`agy`) Headless CLI Harness (`AGENT_ARCHITECTURE=agy_harness`)
-
-Production coding agents follow the **"10% Model / 90% Harness"** principle: frontier models like **Gemini 4 Hydrogen** and **Gemini 4 Neon** shine brightest inside a battle-tested coding harness (context compaction, AST-aware multi-file editing, tool retry loops, terminal output streaming), while enterprise teams still need a **deterministic ADK 2.0 outer control plane** for governance, independent verification, OTel observability, and HITL approvals.
-
-Our 5th architecture (`AGENT_ARCHITECTURE=agy_harness`, implemented in `build_agy_harness_workflow()` and [`starter/coding_agent/tools/agy_headless_harness.py`](../starter/coding_agent/tools/agy_headless_harness.py)) implements the **"Outer ADK Factory + Inner `agy` Headless Harness"** pattern:
-
-```mermaid
-flowchart LR
-    START(["START"]) --> PLAN["1. Spec / Planner Node<br/>Gemini 4 Neon (global)<br/>File Targets & Acceptance Criteria"]
-    PLAN --> AGY["2. Inner Coding Harness (@node)<br/>AgyHeadlessHarness<br/>auto | local | sandbox -> NDJSON + OTel Spans<br/>Captures conversation_id"]
-    AGY --> PYTEST["3a. Independent Gate<br/>pytest (use_sub_branch=True)"]
-    AGY --> RUFF["3b. Independent Gate<br/>ruff (use_sub_branch=True)"]
-    PYTEST --> CHECK{"4. Bounded Fix Loop<br/>(attempt < MAX_FIX_ROUNDS)"}
-    RUFF --> CHECK
-    CHECK -- "Failures -> Feed exact output via<br/>--conversation <id> (exit 3: neon -> hydrogen)" --> AGY
-    CHECK -- "Checks Clean (or Cap Reached)" --> REV["5. Independent code_reviewer<br/>Gemini 4 Neon (global)<br/>+ Optional RequestInput HITL Gate"]
-    REV --> DONE(["Single Event Output"])
-```
-
-> [!IMPORTANT]
-> **Never Trust the Coding Harness to Grade Itself:** Even when `agy` runs tests internally during its edit loop, the outer ADK 2.0 `Workflow` always runs **independent deterministic `pytest` and `ruff` checks** in isolated sub-branches (`asyncio.gather(..., use_sub_branch=True)`) and routes exact failure diffs back via `--conversation <conversation_id>`, followed by an independent `gemini-4-neon` `code_reviewer`!
-
-##### 5.1 Install `agy` Headless CLI & Verified Headless Flags (Zero Local Docker!)
-
-`agy` ships as a **static native Go binary** (supporting custom `--dir` for containers and CI runners — zero local Docker required!):
-
-```bash
-# Laptop / Workstation / Cloud Workstations install (download-then-execute; adds `agy` to your user bin dir):
-curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy_install.sh \
-  && bash /tmp/agy_install.sh \
-  && rm -f /tmp/agy_install.sh
-
-# Container / CI deterministic install into /usr/local/bin (used in Lab 2 BYOC & Lab 5 Runtime Dockerfiles!):
-# Note: `agy_install.sh --dir /usr/local/bin` installs the working static binary at `/usr/local/bin/agy`
-# (0755, accessible to `appuser`) even though its internal self-install step may also log `/root/.local/bin/agy`.
-# curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy_install.sh \
-#   && bash /tmp/agy_install.sh --dir /usr/local/bin \
-#   && rm -f /tmp/agy_install.sh && chmod 0755 /usr/local/bin/agy
-
-# Quick ADC sanity check (lists available Gemini models under AGY_ADC_AUTH=true):
-AGY_ADC_AUTH=true agy models
-
-# Run a single headless turn with streaming NDJSON events, Gemini 4 Hydrogen, and ADC auth
-# (CRITICAL: pass the string project ID to BOTH GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_QUOTA_PROJECT!):
-AGY_ADC_AUTH=true \
-AGY_CLI_DISABLE_AUTO_UPDATE=true \
-GOOGLE_CLOUD_PROJECT="${GOOGLE_CLOUD_PROJECT}" \
-GOOGLE_CLOUD_QUOTA_PROJECT="${GOOGLE_CLOUD_PROJECT}" \
-GOOGLE_CLOUD_LOCATION="global" \
-agy -p "Create math_utils.py with safe_divide(a, b) and pytest tests." \
-  --output-format stream-json \
-  --model gemini-4-hydrogen \
-  --effort medium \
-  --print-timeout 5m \
-  --sandbox
-```
-
-> [!WARNING]
-> **Live Agent Runtime Gotcha (`AGY_PROJECT_ID` vs. Numeric `GOOGLE_CLOUD_PROJECT`):**
-> On deployed Agent Runtime (Lab 5), Google Cloud auto-injects your **numeric project number** into `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_QUOTA_PROJECT` (and its GCE metadata server returns an internal Google tenant project `...-tp`), whereas `agy 1.5.15` **rejects numeric project IDs with exit code `3` (`invalid project ID: "<PROJECT_NUMBER>"`)**! In Lab 5, `terraform/main.tf` injects a non-reserved env var **`AGY_PROJECT_ID = var.project_id`** (the string project ID), and `build_local_agy_env()` prefers `AGY_PROJECT_ID` for both `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_QUOTA_PROJECT` (plus `GOOGLE_CLOUD_LOCATION=global`) inside every `agy` subprocess so both `agy -p ...` and `agy -p ... --sandbox` succeed cleanly (`EXIT=0`) under Custom SA ADC!
-
-| Verified `agy` Headless Flag | Purpose in Outer ADK Factory |
-|---|---|
-| `-p "<prompt>"` | Headless print (non-interactive) execution mode. |
-| `--output-format stream-json` *(or `json` / `text`)* | Emits newline-delimited JSON (NDJSON) events capturing tool calls, token counts, and `conversation_id` for OTel span instrumentation. |
-| `--model <gemini-4-hydrogen\|gemini-4-neon\|...>` | Pins the Frontier Gemini 4 model (matches `MODEL_NAME` / `REASONING_MODEL_NAME`). |
-| `--effort <low\|medium\|high\|xhigh>` | Maps cleanly from `THINKING_LEVEL` (`LOW\|MEDIUM\|HIGH\|XHIGH`). |
-| `--print-timeout <duration>` | Hard wall-clock execution cap (e.g., `5m`) so headless runs cannot hang CI or Agent Runtime workers. |
-| `--conversation <conversation_id>` | Resumes the exact coding harness context across outer ADK fix rounds (`attempt 2..MAX_FIX_ROUNDS`). |
-| `--sandbox` | Enables terminal sandboxing for local laptop / CI runs. |
-| `--dangerously-skip-permissions` | Unattended auto-approve **strictly inside** an isolated gVisor Managed Sandbox or ephemeral CI runner (never on an unprotected developer laptop!). |
-| `--json-schema <schema_json>` | Optional structured JSON contract for machine-parsed harness outputs. |
-
-##### 5.2 Verified 4-Tier Exit-Code State Machine (`AgyExitCode`), NDJSON Schema & Execution Modes
-
-`starter/coding_agent/tools/agy_headless_harness.py` enforces the exact verified 4-tier exit-code contract so the outer ADK loop retries **only** when safe:
-
-| Exit Code (`AgyExitCode`) | Meaning | Outer ADK Harness Policy |
-|---|---|---|
-| **`0` (`SUCCESS`)** | Harness completed cleanly | Parse NDJSON events, extract `conversation_id`, token/tool telemetry, and proceed to independent `pytest` + `ruff` gates. *(Harmless `stderr` on exit `0` leaves `agy_error=None`.)* |
-| **`1` (`FAILURE`)** | CLI, authentication, or transport fault | **Fail fast** with an actionable hint (`AGY_ADC_AUTH=true`, non-numeric `GOOGLE_CLOUD_PROJECT`/`AGY_PROJECT_ID`, `GOOGLE_CLOUD_LOCATION=global`, or ADC login). |
-| **`2` (`UNSUPPORTED_COMMAND`)** | Invalid CLI usage or unsupported flag | **NEVER retry** — surface exact CLI flag error immediately. |
-| **`3` (`AGENT_ERROR`)** | Model/quota failure, numeric project ID rejection, or timeout (parses `AGY_ERROR` on `stderr`) | Eligible for **bounded retry** and automatic model fallback (`gemini-4-neon` → `gemini-4-hydrogen`). |
-
-###### Verified `--output-format stream-json` NDJSON Event Schema & `AGY_ERROR` Format
-
-`parse_agy_stream_json()` must handle **both** real **`agy 1.5.15`** nested event envelopes AND flat/dry-run envelopes (plus plain-text fallback):
-
-- **Real `agy 1.5.15` Nested Envelopes (`"event"` key):**
-  ```json
-  {"event": "init", "conversation_id": "conv-123", "init": {"model": "gemini-4-hydrogen"}}
-  {"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": "AGY_LIVE_OK\n", "usage": {"input_tokens": 8200, "output_tokens": 120, "thinking_tokens": 410, "cache_read_tokens": 7100, "total_tokens": 8730}}}
-  {"event": "result", "result": {"conversation_id": "conv-123", "status": "SUCCESS", "response": "AGY_LIVE_OK\n", "error": "", "usage": {"input_tokens": 8200, "output_tokens": 120, "thinking_tokens": 410, "cache_read_tokens": 7100, "total_tokens": 8730}}}
-  ```
-- **Flat / `--dry-run` Compatibility Envelopes (`"type"` key):** `session_start` (`conversation_id`), `tool_use` (`id`, `name`, `input`), `text_delta` (`delta`), `result` (`result`, `usage`), and `error` (`message`/`error`).
-- **Stderr `AGY_ERROR:` Extraction:** On non-zero exit codes, scan `stderr` for lines prefixed with `AGY_ERROR: <detail>` (falling back to the `result.error` field or trimmed `stderr`), while keeping `agy_error=None` on exit `0`! Unwrapping nested `result` / `step_update` / `init` dicts and capturing `thinking_tokens` / `cache_read_tokens` ensures live `agy 1.5.15` output never collapses to empty `response_text=""` or `token_usage={}`.
-
-Control where the inner harness executes with **`AGY_EXECUTION_MODE`**:
-- **`local`:** Runs `agy` in the current process environment (laptop, CI runner, Cloud Workstations, or trusted **Agent Runtime** container authenticated via Custom SA ADC `AGY_ADC_AUTH=true` + non-numeric `AGY_PROJECT_ID` + `GOOGLE_CLOUD_LOCATION=global`).
-- **`sandbox`:** Delegates `agy -p ... --output-format stream-json --dangerously-skip-permissions` inside the gVisor **BYOC Managed Sandbox** via `AgentPlatformSandboxEnvironment.execute_with_env(...)` (with `execute(...)` fallback for environments without `execute_with_env`), passing only allowlisted ephemeral env keys into `/exec` (requires PSC-I egress + scoped ephemeral credentials; covered in [Lab 2](./02-LAB-CUSTOM-SANDBOX-BYOC.md)).
-- **`auto` *(default)*:** When `AGY_ADC_AUTH=true` and no BYOC `GEMINI_API_KEY`/egress override is supplied, **`auto` prefers `local`** (trusted laptop / Agent Runtime Custom SA ADC) while keeping untrusted `pytest`/`ruff`/`bandit` inside the air-gapped BYOC gVisor sandbox — because an air-gapped BYOC sandbox (`internet_access=False`, zero metadata server) exits `1` (`Error: authentication required`) if `agy` is invoked inside it without credentials/egress. When BYOC credentials/egress are explicitly supplied and `GET /health` confirms `agy_cli_available=True`, it uses `sandbox`; if `agy` is unavailable locally, it **gracefully falls back** to native ADK 2.0 `LlmAgent` + `EnvironmentToolset`.
-
-> [!CAUTION]
-> **Enterprise Auth & ToS Boundary (Mandatory Production Rule):**
-> - **NEVER** proxy, copy, or relay a developer's personal `agy` OAuth credentials inside a shared or multi-tenant service.
-> - On **Agent Runtime (Lab 5)**, authenticate `agy` exclusively via **`AGY_ADC_AUTH=true`** backed by the runtime's dedicated least-privilege Service Account (`coding-agent-runtime-sa`), OR use native ADK 2.0 `LlmAgent` / `ManagedAgent` / `google-antigravity` SDK.
-> - Inside **gVisor Managed Sandboxes (Lab 2)** (zero IAM roles, metadata server blocked), either run `agy` in the trusted Agent Runtime while routing untrusted `pytest`/`ruff`/`bandit` commands to the air-gapped gVisor Sandbox, OR (when PSC-I + Cloud NGFW/SWP egress is enabled) inject only a scoped ephemeral credential/API key from Secret Manager per `/exec` call without writing it to disk.
-
-##### 5.3 Comparing the Three Antigravity / ADK Coding Surfaces
-
-| Surface | Where It Runs | Tools & Isolation | Auth & Enterprise Fit |
-|---|---|---|---|
-| **`agy` Headless CLI (`AGY_EXECUTION_MODE=local\|sandbox\|auto`)** | Laptop, CI/CD, Cloud Build, **Agent Runtime** (`AGY_ADC_AUTH=true`), or **BYOC gVisor Sandbox** | Full Antigravity file/edit/terminal harness + NDJSON stream + `--conversation` + `--sandbox` / gVisor | Custom SA ADC (`AGY_ADC_AUTH=true`) on Agent Runtime, or scoped ephemeral Secret Manager key per sandbox `/exec`; **works zero-Docker via Cloud Build**. |
-| **`google-antigravity` Python SDK** | Python orchestration apps & services | Programmatic in-process Antigravity harness control without spawning a CLI subprocess | Standard GCP ADC / Service Account IAM; ideal for tightly embedded Python control planes. |
-| **ADK `ManagedAgent` / Native `LlmAgent` + `EnvironmentToolset`** | `ManagedAgent`: Google-managed `global`-only Preview backend · Native `LlmAgent`: **Agent Runtime (`asia-southeast1`)** / GKE (`asia-southeast3`) | `ManagedAgent`: server-side tools only (`NotImplementedError` on Python tools) · Native `LlmAgent`: full custom Python tools, **BYOC Sandboxes**, `SkillToolset`, MCP, callbacks & CMEK/VPC-SC | Native `LlmAgent` + `EnvironmentToolset` is 100% regional, zero external binary dependency, and serves as `AGY_EXECUTION_MODE=auto`'s automatic fallback! |
-
-##### 5.4 Complete `# TODO(lab-1)` Checkpoints & Run `make test-agy-harness`
-
-Complete the **2 focused `# TODO(lab-1)` checkpoints** in [`starter/coding_agent/tools/agy_headless_harness.py`](../starter/coding_agent/tools/agy_headless_harness.py) — **`build_agy_command()`** (assembling verified `agy` CLI flags) and **`parse_agy_stream_json()`** (parsing NDJSON stream events, `conversation_id`, `tool_calls`, `token_usage`, `agy_error`, and mapping the 4-tier `AgyExitCode` contract) — alongside `build_gemini_model()` in `starter/coding_agent/models.py` and `build_agy_harness_workflow()` in `starter/coding_agent/architectures.py`, then verify **with zero Docker — even before installing `agy` locally** — using `--dry-run`:
-
-```bash
-# Validates command builder, 4-tier exit-code handling (0/1/2/3), NDJSON event parsing,
-# auto|local|sandbox mode resolution, and --dry-run (works ZERO Docker and even if `agy` is not installed yet!):
 make test-agy-harness
-
-# Optional live test once `agy` is installed locally:
-cd starter
-AGENT_ARCHITECTURE=agy_harness AGY_EXECUTION_MODE=auto uv run adk web --port 8000
+(cd starter && AGENT_ARCHITECTURE=graph MAX_FIX_ROUNDS=3 uv run adk web --port 8000)
+# Also try: AGENT_ARCHITECTURE=collaborative | dynamic | agy_harness
 ```
 
 ---
 
-### Step 8: Inspect ADK Service Registration (`starter/services.yaml` & `starter/services.py`)
+## Step 8: Inspect Service Registration and Reset to `simple`
 
-Open [`starter/services.yaml`](../starter/services.yaml) and [`starter/services.py`](../starter/services.py) at the root of `starter/` (the agents root directory scanned by `adk web` and `adk api_server`; for `adk run`, ADK scans the agent directory `starter/coding_agent/`):
-
-1. **[`starter/services.yaml`](../starter/services.yaml)** registers custom URI schemes declaratively for simple constructors (`scheme`, `type: session | artifact | memory | task_store`, `class`).
-2. **[`starter/services.py`](../starter/services.py)** uses `from google.adk.cli.service_registry import get_service_registry` to register custom factory functions (`register_session_service`, `register_artifact_service`, `register_memory_service`) when initialization needs custom auth, pooling, or environment logic.
-3. **Loading Order & Precedence:** ADK loads `services.yaml` first and `services.py` second — if both define the same URI scheme (e.g., `enterprise-session`), **`services.py` wins**!
-4. Both starter templates guard custom registrations behind `ENABLE_CUSTOM_SERVICE_REGISTRY=true` (or commented examples) so local `adk web` / `adk run` work out of the box without extra database packages. In **Lab 3**, we pair this extensibility pattern with Google Cloud's Managed Sessions (`VertexAiSessionService`) and Memory Bank (`VertexAiMemoryBankService`).
+Skim [`starter/services.yaml`](../starter/services.yaml) and [`starter/services.py`](../starter/services.py) to see how ADK 2.0 auto-discovers custom session/artifact/memory URI schemes (both stay inactive until `ENABLE_CUSTOM_SERVICE_REGISTRY=true`). Keep `AGENT_ARCHITECTURE=simple` in `.env` before Lab 2 so your agent matches Lab 6's evaluation datasets.
 
 ---
 
-### Step 9: Preparing for Lab 2 & Lab 1 Verification Checkpoint
+## Lab 1 Checkpoint
 
-> [!TIP]
-> **Switch Back to `AGENT_ARCHITECTURE=simple` (Default) Before Lab 2:**
-> Confirm `.env` has `AGENT_ARCHITECTURE=simple` (or intentionally keep `collaborative` / `graph` / `dynamic` / `agy_harness` if you want to test advanced workflows in the cloud!). Either way, **every single architecture shares the exact same `EnvironmentToolset` and Gemini 4 model factory**, so Lab 2's swap from `LocalEnvironment` to `AgentPlatformSandboxEnvironment` works identically across all five modes — and keeping `AGENT_ARCHITECTURE=simple` guarantees 100% deterministic alignment with Lab 6's evaluation datasets!
-
-Return to the repository root and run the Lab 1 verifier:
+Run the Lab 1 verifier from the repo root:
 
 ```bash
-./scripts/verify_lab.sh 1
-# Or via Makefile:
-# make verify-lab LAB=1
+make verify-lab LAB=1
 ```
 
-**Checkpoint Pass Criteria:**
-- [ ] `.agents/skills/` passes `make validate-skills` (including `agy-headless-cli-harness.md` and modular references in `adk-coding-agent-build`). *(Optional: `agents-cli info` succeeds if you installed `google/agents-cli`; a `WARN: agents-cli not found on PATH` message from `verify-lab LAB=1` is benign if running with `uv` + Terraform directly.)*
-- [ ] `starter/coding_agent/models.py` and `starter/coding_agent/agent.py` compile cleanly with no remaining `# TODO(lab-1)` markers; `build_gemini_model()` routes Gemini 4 (`gemini-4-hydrogen` / `gemini-4-neon`) via `client_kwargs` to `MODEL_LOCATION=global` with valid `THINKING_LEVEL` (`LOW|MEDIUM|HIGH|XHIGH`); `LocalEnvironment` receives a `pathlib.Path` and `EnvironmentToolset` sets `max_output_chars`.
-- [ ] `App(root_agent=root_agent, name="coding_agent")` matches the package directory name and enables `ResumabilityConfig(is_resumable=True)`.
-- [ ] *(Optional / Stretch — Part B)* `starter/coding_agent/architectures.py` and `starter/coding_agent/tools/agy_headless_harness.py` compile cleanly with `# TODO(lab-1)` implemented for `collaborative`, `graph`, `dynamic`, and `agy_harness` modes (or fast-forwarded via `make fast-forward LAB=1`), `make test-agy-harness` passes, and `starter/services.yaml` + `starter/services.py` validate cleanly.
-- [ ] Local test run successfully creates files and runs `pytest` via `EnvironmentToolset`.
-
-> **Time-Box Fallback:** If you hit any environment issue, inspect [`solution/coding_agent/models.py`](../solution/coding_agent/models.py), [`solution/coding_agent/agent.py`](../solution/coding_agent/agent.py), [`solution/coding_agent/architectures.py`](../solution/coding_agent/architectures.py), and [`solution/coding_agent/tools/agy_headless_harness.py`](../solution/coding_agent/tools/agy_headless_harness.py) to compare your implementation before moving on.
+Confirm zero `[FAIL]` lines (`WARN: agents-cli not found on PATH` is benign if you skipped `agents-cli`), then continue to **[Lab 2: Custom Sandbox (BYOC), Lifecycle & Execution](./02-LAB-CUSTOM-SANDBOX-BYOC.md)**.
 
 ---
 
-## Next Lab
+## Optional Reference & Deep Dive
 
-Ready to replace local subprocess execution with a **gVisor-isolated, non-root BYOC Managed Sandbox** (with opt-in `/usr/local/bin/agy` baked via Bangkok Cloud Build!) that plugs seamlessly into all five ADK architectures? Continue to **[Lab 2: Custom Sandbox (BYOC), Lifecycle & Execution](./02-LAB-CUSTOM-SANDBOX-BYOC.md)**.
+<details>
+<summary>Greenfield <code>google/agents-cli</code> rules &amp; Service Registration (<code>services.yaml</code> / <code>services.py</code>)</summary>
 
----
+- **Greenfield `agents-cli`:** Scaffold new repos with `agents-cli create my-coding-agent --agent adk_python -d agent_runtime -y` (or `--adk`). Project names must be `<= 26` chars (`a-z`, `0-9`, `-`), never `mkdir <name>` first, and for non-`app/` layouts run `agents-cli scaffold enhance . --from-adk-project --agent-directory coding_agent` (already pre-configured in [`starter/agents-cli-manifest.yaml`](../starter/agents-cli-manifest.yaml)). Opt out of CLI telemetry with `AGENTS_CLI_TELEMETRY=0` or `DO_NOT_TRACK=1`.
+- **Service Registration:** `adk run` scans `coding_agent/`; `adk web` and `adk api_server` scan `starter/`. ADK loads `services.yaml` first (`scheme`, `type: session|artifact|memory|task_store`, `class`) and `services.py` second via `get_service_registry()`. On duplicate schemes, `services.py` overrides `services.yaml`.
 
-## Canonical References
+</details>
 
-### Core Setup, Models & Local Coding Tools
-- [Google ADK — Get Started](https://adk.dev/get-started/)
-- [Google ADK — Python Quickstart](https://adk.dev/get-started/python/)
-- [Google ADK — `EnvironmentToolset` Integration](https://adk.dev/integrations/environment-toolset/)
-- [Google ADK — `ExecuteBashTool` (`BashToolPolicy`)](https://adk.dev/integrations/bashtool/)
-- [Google ADK — Gemini Models & Regional Endpoint Notes](https://adk.dev/agents/models/google-gemini/)
-- [Google ADK — ADK 2.0 Overview & Architecture Guide](https://adk.dev/2.0/)
-- [`google/agents-cli` — Official GitHub Repository](https://github.com/google/agents-cli)
+<details>
+<summary><code>ManagedAgent</code> (Preview) &amp; <code>ExecuteBashTool</code> Comparisons</summary>
 
-### ADK 2.0 Agent Architectures, Multi-Agent Workflows & Graphs
-- [Google ADK — Agents Overview & Evolution Triggers](https://adk.dev/agents/)
-- [Google ADK — Managed Agents (`ManagedAgent` v2.4.0 Preview)](https://adk.dev/agents/managed-agents/)
-- [Google ADK — Service Registration (`services.yaml` & `services.py`, ADK Python 2.0+)](https://adk.dev/agents/service-registration/)
-- [Google ADK — Workflows Overview](https://adk.dev/workflows/)
-- [Google ADK — Collaborative Agent Teams (`chat` / `task` / `single_turn`)](https://adk.dev/workflows/collaboration/)
-- [Google ADK — Multi-Agent Workflow Patterns (All 7 Patterns)](https://adk.dev/workflows/patterns/)
-- [Google ADK — Graph-Based Agent Workflows (`Workflow`)](https://adk.dev/graphs/)
-- [Google ADK — Graph Routes, Conditional Branching, `JoinNode` & Loops](https://adk.dev/graphs/routes/)
-- [Google ADK — Data Handling, Events, State Scopes & Schemas](https://adk.dev/graphs/data-handling/)
-- [Google ADK — Human Input (`RequestInput`) & Tool Confirmation](https://adk.dev/graphs/human-input/)
-- [Google ADK — Node Retries (`RetryConfig`) & Timeouts (`NodeTimeoutError`)](https://adk.dev/graphs/retry/)
-- [Google ADK — Dynamic Agent Workflows (`@node(rerun_on_resume=True)` & `ctx.run_node`)](https://adk.dev/graphs/dynamic/)
+| Dimension | `ManagedAgent` (ADK Python v2.4.0 Preview) | Custom `LlmAgent` / Workflows (This Workshop) |
+|---|---|---|
+| Tools & execution | Server-side only (`google_search`, built-in code exec, `RemoteMcpServer`); Python callables raise `NotImplementedError`. | Custom Python tools, `EnvironmentToolset`, BYOC gVisor sandboxes (Lab 2), MCP, `SkillToolset` (Lab 4), callbacks (Lab 3). |
+| Region & transport | `global`-only, streaming-only (`stream=True`), server-owned history/sandbox. | Regional (`asia-southeast1`), unary/streaming/async (7d), Managed Sessions & Memory Bank, CMEK/VPC-SC/PSC-I. |
+| Composition | Attach in `LlmAgent.sub_agents` with `mode="single_turn"` (see `build_optional_managed_agent()` in `architectures.py`). | Core enterprise coding workflow with full egress and audit control. |
+
+**`EnvironmentToolset` vs. `ExecuteBashTool`:** We use `EnvironmentToolset` because it exposes `ReadFile`/`EditFile`/`WriteFile`/`Execute`, swaps cleanly from `LocalEnvironment` to `AgentPlatformSandboxEnvironment`, and shares `environment=` with `SkillToolset` in Lab 4. For local dev CLIs where every shell call must prompt for HITL approval, ADK Python 2.0+ also offers `ExecuteBashTool(workspace=Path(...), policy=BashToolPolicy(...))` (POSIX-only; always replace its default `allowed_command_prefixes=("*",)` and set `blocked_operators` + `RLIMIT_*` bounds).
+
+</details>
+
+<details>
+<summary>All 7 ADK 2.0 Multi-Agent Patterns, <code>State</code> API &amp; Retry/HITL Rules</summary>
+
+| # | Pattern | ADK 2.0 Python Primitive | Coding Agent Example |
+|---|---|---|---|
+| 1 | Coordinator & Dispatcher | `LlmAgent` with `sub_agents` (`single_turn` / `task`) | `coding_lead` -> implementer, reviewer, clarifier |
+| 2 | Sequential Pipeline | `Workflow(edges=[("START", step1, step2, step3)])` | Write code -> run checks -> summarize |
+| 3 | Parallel Fan-Out & Gather | Graph fan-out + `JoinNode`, or `asyncio.gather(ctx.run_node(..., use_sub_branch=True))` | Concurrent `pytest` + `ruff`, then merge |
+| 4 | Hierarchical Decomposition | Multi-level `sub_agents` (`single_turn`; leaf-only for `task`) or nested `Workflow`s | Planner delegating to specialist teams |
+| 5 | Generate & Review | `Workflow(edges=[("START", coder, reviewer)])` | Patch generation -> static + LLM review |
+| 6 | Iterative Refinement | Dynamic `@node(rerun_on_resume=True)` loop or routed back-edge | Edit -> check -> fix capped at `MAX_FIX_ROUNDS` |
+| 7 | Human-in-the-Loop (HITL) | `RequestInput` (`ResumabilityConfig(is_resumable=True)`) or `FunctionTool(require_confirmation=True)` | Sign-off before risky refactors or deploys |
+
+- **Collaboration modes:** `chat` (manual `transfer_to_agent`), `task` (clarification questions, automatic `finish_task`, leaf-only, disabled in Python v2.0.0 graph `Workflow`s), `single_turn` (no user chat, parallel-safe, automatic return). Use `GlobalInstructionPlugin` on `App` for shared guardrails across isolated subagent branches.
+- **Graph invariants:** Every branch feeding a `JoinNode` must produce output; at most one terminal node may produce output (two parallel leaf outputs raise `ValueError`). Graph cycles require a routed edge (`Event(route=...)`) and are not bounded automatically. Yield at most one `Event(output=...)` per node execution.
+- **`State` API gotcha:** `ctx.state` supports `.get()`, `.setdefault()`, `.update()`, `.to_dict()`, `in`, `[]`, and iteration, NOT `.pop()`, `.keys()`, `.items()`, `.values()`, `del`, or `len()`. Clear keys with `state[key] = None` or `yield Event(state={key: ""})`.
+- **Retries, timeouts, HITL & `output_schema`:** `@node(retry_config=RetryConfig(...), timeout=30.0)` applies `timeout` per attempt and raises `NodeTimeoutError` (include it in `exceptions` to retry timeouts). Never catch `BaseException` (traps `NodeInterruptedError`). `ctx.attempt_count` resets to 1 after HITL pauses/restarts. Leaf HITL nodes use `rerun_on_resume=False`; dynamic parents calling `ctx.run_node()` require `rerun_on_resume=True`. Keep `output_schema` on specialist agents (`code_reviewer`, `spec_planner`) rather than tool-heavy coders.
+
+</details>
+
+<details>
+<summary><code>agy</code> CLI Install, Flags &amp; Execution Modes</summary>
+
+Install the static Go `agy` binary locally (download, execute, delete):
+```bash
+curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy_install.sh \
+  && bash /tmp/agy_install.sh && rm -f /tmp/agy_install.sh
+AGY_ADC_AUTH=true agy models
+```
+
+Flags: `-p "<prompt>"`, `--output-format stream-json|json|text`, `--model`, `--effort low|medium|high|xhigh`, `--print-timeout 5m`, `--conversation <id>`, `--sandbox`, `--dangerously-skip-permissions` (isolated gVisor/CI only), `--json-schema`.
+
+`AGY_EXECUTION_MODE`: `local` runs in-host/Agent Runtime (`AGY_ADC_AUTH=true` + non-numeric `AGY_PROJECT_ID` + `GOOGLE_CLOUD_LOCATION=global`); `sandbox` delegates into BYOC gVisor via `execute_with_env()` (needs PSC-I egress + ephemeral creds); `auto` prefers `local` when ADC auth is on without a BYOC `GEMINI_API_KEY` (reserving air-gapped sandboxes for `pytest`/`ruff`/`bandit`) and falls back to native `LlmAgent` + `EnvironmentToolset` if `agy` isn't installed.
+
+**Canonical docs:** [ADK 2.0](https://adk.dev/2.0/) | [EnvironmentToolset](https://adk.dev/integrations/environment-toolset/) | [Collaboration](https://adk.dev/workflows/collaboration/) | [Graphs](https://adk.dev/graphs/) | [Dynamic Workflows](https://adk.dev/graphs/dynamic/) | [google/agents-cli](https://github.com/google/agents-cli)
+
+</details>
