@@ -37,6 +37,7 @@ Agent Runtime calls your container on `0.0.0.0:8080`: health probes hit `GET /` 
 def get_runtime_app() -> Any:
     from coding_agent.agent import app as adk_app
     from coding_agent.agent import root_agent
+
     try:
         from agentplatform.frameworks import AdkApp
     except ImportError:
@@ -60,14 +61,19 @@ def get_runtime_app() -> Any:
         setup_fn()
     return runtime_app
 
+
 @app.post("/api/reasoning_engine")
 async def query_endpoint(request: Request) -> responses.JSONResponse:
     query_req = await _parse_query_request(request)
     method = _resolve_public_method(get_runtime_app(), query_req.class_method)
     if method is None:
-        return responses.JSONResponse(status_code=400, content={"error": f"Method {query_req.class_method!r} not found on agent"})
+        return responses.JSONResponse(
+            status_code=400,
+            content={"error": f"Method {query_req.class_method!r} not found on agent"},
+        )
     output = await _invoke_method(method, query_req.input or {})
     return responses.JSONResponse(content=encoders.jsonable_encoder({"output": output}))
+
 
 @app.post("/api/stream_reasoning_engine")
 async def stream_query_endpoint(request: Request) -> responses.StreamingResponse:
@@ -76,7 +82,8 @@ async def stream_query_endpoint(request: Request) -> responses.StreamingResponse
     if method is None:
         return responses.StreamingResponse(
             content=iter([json.dumps({"error": f"Method {query_req.class_method!r} not found"}) + "\n"]),
-            status_code=400, media_type="application/json",
+            status_code=400,
+            media_type="application/json",
         )
     output = await _invoke_method(method, query_req.input or {})
     return responses.StreamingResponse(content=_ndjson_stream(output), media_type="application/json")
@@ -100,16 +107,20 @@ This runs Uvicorn locally in pure Python (no Docker) and prints `[PASS]` for `GE
 
 Now build `starter/` (`Dockerfile`, `main.py`, `requirements.txt`, `coding_agent/`, and `skills_to_register/`) remotely with Cloud Build in `asia-southeast3`. This trusted image (`coding-agent:v1`) is separate from Lab 2's untrusted sandbox image (`coding-sandbox:v1`), and Agent Runtime in `asia-southeast1` pulls directly from your `asia-southeast3` Artifact Registry repo with no second repo needed.
 
+If you customize the repo name or image tag, update `AGENT_IMAGE_URI` (and `AR_REPOSITORY`, not `AR_REPO`) in `.env` **before** running `make push-agent` so a blank `AGENT_IMAGE_URI=` template line in `.env` never overrides a shell-only `export` (and avoid appending duplicate `AGENT_IMAGE_URI=` lines to `.env`).
+
 ```bash
-source .env
+set -a && source .env && set +a
+export AR_LOCATION="${AR_LOCATION:-asia-southeast3}"
+export AR_REPOSITORY="${AR_REPOSITORY:-coding-agent-repo}"
 gcloud config set project "${GOOGLE_CLOUD_PROJECT}"
-gcloud artifacts repositories create coding-agent-repo \
-  --repository-format=docker --location="${AR_LOCATION:-asia-southeast3}" \
+gcloud artifacts repositories create "${AR_REPOSITORY}" \
+  --repository-format=docker --location="${AR_LOCATION}" \
   --project="${GOOGLE_CLOUD_PROJECT}" || true
 
-export AGENT_IMAGE_URI="${AR_LOCATION:-asia-southeast3}-docker.pkg.dev/${GOOGLE_CLOUD_PROJECT}/coding-agent-repo/coding-agent:v1"
+# Update AGENT_IMAGE_URI in .env BEFORE `make push-agent` (replace existing line, no duplicates):
+# AGENT_IMAGE_URI=asia-southeast3-docker.pkg.dev/<YOUR_PROJECT_ID>/coding-agent-repo/coding-agent:v1
 make push-agent
-echo "AGENT_IMAGE_URI=${AGENT_IMAGE_URI}" >> .env
 ```
 
 **Check it works:** Cloud Build finishes with `STATUS: SUCCESS` and prints the image digest for `coding-agent:v1`.
@@ -275,7 +286,7 @@ echo "Deployed: ${REASONING_ENGINE_NAME} (ID=${REASONING_ENGINE_ID})"
 ```
 
 > [!IMPORTANT]
-> **Update `.env` for Lab 6:** Save `REASONING_ENGINE_NAME` and `REASONING_ENGINE_ID` into `.env` so Cloud Trace and Lab 6 Online Monitors point at this deployed runtime. Note that `outputs.tf` extracts the short ID from `.id` with `reverse(split("/", ...))[0]`, because in `hashicorp/google` `.id` is the full resource path while `.name` is only the numeric ID (and Terraform's `element(..., -1)` rejects negative indices).
+> **Update `.env` for Lab 6:** Update **both** `REASONING_ENGINE_NAME` and `REASONING_ENGINE_ID` together in `.env` so Cloud Trace and Lab 6 Online Monitors point at this deployed runtime. (Never clear or change only `REASONING_ENGINE_NAME` while leaving Lab 2's old `REASONING_ENGINE_ID` behind, because `config.py` reconstructs `reasoning_engine_name` from `REASONING_ENGINE_ID`.) Note that `outputs.tf` extracts the short ID from `.id` with `reverse(split("/", ...))[0]`, because in `hashicorp/google` `.id` is the full resource path while `.name` is only the numeric ID (and Terraform's `element(..., -1)` rejects negative indices).
 
 **Check it works:** `echo "${REASONING_ENGINE_NAME}"` prints `projects/<YOUR_PROJECT>/locations/asia-southeast1/reasoningEngines/<NUMERIC_ID>`.
 
@@ -373,7 +384,7 @@ Inside the container, `/usr/local/bin/agy` runs under `coding-agent-runtime-sa` 
 | **Keep-Alive Probe (Preview)** | Idle scale-down defaults to 15 min (`900s`). `keep_alive_probe` polls `GET /is_busy` every `10s` (`2xx` = busy, `412` = idle; `max_seconds` in `[900, 3600]`). Avoid reserved ports `15000, 15001, 15006, 15007, 15020, 15021`. |
 | **Resources & Scaling** | `cpu`: `1, 2, 4, 6, 8` (API default `4`); `memory`: `1Gi` to `32Gi` (default `4Gi`); `min_instances`: `[0, 75]`; `max_instances`: `[1, 1000]` (`[1, 100]` with VPC-SC/PSC-I); concurrency: `2 * cpu + 1` (or multiples of `9` for async I/O). |
 | **Agent Gateway BYOC CA Trust** | Bake `AGENT_GATEWAY_ROOT_CERTIFICATES` into `/usr/local/share/ca-certificates/agw-*.crt`, run `update-ca-certificates`, and point `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH`, and `AGENT_GATEWAY_ROOT_CERT_302034098528` to `/etc/ssl/certs/ca-certificates.crt`. |
-| **Default Quotas (per project/region)** | `Query`/`StreamQuery`: **90 req/min**; Create/Update/Delete: **10 req/min**; Max entities: **100**; Concurrent `BidiStreamQuery`: **10/min**. Express Mode Free Tier drops to 10 query/min and 10 entities (see [Lab 8](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md)). |
+| **Default Quotas (per project/region)** | `Query`/`StreamQuery`: **90 req/min**; Create/Update/Delete: **10 req/min**; Max entities: **100**; Concurrent `BidiStreamQuery`: **10/min**. Express Mode Free Tier drops to 10 query/min and 10 entities (see [Architecture Guide: Agent Runtime vs. GKE](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md)). |
 
 </details>
 

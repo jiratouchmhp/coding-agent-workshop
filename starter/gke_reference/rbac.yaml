@@ -1,4 +1,8 @@
-# GKE Agent Sandbox Reference Overlay — RBAC for ADK `GkeCodeExecutor` (Starter Track)
+# Module 8 Architecture Guide — Read-Only GKE Agent Sandbox Reference Manifest (RBAC)
+#
+# Ready-to-inspect complete reference manifest for the Module 8 Architecture Guide
+# (`workshop/08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md`). No coding exercises and no
+# live GKE cluster are required during this workshop.
 #
 # Verified against:
 #   https://adk.dev/integrations/gke-code-executor/
@@ -65,20 +69,19 @@ rules:
       - get
       - list
       - watch
-  # TODO(lab-8): Add the second RBAC rule for the core Agent Sandbox API group
-  # `agents.x-k8s.io` granting `create`, `get`, `list`, `watch`, and `delete`
-  # on `sandboxes` (required by `GkeCodeExecutor(executor_type="sandbox")`).
-  #
-  # - apiGroups:
-  #     - agents.x-k8s.io
-  #   resources:
-  #     - sandboxes
-  #   verbs:
-  #     - create
-  #     - get
-  #     - list
-  #     - watch
-  #     - delete
+  # Core Agent Sandbox CRD (`agents.x-k8s.io/v1beta1`):
+  # Required alongside `sandboxclaims` so `GkeCodeExecutor(executor_type="sandbox")`
+  # can inspect readiness and clean up underlying `Sandbox` resources.
+  - apiGroups:
+      - agents.x-k8s.io
+    resources:
+      - sandboxes
+    verbs:
+      - create
+      - get
+      - list
+      - watch
+      - delete
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

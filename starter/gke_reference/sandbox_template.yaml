@@ -1,6 +1,11 @@
-# GKE Agent Sandbox Reference Overlay — SandboxTemplate (Starter Track)
+# Module 8 Architecture Guide — Read-Only GKE Agent Sandbox Reference Manifest (SandboxTemplate)
 #
-# Install Kubernetes SIG Apps `agent-sandbox` v1.0.6 first (CRDs + controller + router):
+# Ready-to-inspect complete, hardened reference manifest for the Module 8
+# Architecture Guide (`workshop/08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md`). No
+# coding exercises and no live GKE cluster are required during this workshop.
+#
+# If you later apply this reference overlay to your own GKE cluster (e.g., Bangkok
+# `asia-southeast3`), install Kubernetes SIG Apps `agent-sandbox` v1.0.6 first:
 #   export AGENT_SANDBOX_VERSION="v1.0.6"
 #   kubectl apply -f \
 #     "https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${AGENT_SANDBOX_VERSION}/sandbox-with-extensions.yaml"
@@ -14,8 +19,8 @@
 # Verified CRD version: `extensions.agents.x-k8s.io/v1beta1` (`v1.0.0` removed `v1alpha1`).
 #
 # Production Namespace Note:
-# The workshop uses `agent-sandbox-system` for single-namespace convenience, but
-# `secure-sandbox-policy` VAP excludes controller system namespaces by default. In
+# The workshop reference uses `agent-sandbox-system` for single-namespace convenience,
+# but `secure-sandbox-policy` VAP excludes controller system namespaces by default. In
 # production, apply this template into a dedicated workload namespace (e.g.,
 # `coding-sandboxes`) so VAP admission checks enforce on every Sandbox Pod.
 #
@@ -77,14 +82,14 @@ spec:
         sandbox: coding-sandbox
     spec:
       # Kernel isolation via GKE Sandbox (gVisor, <100 ms container start).
-      # Note: `secure-sandbox-policy` VAP enforces `runtimeClassName == gvisor`
-      # and rejects `microvm` or Istio/Envoy `istio-init` NET_ADMIN/NET_RAW.
+      # Compliant with `secure-sandbox-policy` ValidatingAdmissionPolicy (VAP).
+      # Note: `secure-sandbox-policy` rejects `microvm` and Istio/Envoy
+      # `istio-init` NET_ADMIN/NET_RAW unless explicitly exempted.
       runtimeClassName: gvisor
-      # TODO(lab-8): Harden this PodSpec for `secure-sandbox-policy` VAP compliance:
-      #   1. Set `automountServiceAccountToken: false`
-      #   2. Add pod-level `securityContext: { runAsNonRoot: true, runAsUser: 1000 }`
-      #   3. Add container-level `securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] } }`
-      #   4. Set explicit `resources.limits` (`cpu` and `memory`) to prevent DoS
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
       nodeSelector:
         sandbox.gke.io/runtime: gvisor
       tolerations:
@@ -114,5 +119,12 @@ spec:
             requests:
               cpu: "250m"
               memory: "512Mi"
-            # TODO(lab-8): Add `limits` (`cpu: "500m"`, `memory: "1Gi"`) required by VAP.
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
       restartPolicy: OnFailure

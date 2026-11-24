@@ -176,7 +176,7 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
     # Option 1 (Primary): BYOC Prebuilt Container Image (`container_spec`)
     # -------------------------------------------------------------------------
     # TODO(lab-5): Uncomment `container_spec` below to deploy the prebuilt
-    # Agent Runtime BYOC container image pushed in Step B0 (`make push-agent`).
+    # Agent Runtime BYOC container image pushed in Step 2 (`make push-agent`).
     #
     # container_spec {
     #   image_uri = var.agent_image_uri

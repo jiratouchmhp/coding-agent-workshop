@@ -106,10 +106,17 @@ class TemplateSummary:
 
     name: str
     display_name: str = ""
+    state: str = ""
+    delete_time: str = ""
     raw: Any = field(default=None, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"name": self.name, "display_name": self.display_name}
+        payload: dict[str, Any] = {"name": self.name, "display_name": self.display_name}
+        if self.state:
+            payload["state"] = self.state
+        if self.delete_time:
+            payload["delete_time"] = self.delete_time
+        return payload
 
 
 @dataclass(frozen=True)
@@ -141,10 +148,20 @@ class SnapshotSummary:
 
     name: str
     display_name: str = ""
+    state: str = ""
+    expire_time: str = ""
+    delete_time: str = ""
     raw: Any = field(default=None, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"name": self.name, "display_name": self.display_name}
+        payload: dict[str, Any] = {"name": self.name, "display_name": self.display_name}
+        if self.state:
+            payload["state"] = self.state
+        if self.expire_time:
+            payload["expire_time"] = self.expire_time
+        if self.delete_time:
+            payload["delete_time"] = self.delete_time
+        return payload
 
 
 # ---------------------------------------------------------------------------
@@ -203,10 +220,20 @@ def _extract_response(operation_or_resource: Any) -> Any:
     return resp if resp is not None else operation_or_resource
 
 
+def _is_soft_deleted(resource: Any) -> bool:
+    """Return True when a listed template or snapshot is a soft-deleted tombstone."""
+    if getattr(resource, "delete_time", None):
+        return True
+    state = str(getattr(resource, "state", "") or "").upper()
+    return "DELETED" in state or "DELETING" in state
+
+
 def _summarize_template(resource: Any) -> TemplateSummary:
     return TemplateSummary(
         name=str(getattr(resource, "name", "")),
         display_name=str(getattr(resource, "display_name", "") or ""),
+        state=str(getattr(resource, "state", "") or ""),
+        delete_time=str(getattr(resource, "delete_time", "") or ""),
         raw=resource,
     )
 
@@ -229,6 +256,9 @@ def _summarize_snapshot(resource: Any) -> SnapshotSummary:
     return SnapshotSummary(
         name=str(getattr(resource, "name", "")),
         display_name=str(getattr(resource, "display_name", "") or ""),
+        state=str(getattr(resource, "state", "") or ""),
+        expire_time=str(getattr(resource, "expire_time", "") or ""),
+        delete_time=str(getattr(resource, "delete_time", "") or ""),
         raw=resource,
     )
 
@@ -331,14 +361,17 @@ class SandboxLifecycleManager:
         *,
         display_name: str | None = None,
         kms_key_name: str | None = None,
+        force_new: bool = False,
     ) -> str:
         """Return existing parent ``ReasoningEngine`` resource name or create an empty one.
 
-        Scale Sandboxes do NOT require deploying agent code to Agent Runtime — an empty
-        parent instance takes only seconds to provision. CMEK (single-region KMS key)
-        must be configured here if required, because encryption_spec is immutable.
+        Pass ``force_new=True`` to provision a brand-new standalone parent instance even
+        when ``REASONING_ENGINE_NAME`` / ``REASONING_ENGINE_ID`` is currently populated
+        in ``.env``. Scale Sandboxes do NOT require deploying agent code to Agent Runtime —
+        an empty parent instance takes only seconds to provision. CMEK (single-region KMS
+        key) must be configured here if required, because ``encryption_spec`` is immutable.
         """
-        if self.instance_name:
+        if self.instance_name and not force_new:
             return self.instance_name
 
         runtimes_ns = get_runtimes_namespace(self.client)
@@ -582,12 +615,25 @@ class SandboxLifecycleManager:
         resource = self.sandboxes.templates.get(name=template_name)
         return _summarize_template(resource)
 
-    def list_templates(self, instance_name: str | None = None) -> list[TemplateSummary]:
-        """List all ``SandboxEnvironmentTemplate`` resources under the parent instance."""
+    def list_templates(
+        self,
+        instance_name: str | None = None,
+        *,
+        include_deleted: bool = False,
+    ) -> list[TemplateSummary]:
+        """List ``SandboxEnvironmentTemplate`` resources under the parent instance.
+
+        Omits recently soft-deleted tombstones by default (pass ``include_deleted=True``
+        to include resources with ``delete_time`` / ``STATE_DELETED``).
+        """
         parent_name = self._require_instance_name(instance_name)
         response = self.sandboxes.templates.list(name=parent_name)
         items = getattr(response, "sandbox_environment_templates", response) or []
-        return [_summarize_template(tpl) for tpl in items]
+        return [
+            _summarize_template(tpl)
+            for tpl in items
+            if include_deleted or not _is_soft_deleted(tpl)
+        ]
 
     def update_template(
         self,
@@ -794,12 +840,25 @@ class SandboxLifecycleManager:
 
     # -- Snapshot Lifecycle (List / Get / Delete) ----------------------------
 
-    def list_snapshots(self, instance_name: str | None = None) -> list[SnapshotSummary]:
-        """List all ``SandboxEnvironmentSnapshot`` resources under the parent instance."""
+    def list_snapshots(
+        self,
+        instance_name: str | None = None,
+        *,
+        include_deleted: bool = False,
+    ) -> list[SnapshotSummary]:
+        """List ``SandboxEnvironmentSnapshot`` resources under the parent instance.
+
+        Omits recently soft-deleted tombstones by default (pass ``include_deleted=True``
+        to include resources with ``delete_time`` / ``STATE_DELETED``).
+        """
         parent_name = self._require_instance_name(instance_name)
         response = self.sandboxes.snapshots.list(name=parent_name)
         items = getattr(response, "sandbox_environment_snapshots", response) or []
-        return [_summarize_snapshot(snap) for snap in items]
+        return [
+            _summarize_snapshot(snap)
+            for snap in items
+            if include_deleted or not _is_soft_deleted(snap)
+        ]
 
     def get_snapshot(self, snapshot_name: str) -> SnapshotSummary:
         """Fetch metadata for a specific ``SandboxEnvironmentSnapshot``."""
@@ -1008,6 +1067,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p_inst = sub.add_parser("create-instance", help="Create an empty parent Agent Platform instance.")
     p_inst.add_argument("--display-name", default="workshop-sandbox-parent")
     p_inst.add_argument("--kms-key", default=None, help="Optional single-region CMEK KMS cryptoKey name.")
+    p_inst.add_argument(
+        "--force-new",
+        action="store_true",
+        help="Provision a brand-new ReasoningEngine even if REASONING_ENGINE_NAME/ID is set in .env.",
+    )
 
     # templates
     p_ct = sub.add_parser("create-template", help="Create a BYOC, Shell, or Computer Use template.")
@@ -1024,7 +1088,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p_ct.add_argument("--network-attachment", default=None)
     p_ct.add_argument("--enable-psc-e", action="store_true")
 
-    sub.add_parser("list-templates", help="List sandbox templates.")
+    p_lt = sub.add_parser("list-templates", help="List sandbox templates.")
+    p_lt.add_argument(
+        "--include-deleted",
+        action="store_true",
+        help="Include recently soft-deleted template tombstones.",
+    )
     p_gt = sub.add_parser("get-template", help="Get sandbox template details.")
     p_gt.add_argument("--name", required=True)
 
@@ -1064,7 +1133,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p_sn.add_argument("--display-name", required=True)
     p_sn.add_argument("--ttl", default="3600s")
 
-    sub.add_parser("list-snapshots", help="List snapshots under parent instance.")
+    p_lsn = sub.add_parser("list-snapshots", help="List snapshots under parent instance.")
+    p_lsn.add_argument(
+        "--include-deleted",
+        action="store_true",
+        help="Include recently soft-deleted snapshot tombstones.",
+    )
     p_gsn = sub.add_parser("get-snapshot", help="Get snapshot details.")
     p_gsn.add_argument("--name", required=True)
     p_dsn = sub.add_parser("delete-snapshot", help="Delete a snapshot.")
@@ -1100,11 +1174,20 @@ def main(argv: list[str] | None = None) -> int:
             keep_resources=args.keep,
         )
     elif args.command == "create-instance":
+        reused = bool(manager.instance_name) and not args.force_new
+        if reused:
+            logger.info(
+                "Reusing existing REASONING_ENGINE_NAME=%s (pass --force-new, or clear BOTH "
+                "REASONING_ENGINE_NAME and REASONING_ENGINE_ID in .env, to create a fresh instance).",
+                manager.instance_name,
+            )
         output = {
             "instance_name": manager.ensure_parent_instance(
                 display_name=args.display_name,
                 kms_key_name=args.kms_key,
-            )
+                force_new=args.force_new,
+            ),
+            "reused_existing": reused,
         }
     elif args.command == "create-template":
         output = manager.create_template(
@@ -1126,7 +1209,7 @@ def main(argv: list[str] | None = None) -> int:
             enable_private_ingress=args.enable_psc_e,
         ).to_dict()
     elif args.command == "list-templates":
-        output = [t.to_dict() for t in manager.list_templates()]
+        output = [t.to_dict() for t in manager.list_templates(include_deleted=args.include_deleted)]
     elif args.command == "get-template":
         output = manager.get_template(args.name).to_dict()
     elif args.command == "update-template":
@@ -1179,7 +1262,7 @@ def main(argv: list[str] | None = None) -> int:
             ttl=args.ttl,
         ).to_dict()
     elif args.command == "list-snapshots":
-        output = [s.to_dict() for s in manager.list_snapshots()]
+        output = [s.to_dict() for s in manager.list_snapshots(include_deleted=args.include_deleted)]
     elif args.command == "get-snapshot":
         output = manager.get_snapshot(args.name).to_dict()
     elif args.command == "delete-snapshot":

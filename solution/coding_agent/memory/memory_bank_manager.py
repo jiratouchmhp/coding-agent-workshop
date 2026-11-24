@@ -295,6 +295,73 @@ def _normalize_ttl_config(ttl_config: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _extract_session_short_id(session_name: str) -> str:
+    """Return the trailing session ID segment from a Managed Session resource name."""
+    cleaned = session_name.strip().rstrip("/")
+    if "/sessions/" in cleaned:
+        return cleaned.rsplit("/sessions/", 1)[-1]
+    return cleaned.rsplit("/", 1)[-1] if "/" in cleaned else cleaned
+
+
+def _is_custom_non_numeric_session_id(session_name: str) -> bool:
+    """Return True when ``session_name`` uses a custom non-numeric string ``session_id``.
+
+    Live Vertex AI Memory Bank ``vertex_session_source`` currently requires server-generated
+    numeric session IDs (omitting ``session_id`` in ``create_session()``) and returns HTTP
+    404 ``NOT_FOUND`` for custom string IDs such as ``workshop-sess-...``.
+    """
+    short_id = _extract_session_short_id(session_name)
+    return bool(short_id) and not short_id.isdigit()
+
+
+def _is_not_found_error(exc: Exception) -> bool:
+    """Return True when an API exception represents HTTP 404 / ``NOT_FOUND``."""
+    code = getattr(exc, "code", None)
+    status_code = getattr(exc, "status_code", None)
+    if code == 404 or status_code == 404:
+        return True
+    msg = str(exc).upper()
+    return "NOT_FOUND" in msg or "404" in msg
+
+
+def _session_event_to_direct_event(event: Any) -> dict[str, Any] | None:
+    """Convert a Managed Session event into a ``direct_contents_source`` event dict."""
+    author = str(getattr(event, "author", "") or "").lower()
+    default_role = "user" if author in {"", "user"} else "model"
+
+    content = event.get("content") if isinstance(event, dict) else getattr(event, "content", None)
+    if content is not None:
+        if hasattr(content, "model_dump"):
+            content_dict = content.model_dump(mode="json", exclude_none=True)
+        elif isinstance(content, dict):
+            content_dict = dict(content)
+        else:
+            raw_parts = getattr(content, "parts", None) or []
+            parts_list = [
+                p.model_dump(mode="json", exclude_none=True)
+                if hasattr(p, "model_dump")
+                else (dict(p) if isinstance(p, dict) else {"text": str(getattr(p, "text", p))})
+                for p in raw_parts
+            ]
+            content_dict = {
+                "role": str(getattr(content, "role", None) or default_role),
+                "parts": parts_list,
+            }
+        parts = content_dict.get("parts") or []
+        if parts:
+            content_dict.setdefault("role", default_role)
+            return {"content": content_dict}
+
+    raw_event = (
+        event.get("raw_event") if isinstance(event, dict) else getattr(event, "raw_event", None)
+    )
+    if isinstance(raw_event, dict):
+        raw_text = raw_event.get("content") or raw_event.get("text")
+        if isinstance(raw_text, str) and raw_text.strip():
+            return {"content": {"role": default_role, "parts": [{"text": raw_text.strip()}]}}
+    return None
+
+
 # ---------------------------------------------------------------------------
 # ADK Memory Service Builder & Callbacks
 # ---------------------------------------------------------------------------
@@ -839,6 +906,83 @@ class MemoryBankManager:
 
     # -- Memory Generation & Streaming Ingestion -----------------------------
 
+    def _fallback_generate_from_custom_session(
+        self,
+        *,
+        target_name: str,
+        session_name: str,
+        resolved_scope: dict[str, str] | None,
+        start_time: datetime.datetime | None,
+        end_time: datetime.datetime | None,
+        config: dict[str, Any],
+        original_exc: Exception,
+    ) -> Any | None:
+        """Fallback for custom string ``session_id``s when ``vertex_session_source`` returns 404.
+
+        Vertex AI Memory Bank's ``vertex_session_source`` currently resolves only
+        server-generated numeric session IDs (``create_session(session_id=None)``).
+        When a custom string session ID exists in Managed Sessions, read its persisted
+        events, screen them through ``filter_and_sanitize_events_for_memory()``, and
+        generate memories via ``direct_contents_source``.
+        """
+        short_id = _extract_session_short_id(session_name)
+        logger.warning(
+            "Memory Bank vertex_session_source returned 404 for custom non-numeric session_id=%r "
+            "(vertex_session_source requires server-generated numeric session IDs from "
+            "create_session(session_id=None)). Falling back to reading session events and "
+            "generating memories via direct_contents_source.",
+            short_id,
+        )
+        try:
+            session_events = list(self.client.sessions.events.list(name=session_name))
+        except Exception as list_exc:
+            raise ValueError(
+                f"Failed to generate memories from session {session_name!r}: Memory Bank "
+                f"`vertex_session_source` returned 404 NOT_FOUND (custom non-numeric session_id="
+                f"{short_id!r} is unsupported by vertex_session_source; omit `session_id` in "
+                "`create_session()` to get a server-generated numeric ID), and fallback "
+                f"`sessions.events.list()` also failed: {list_exc}"
+            ) from original_exc
+
+        direct_events: list[dict[str, Any]] = []
+        for ev in session_events:
+            ev_ts = getattr(ev, "timestamp", None)
+            if isinstance(ev_ts, datetime.datetime):
+                if start_time is not None and ev_ts < start_time:
+                    continue
+                if end_time is not None and ev_ts > end_time:
+                    continue
+            converted = _session_event_to_direct_event(ev)
+            if converted is not None:
+                direct_events.append(converted)
+
+        direct_events = filter_and_sanitize_events_for_memory(direct_events)
+        if not direct_events:
+            logger.warning(
+                "Custom session %s contained no eligible text events after filtering/sanitization.",
+                session_name,
+            )
+            return None
+
+        effective_scope = resolved_scope
+        if effective_scope is None:
+            session_obj = self.client.sessions.get(name=session_name)
+            session_user = getattr(session_obj, "user_id", None)
+            if not session_user:
+                raise ValueError(
+                    f"Cannot derive Memory Bank scope for custom session {session_name!r}; "
+                    "pass `user_id=` or `scope=` explicitly."
+                ) from original_exc
+            effective_scope = {"user_id": str(session_user)}
+            validate_memory_scope(effective_scope)
+
+        return self.client.memory_banks.memories.generate(
+            name=target_name,
+            direct_contents_source={"events": direct_events},
+            scope=effective_scope,
+            config=config,
+        )
+
     def generate_memories_from_session(
         self,
         session_name: str,
@@ -852,7 +996,14 @@ class MemoryBankManager:
         metadata: dict[str, Any] | None = None,
         metadata_merge_strategy: str = "MERGE",
     ) -> Any:
-        """Generate & consolidate memories from a Managed Session (with optional time window)."""
+        """Generate & consolidate memories from a Managed Session (with optional time window).
+
+        Note: Live Vertex AI Memory Bank ``vertex_session_source`` requires server-generated
+        numeric session IDs (omit ``session_id`` when calling ``create_session()``). If a
+        custom string ``session_id`` triggers HTTP 404 ``NOT_FOUND``, this method automatically
+        falls back to reading the session's events via ``sessions.events.list()``, sanitizing
+        them, and calling ``memories.generate(direct_contents_source=...)``.
+        """
         target_name = self._require_memory_bank_name()
         resolved_scope = scope if scope is not None else ({"user_id": user_id} if user_id else None)
         if resolved_scope is not None:
@@ -881,7 +1032,20 @@ class MemoryBankManager:
         }
         if resolved_scope is not None:
             kwargs["scope"] = resolved_scope
-        return self.client.memory_banks.memories.generate(**kwargs)
+        try:
+            return self.client.memory_banks.memories.generate(**kwargs)
+        except Exception as exc:
+            if _is_not_found_error(exc) and _is_custom_non_numeric_session_id(session_name):
+                return self._fallback_generate_from_custom_session(
+                    target_name=target_name,
+                    session_name=session_name,
+                    resolved_scope=resolved_scope,
+                    start_time=start_time,
+                    end_time=end_time,
+                    config=config,
+                    original_exc=exc,
+                )
+            raise
 
     def generate_memories_from_text(
         self,
@@ -1284,6 +1448,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Verify offline ADK fallback, config payload, and prompt-injection sanitizer.",
     )
     action_group.add_argument("--search", action="store_true", help="Run similarity retrieval for --query.")
+    action_group.add_argument(
+        "--from-session",
+        metavar="SESSION_NAME",
+        default=None,
+        help="Generate memories from an existing Managed Session resource name.",
+    )
     action_group.add_argument("--purge", action="store_true", help="Purge memories for --user-id.")
     parser.add_argument(
         "--force",
@@ -1319,6 +1489,13 @@ def main(argv: list[str] | None = None) -> int:
             query=args.query,
             top_k=args.top_k,
         )
+    elif args.from_session:
+        op = manager.generate_memories_from_session(
+            session_name=args.from_session,
+            user_id=args.user_id,
+            wait_for_completion=True,
+        )
+        output = {"session_name": args.from_session, "operation": str(op)}
     elif args.purge:
         count = manager.purge_user_memories(user_id=args.user_id, force=args.force)
         output = {"user_id": args.user_id, "force": args.force, "purge_count": count}

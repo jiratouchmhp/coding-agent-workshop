@@ -25,7 +25,8 @@ SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
 TRACK ?= starter
-# `verify-lab` defaults to `all` when LAB is omitted; `fast-forward` requires an explicit LAB=<1..6|8|all>.
+# `verify-lab` defaults to `all` (core Labs 1-6) when LAB is omitted;
+# `fast-forward` requires an explicit LAB=<1..6|all> (Module 8 is a read-only Architecture Guide).
 LAB ?=
 SANDBOX_DEMO_MODE ?= shell
 SKILL_DIR ?= $(TRACK)/skills_to_register/secure-code-review
@@ -35,8 +36,24 @@ PREFLIGHT_ARGS ?=
 FAST_FORWARD_ARGS ?=
 CLEANUP_ARGS ?=
 
-# Helper shell snippet to load `.env` without breaking on comments or quotes
-LOAD_ENV = set -a; [ -f .env ] && source .env; set +a
+# Helper shell snippet to load `.env` without breaking on comments/quotes AND
+# without clobbering non-empty variables already exported by the caller
+# (e.g., `export SANDBOX_IMAGE_URI=... && make push-sandbox` while `.env` has blank `SANDBOX_IMAGE_URI=`).
+LOAD_ENV = if [ -f .env ]; then \
+	_env_keys=(); _env_vals=(); _env_n=0; \
+	while IFS= read -r _k; do \
+		case "$$_k" in ''|[0-9]*|*[!A-Za-z0-9_]*) continue ;; esac; \
+		if [ -n "$${!_k:-}" ]; then _env_keys+=("$$_k"); _env_vals+=("$${!_k}"); _env_n=$$((_env_n + 1)); fi; \
+	done < <(compgen -e); \
+	set -a; source .env; set +a; \
+	if [ "$$_env_n" -gt 0 ]; then \
+		for _i in "$${!_env_keys[@]}"; do \
+			_k="$${_env_keys[$$_i]}"; _v="$${_env_vals[$$_i]}"; \
+			if [ "$${!_k:-}" != "$$_v" ]; then export "$$_k=$$_v"; fi; \
+		done; \
+	fi; \
+	unset _env_keys _env_vals _env_n _k _v _i; \
+fi
 
 define _TEST_SANDBOX_LOCAL_PY
 import json
@@ -375,22 +392,33 @@ if has_google_adk:
             enable_memory_bank=False,
             enable_skill_registry=False,
         )
-        wf = build_agy_harness_workflow(settings=cfg_agy_local, tools=[])
-        assert wf is not None and getattr(wf, "name", "") == "coding_agent", (
-            f"Expected build_agy_harness_workflow() -> Workflow(name='coding_agent'), got {wf!r}"
-        )
-        root = build_root_agent(cfg_agy_local)
-        assert root is not None and getattr(root, "name", "") == "coding_agent", (
-            f"Expected build_root_agent(cfg_agy) -> Workflow(name='coding_agent'), got {root!r}"
-        )
-        assert isinstance(root, type(wf)), (
-            f"Expected build_root_agent(cfg_agy) to dispatch to build_agy_harness_workflow(), "
-            f"got {type(root)!r} vs {type(wf)!r}"
-        )
-    print(
-        "[PASS] (4/4) AGENT_ARCHITECTURE=agy_harness verified "
-        "(Settings + build_agy_harness_workflow + build_root_agent with google-adk)"
-    )
+        track = os.environ.get("TRACK", "starter").strip().lower()
+        try:
+            wf = build_agy_harness_workflow(settings=cfg_agy_local, tools=[])
+            assert wf is not None and getattr(wf, "name", "") == "coding_agent", (
+                f"Expected build_agy_harness_workflow() -> Workflow(name='coding_agent'), got {wf!r}"
+            )
+            root = build_root_agent(cfg_agy_local)
+            assert root is not None and getattr(root, "name", "") == "coding_agent", (
+                f"Expected build_root_agent(cfg_agy) -> Workflow(name='coding_agent'), got {root!r}"
+            )
+            assert isinstance(root, type(wf)), (
+                f"Expected build_root_agent(cfg_agy) to dispatch to build_agy_harness_workflow(), "
+                f"got {type(root)!r} vs {type(wf)!r}"
+            )
+        except NotImplementedError as exc:
+            if track == "solution":
+                raise
+            print(
+                "[INFO] (4/4) AGENT_ARCHITECTURE=agy_harness Settings validated — "
+                "ADK workflow check skipped until Lab 1 Step 7 (build_agy_harness_workflow) "
+                f"is complete ({exc})"
+            )
+        else:
+            print(
+                "[PASS] (4/4) AGENT_ARCHITECTURE=agy_harness verified "
+                "(Settings + build_agy_harness_workflow + build_root_agent with google-adk)"
+            )
 else:
     print(
         "[PASS] (4/4) AGENT_ARCHITECTURE=agy_harness Settings validation verified "
@@ -450,22 +478,26 @@ for label, headers in (
 endef
 export _TEST_AGENT_LOCAL_PY
 
-.PHONY: help preflight install install-pip lint test-agy-harness test-sandbox-local build-sandbox \
-        push-sandbox sandbox-lifecycle-demo package-skill test-agent-local \
-        pack-agent-source push-agent tf-plan tf-apply eval-offline eval-simulated \
-        validate-skills fast-forward verify-lab cleanup
+.PHONY: help preflight install install-starter install-all install-pip lint test-agy-harness \
+        test-sandbox-local build-sandbox push-sandbox sandbox-lifecycle-demo package-skill \
+        test-agent-local pack-agent-source push-agent tf-plan tf-apply eval-offline \
+        eval-simulated validate-skills fast-forward verify-lab cleanup
 
 help: ## Print available workshop targets and usage examples
 	@echo "Enterprise Coding Agent Workshop — Makefile Targets (Gemini 4: gemini-4-hydrogen / gemini-4-neon)"
 	@echo ""
 	@echo "Usage: make <target> [TRACK=starter|solution] [LAB=1..8|all]"
 	@echo "Current TRACK=$(TRACK)"
+	@echo "Note: Core hands-on coding labs are Labs 1-6 (Lab 7 is optional security hardening;"
+	@echo "      Module 8 is a read-only Architecture Information Guide — no coding lab, no live cluster)."
 	@echo ""
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-24s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@echo ""
 	@echo "Examples:"
 	@echo "  make preflight"
-	@echo "  make install                   # or 'make install-pip' without uv"
+	@echo "  make install                   # Fast sync for $(TRACK)/ via uv (or 'make install-all' / 'make install-pip')"
+	@echo "  make install-starter           # Sync starter/ only via uv (fast Half-Day setup)"
+	@echo "  make install-all               # Sync both starter/ and solution/ via uv"
 	@echo "  make test-agy-harness          # Lab 1/2 zero-Docker agy NDJSON + 4-tier exit-code dry-run"
 	@echo "  make test-sandbox-local        # Lab 2 zero-Docker BYOC runner.py smoke test"
 	@echo "  make test-agent-local          # Lab 5 zero-Docker smoke test"
@@ -474,16 +506,37 @@ help: ## Print available workshop targets and usage examples
 	@echo "  make fast-forward LAB=1        # Catch up on Lab 1 without spoiling Labs 2-6"
 	@echo "  make fast-forward LAB=2 FAST_FORWARD_ARGS=--dry-run"
 	@echo "  make verify-lab LAB=1"
+	@echo "  make verify-lab LAB=8          # Module 8: Validate read-only Architecture Guide manifests (no live cluster)"
 	@echo "  make TRACK=solution eval-offline"
 	@echo "  make cleanup CLEANUP_ARGS=--dry-run"
 
 preflight: ## Lab 0: Run environment, toolchain, region, and GCP pre-flight checks
 	@./scripts/preflight_check.sh $(PREFLIGHT_ARGS)
 
-install: ## Sync Python 3.11+ dependencies via uv for starter/ and solution/
+install: ## Sync Python 3.11+ dependencies via uv for $(TRACK)/ (fast default: starter/; use install-all for both)
 	@if ! command -v uv >/dev/null 2>&1; then \
 		echo "ERROR: 'uv' not found on PATH." >&2; \
-		echo "Install standalone uv (zero sudo): curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv_install.sh && sh /tmp/uv_install.sh" >&2; \
+		echo "Install uv via package manager (e.g., 'brew install uv' or 'pipx install uv')," >&2; \
+		echo "or download & inspect the official installer from https://docs.astral.sh/uv/getting-started/installation/." >&2; \
+		echo "Or use pure venv + pip fallback:   make install-pip" >&2; \
+		exit 1; \
+	fi
+	@echo "==> Syncing $(TRACK)/ dependencies with uv..."
+	cd "$(TRACK)" && uv sync --dev
+	@if [ "$(TRACK)" = "starter" ]; then \
+		echo "==> Synced starter/.venv with uv. (Need solution/.venv too? Run: make install-all or make TRACK=solution install)"; \
+	else \
+		echo "==> Synced $(TRACK)/.venv with uv."; \
+	fi
+
+install-starter: ## Fast setup: Sync Python 3.11+ dependencies via uv for starter/ only
+	@$(MAKE) --no-print-directory TRACK=starter install
+
+install-all: ## Sync Python 3.11+ dependencies via uv for BOTH starter/ and solution/
+	@if ! command -v uv >/dev/null 2>&1; then \
+		echo "ERROR: 'uv' not found on PATH." >&2; \
+		echo "Install uv via package manager (e.g., 'brew install uv' or 'pipx install uv')," >&2; \
+		echo "or download & inspect the official installer from https://docs.astral.sh/uv/getting-started/installation/." >&2; \
 		echo "Or use pure venv + pip fallback:   make install-pip" >&2; \
 		exit 1; \
 	fi
@@ -492,27 +545,23 @@ install: ## Sync Python 3.11+ dependencies via uv for starter/ and solution/
 	@echo "==> Syncing solution/ dependencies with uv..."
 	cd solution && uv sync --dev
 
-install-pip: ## Pure python3 -m venv + pip dependency install fallback (zero uv required)
+install-pip: ## Pure python3 -m venv + pip dependency install fallback for $(TRACK)/ (zero uv required)
 	@set -euo pipefail; \
 	VENV_ERR=$$(mktemp); \
 	trap 'rm -f "$${VENV_ERR}"' EXIT; \
-	for dir in starter solution; do \
-		echo "==> Creating virtual environment and installing dependencies in $${dir}/..."; \
-		if ! $(PYTHON) -m venv "$${dir}/.venv" 2>"$${VENV_ERR}"; then \
-			cat "$${VENV_ERR}" >&2; \
-			echo "" >&2; \
-			echo "ERROR: '$(PYTHON) -m venv $${dir}/.venv' failed (common on Debian/Ubuntu when python3-venv is not installed)." >&2; \
-			echo "Recommended zero-sudo fix — install standalone uv instead:" >&2; \
-			echo "  curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv_install.sh && sh /tmp/uv_install.sh" >&2; \
-			echo "  export PATH=\"\$$HOME/.local/bin:\$$PATH\"" >&2; \
-			echo "  make install" >&2; \
-			echo "Or install Debian venv support: sudo apt-get install -y python3-venv" >&2; \
-			exit 1; \
-		fi; \
-		"$${dir}/.venv/bin/python" -m pip install --upgrade pip; \
-		"$${dir}/.venv/bin/python" -m pip install -e "./$${dir}[dev]"; \
-	done; \
-	echo "==> Installed starter/.venv and solution/.venv successfully via pip."
+	echo "==> Creating virtual environment and installing dependencies in $(TRACK)/..."; \
+	if ! $(PYTHON) -m venv "$(TRACK)/.venv" 2>"$${VENV_ERR}"; then \
+		cat "$${VENV_ERR}" >&2; \
+		echo "" >&2; \
+		echo "ERROR: '$(PYTHON) -m venv $(TRACK)/.venv' failed (common on Debian/Ubuntu when python3-venv is not installed)." >&2; \
+		echo "Recommended zero-sudo fix — install standalone uv (https://docs.astral.sh/uv/getting-started/installation/) and run:" >&2; \
+		echo "  make install" >&2; \
+		echo "Or install Debian venv support: sudo apt-get install -y python3-venv" >&2; \
+		exit 1; \
+	fi; \
+	"$(TRACK)/.venv/bin/python" -m pip install --upgrade pip; \
+	"$(TRACK)/.venv/bin/python" -m pip install -e "./$(TRACK)[dev]"; \
+	echo "==> Installed $(TRACK)/.venv successfully via pip. (Need solution/.venv too? Run: make TRACK=solution install-pip)"
 
 lint: ## Run ruff check and python3 -m py_compile across starter/, solution/, and scripts/
 	@echo "==> Checking Python syntax with py_compile..."
@@ -538,11 +587,11 @@ test-agy-harness: ## Lab 1/2 (Zero-Docker): Verify agy harness (--dry-run NDJSON
 	echo "==> Running Antigravity (agy) headless CLI harness --dry-run in $(TRACK)/..."; \
 	cd "$(TRACK)"; \
 	if [ -x .venv/bin/python ]; then \
-		env PYTHONDONTWRITEBYTECODE=1 .venv/bin/python - <<< "$$_TEST_AGY_HARNESS_PY"; \
+		env PYTHONDONTWRITEBYTECODE=1 TRACK="$(TRACK)" .venv/bin/python - <<< "$$_TEST_AGY_HARNESS_PY"; \
 	elif command -v uv >/dev/null 2>&1 && [ -d .venv ]; then \
-		env PYTHONDONTWRITEBYTECODE=1 uv run python - <<< "$$_TEST_AGY_HARNESS_PY"; \
+		env PYTHONDONTWRITEBYTECODE=1 TRACK="$(TRACK)" uv run python - <<< "$$_TEST_AGY_HARNESS_PY"; \
 	else \
-		env PYTHONDONTWRITEBYTECODE=1 $(PYTHON) - <<< "$$_TEST_AGY_HARNESS_PY"; \
+		env PYTHONDONTWRITEBYTECODE=1 TRACK="$(TRACK)" $(PYTHON) - <<< "$$_TEST_AGY_HARNESS_PY"; \
 	fi
 
 test-sandbox-local: ## Lab 2 (Zero-Docker): Smoke-test BYOC runner.py (/health + agy_cli_available, /exec, env allowlist, cwd)
@@ -590,16 +639,25 @@ build-sandbox: ## Lab 2 (Optional — requires local Docker; use test-sandbox-lo
 	@echo "==> Building BYOC coding sandbox image locally from $(TRACK)/sandbox_image..."
 	docker build -t coding-sandbox:v1 $(TRACK)/sandbox_image
 
-push-sandbox: ## Lab 2 (Zero-Docker): Build and push BYOC sandbox image via Cloud Build
-	@$(LOAD_ENV); \
+push-sandbox: ## Lab 2 (Zero-Docker): Build and push BYOC sandbox image via Cloud Build (respects SANDBOX_IMAGE_URI / AR_REPO / AR_REPOSITORY)
+	@set -euo pipefail; \
+	CALLER_IMG_URI="$${SANDBOX_IMAGE_URI:-}"; \
+	CALLER_AR_REPO="$${AR_REPO:-$${AR_REPOSITORY:-}}"; \
+	$(LOAD_ENV); \
 	if [ -z "$${GOOGLE_CLOUD_PROJECT:-}" ] || [ "$${GOOGLE_CLOUD_PROJECT}" = "your-gcp-project-id" ]; then \
 		echo "ERROR: GOOGLE_CLOUD_PROJECT is unset or still template placeholder 'your-gcp-project-id'. Update .env first." >&2; \
 		exit 1; \
 	fi; \
 	BUILD_LOC="$${BUILD_LOCATION:-$${PRIMARY_REGION:-asia-southeast3}}"; \
 	AR_LOC="$${AR_LOCATION:-$${PRIMARY_REGION:-asia-southeast3}}"; \
-	AR_REPO="$${AR_REPOSITORY:-coding-agent-repo}"; \
-	URI="$${SANDBOX_IMAGE_URI:-$${AR_LOC}-docker.pkg.dev/$${GOOGLE_CLOUD_PROJECT}/$${AR_REPO}/coding-sandbox:v1}"; \
+	AR_REPO_NAME="$${CALLER_AR_REPO:-$${AR_REPO:-$${AR_REPOSITORY:-coding-agent-repo}}}"; \
+	if [ -n "$${CALLER_IMG_URI}" ]; then \
+		URI="$${CALLER_IMG_URI}"; \
+	elif [ -n "$${CALLER_AR_REPO}" ]; then \
+		URI="$${AR_LOC}-docker.pkg.dev/$${GOOGLE_CLOUD_PROJECT}/$${AR_REPO_NAME}/coding-sandbox:v1"; \
+	else \
+		URI="$${SANDBOX_IMAGE_URI:-$${AR_LOC}-docker.pkg.dev/$${GOOGLE_CLOUD_PROJECT}/$${AR_REPO_NAME}/coding-sandbox:v1}"; \
+	fi; \
 	echo "==> Submitting $(TRACK)/sandbox_image to Cloud Build (region=$${BUILD_LOC}) -> $${URI}"; \
 	gcloud builds submit "$(TRACK)/sandbox_image" \
 		--region="$${BUILD_LOC}" \
@@ -698,16 +756,25 @@ pack-agent-source: ## Lab 5 (Zero-Docker & Zero-AR): Build source_code_spec tarb
 	echo "[PASS] Level-0 Dockerfile verified ($${SIZE_BYTES} bytes <= 8 MB inline_source limit):"; \
 	sed -n '1,10p' <<< "$${TAR_LIST}"
 
-push-agent: ## Lab 5 (Zero-Docker): Build and push Agent Runtime image via Cloud Build
-	@$(LOAD_ENV); \
+push-agent: ## Lab 5 (Zero-Docker): Build and push Agent Runtime image via Cloud Build (respects AGENT_IMAGE_URI / AR_REPO / AR_REPOSITORY)
+	@set -euo pipefail; \
+	CALLER_IMG_URI="$${AGENT_IMAGE_URI:-}"; \
+	CALLER_AR_REPO="$${AR_REPO:-$${AR_REPOSITORY:-}}"; \
+	$(LOAD_ENV); \
 	if [ -z "$${GOOGLE_CLOUD_PROJECT:-}" ] || [ "$${GOOGLE_CLOUD_PROJECT}" = "your-gcp-project-id" ]; then \
 		echo "ERROR: GOOGLE_CLOUD_PROJECT is unset or still template placeholder 'your-gcp-project-id'. Update .env first." >&2; \
 		exit 1; \
 	fi; \
 	BUILD_LOC="$${BUILD_LOCATION:-$${PRIMARY_REGION:-asia-southeast3}}"; \
 	AR_LOC="$${AR_LOCATION:-$${PRIMARY_REGION:-asia-southeast3}}"; \
-	AR_REPO="$${AR_REPOSITORY:-coding-agent-repo}"; \
-	URI="$${AGENT_IMAGE_URI:-$${AR_LOC}-docker.pkg.dev/$${GOOGLE_CLOUD_PROJECT}/$${AR_REPO}/coding-agent:v1}"; \
+	AR_REPO_NAME="$${CALLER_AR_REPO:-$${AR_REPO:-$${AR_REPOSITORY:-coding-agent-repo}}}"; \
+	if [ -n "$${CALLER_IMG_URI}" ]; then \
+		URI="$${CALLER_IMG_URI}"; \
+	elif [ -n "$${CALLER_AR_REPO}" ]; then \
+		URI="$${AR_LOC}-docker.pkg.dev/$${GOOGLE_CLOUD_PROJECT}/$${AR_REPO_NAME}/coding-agent:v1"; \
+	else \
+		URI="$${AGENT_IMAGE_URI:-$${AR_LOC}-docker.pkg.dev/$${GOOGLE_CLOUD_PROJECT}/$${AR_REPO_NAME}/coding-agent:v1}"; \
+	fi; \
 	echo "==> Submitting $(TRACK)/ Agent Runtime image to Cloud Build (region=$${BUILD_LOC}) -> $${URI}"; \
 	gcloud builds submit "$(TRACK)" \
 		--region="$${BUILD_LOC}" \
@@ -760,9 +827,10 @@ validate-skills: ## Validate all Antigravity workshop skills under .agents/skill
 	@echo "==> Validating .agents/skills/..."
 	$(PYTHON) scripts/validate_skills.py .agents/skills
 
-fast-forward: ## Catch up on a lab by syncing solution/ into starter/ without spoiling later labs (usage: make fast-forward LAB=1..6|8|all; supports FAST_FORWARD_ARGS=--dry-run|--with-prereqs|--force)
+fast-forward: ## Catch up on core Labs 1-6 by syncing solution/ into starter/ without spoiling later labs (usage: make fast-forward LAB=1..6|all; Module 8 is a read-only Architecture Information Guide; supports FAST_FORWARD_ARGS=--dry-run|--with-prereqs|--force)
 	@if [ -z "$(strip $(LAB))" ]; then \
-		echo "ERROR: 'make fast-forward' requires an explicit LAB=<1|2|3|4|5|6|8|all> to avoid accidentally overwriting starter/." >&2; \
+		echo "ERROR: 'make fast-forward' requires an explicit LAB=<1|2|3|4|5|6|all> to avoid accidentally overwriting starter/." >&2; \
+		echo "Note: Module 8 is a read-only Architecture Information Guide (no coding lab, no live cluster); LAB=8 syncs reference manifests idempotently." >&2; \
 		echo "Examples:" >&2; \
 		echo "  make fast-forward LAB=1" >&2; \
 		echo "  make fast-forward LAB=2 FAST_FORWARD_ARGS=--dry-run" >&2; \
@@ -773,7 +841,7 @@ fast-forward: ## Catch up on a lab by syncing solution/ into starter/ without sp
 	@echo "==> Fast-forwarding starter/ for LAB=$(LAB)..."
 	./scripts/fast_forward_lab.sh "$(LAB)" $(FAST_FORWARD_ARGS)
 
-verify-lab: ## Verify Labs 1-8 checkpoints locally (usage: make verify-lab [LAB=1..8|all])
+verify-lab: ## Verify Labs 1-7 & Module 8 read-only Architecture Information Guide manifests locally (usage: make verify-lab [LAB=1..8|all])
 	@TARGET_LAB="$(if $(strip $(LAB)),$(LAB),all)"; \
 	echo "==> Running verify_lab.sh for LAB=$${TARGET_LAB} (TRACK=$(TRACK))..."; \
 	./scripts/verify_lab.sh "$${TARGET_LAB}" --track "$(TRACK)"

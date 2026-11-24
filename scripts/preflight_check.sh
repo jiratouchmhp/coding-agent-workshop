@@ -132,8 +132,8 @@ if command -v uv >/dev/null 2>&1; then
   pass "uv detected (${UV_VER})"
 else
   warn "uv not found on PATH."
-  info "Recommended zero-sudo standalone install (avoids Debian/Ubuntu missing python3-venv pitfall):"
-  info "  curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv_install.sh && sh /tmp/uv_install.sh"
+  info "Recommended install via package manager: 'brew install uv' or 'pipx install uv'"
+  info "Or download & inspect the official installer from https://docs.astral.sh/uv/getting-started/installation/"
   info "Alternative without uv: run 'make install-pip' (requires system python3-venv on Debian/Ubuntu)."
 fi
 
@@ -172,9 +172,9 @@ else
 fi
 
 if command -v agents-cli >/dev/null 2>&1; then
-  pass "agents-cli detected ($(command -v agents-cli)) — optional for Labs 1-8"
+  pass "agents-cli detected ($(command -v agents-cli)) — optional for Labs 1-7"
 else
-  info "agents-cli not found on PATH (optional for Labs 1-8; install anytime with: uvx google-agents-cli setup)"
+  info "agents-cli not found on PATH (optional for Labs 1-7; install anytime with: uvx google-agents-cli setup)"
 fi
 
 if command -v agy >/dev/null 2>&1; then
@@ -245,12 +245,13 @@ THINK_LVL="${THINKING_LEVEL:-MEDIUM}"
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-}"
 
 # Bangkok-first default region check
+AR_REPO_VAL="${AR_REPO:-${AR_REPOSITORY:-coding-agent-repo}}"
 if [[ "${PRIMARY_REG}" == "asia-southeast3" ]]; then
-  pass "PRIMARY_REGION=${PRIMARY_REG} (Bangkok first — Cloud Build, Artifact Registry, Secret Manager, Agent Registry A2A/MCP, and Lab 8 GKE)"
+  pass "PRIMARY_REGION=${PRIMARY_REG} (Bangkok first — Cloud Build, Artifact Registry, Secret Manager, Agent Registry A2A/MCP, and Module 8 GKE Architecture Guide)"
 else
   info "PRIMARY_REGION=${PRIMARY_REG} (workshop default is Bangkok 'asia-southeast3')"
 fi
-info "Bangkok-first regional targets: AR_LOCATION=${AR_LOC} (verified for Singapore Runtime & BYOC Sandbox pulls), BUILD_LOCATION=${BUILD_LOC}, AGENT_REGISTRY_LOCATION=${AGENT_REG_LOC} (A2A/MCP), GKE_LOCATION=${GKE_LOC}"
+info "Bangkok-first regional targets: AR_LOCATION=${AR_LOC} (repo=${AR_REPO_VAL}, verified for Singapore Runtime & BYOC Sandbox pulls), BUILD_LOCATION=${BUILD_LOC}, AGENT_REGISTRY_LOCATION=${AGENT_REG_LOC} (A2A/MCP), GKE_LOCATION=${GKE_LOC}"
 if [[ "${AGENT_REG_SKILLS_LOC}" == "global" ]]; then
   pass "AGENT_REGISTRY_SKILLS_LOCATION=${AGENT_REG_SKILLS_LOC} (required fallback for 'gcloud alpha agent-registry skills' & ADK GCPSkillRegistry; AGENT_REGISTRY_LOCATION=${AGENT_REG_LOC} stays in Bangkok for A2A/MCP)"
 else
@@ -373,7 +374,7 @@ if [[ -n "${CAPTURE_MODE}" ]]; then
 fi
 
 if [[ -n "${GOOGLE_GENAI_API_KEY:-}" || -n "${GEMINI_API_KEY:-}" ]]; then
-  warn "GOOGLE_GENAI_API_KEY or GEMINI_API_KEY is set. Unset Express Mode / AI Studio keys before Labs 2-8 so standard GCP billing + IAM are used."
+  warn "GOOGLE_GENAI_API_KEY or GEMINI_API_KEY is set. Unset Express Mode / AI Studio keys before Labs 2-7 so standard GCP billing + IAM are used."
 fi
 
 # Loud warning if project name looks like production (checked in both offline & online modes)
@@ -394,7 +395,7 @@ check_prod_project_warning() {
 }
 
 if [[ -f "${ENV_FILE}" && "${PROJECT_ID}" == "your-gcp-project-id" ]]; then
-  warn "GOOGLE_CLOUD_PROJECT in ${ENV_FILE} is still the template placeholder 'your-gcp-project-id'. Replace it with your sandbox GCP project ID before running Labs 2-8."
+  warn "GOOGLE_CLOUD_PROJECT in ${ENV_FILE} is still the template placeholder 'your-gcp-project-id'. Replace it with your sandbox GCP project ID before running Labs 2-7."
 fi
 
 check_prod_project_warning "${PROJECT_ID}"

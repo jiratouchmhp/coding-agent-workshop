@@ -745,6 +745,16 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trace-id", default=None, help="Optional OTel trace ID to record in metadata.")
     parser.add_argument("--user-id", default="workshop-dev")
     parser.add_argument("--list-feedback", action="store_true", help="List feedback for --session-id.")
+    parser.add_argument(
+        "--delete-feedback",
+        action="store_true",
+        help="Delete a feedback entry specified by --entry-name.",
+    )
+    parser.add_argument(
+        "--entry-name",
+        default=None,
+        help="Full feedback entry resource name for --delete-feedback.",
+    )
     return parser
 
 
@@ -764,7 +774,12 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     output: Any
-    if args.list_feedback:
+    if args.delete_feedback:
+        if not args.entry_name:
+            raise ValueError("--entry-name is required with --delete-feedback.")
+        client.delete_feedback(args.entry_name)
+        output = {"deleted_feedback_entry": args.entry_name}
+    elif args.list_feedback:
         if not args.session_id:
             raise ValueError("--session-id is required with --list-feedback.")
         entries = client.list_session_feedback(args.session_id)

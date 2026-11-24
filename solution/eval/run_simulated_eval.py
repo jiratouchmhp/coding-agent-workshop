@@ -104,12 +104,182 @@ def run_user_simulation(
     )
 
 
+def _has_valid_event_content(event: Any) -> bool:
+    """Return True when a simulated trace event carries non-empty ``content``.
+
+    ADK 2.15.0 emits a trailing ``end_of_agent`` event with ``content=None``;
+    ``agentplatform==2.10.0`` copies it verbatim into ``turns[*].events`` as
+    ``{"author": ..., "content": None, ...}``, which Vertex Evaluation Service
+    rejects with HTTP 400 (``Required field is not set``).
+    """
+    content = event.get("content") if isinstance(event, dict) else getattr(event, "content", None)
+    if content is None:
+        return False
+    if isinstance(content, dict):
+        if not content:
+            return False
+        parts = content.get("parts")
+        if parts is not None and len(parts) == 0:
+            return False
+        return True
+    parts = getattr(content, "parts", None)
+    if parts is not None and len(parts) == 0:
+        return False
+    return True
+
+
+def _sanitize_turns(turns: Any) -> tuple[Any, int]:
+    """Filter empty-content events from every turn in a ``turns`` list."""
+    if not isinstance(turns, list):
+        return turns, 0
+    stripped = 0
+    cleaned_turns: list[Any] = []
+    for turn in turns:
+        if isinstance(turn, dict):
+            raw_events = turn.get("events")
+            if isinstance(raw_events, list):
+                valid_events = [ev for ev in raw_events if _has_valid_event_content(ev)]
+                stripped += len(raw_events) - len(valid_events)
+                cleaned_turns.append({**turn, "events": valid_events})
+            else:
+                cleaned_turns.append(turn)
+        else:
+            raw_events = getattr(turn, "events", None)
+            if isinstance(raw_events, list):
+                valid_events = [ev for ev in raw_events if _has_valid_event_content(ev)]
+                stripped += len(raw_events) - len(valid_events)
+                if hasattr(turn, "model_copy"):
+                    cleaned_turns.append(turn.model_copy(update={"events": valid_events}))
+                else:
+                    cleaned_turns.append(turn)
+            else:
+                cleaned_turns.append(turn)
+    return cleaned_turns, stripped
+
+
+def _sanitize_agent_data_entry(agent_data: Any) -> tuple[Any, int]:
+    """Sanitize a single ``agent_data`` dict, JSON string, or Pydantic ``AgentData`` object."""
+    if agent_data is None:
+        return None, 0
+    if isinstance(agent_data, str):
+        try:
+            parsed = json.loads(agent_data)
+        except json.JSONDecodeError:
+            return agent_data, 0
+        if isinstance(parsed, dict) and isinstance(parsed.get("turns"), list):
+            cleaned_turns, stripped = _sanitize_turns(parsed["turns"])
+            if stripped:
+                return json.dumps({**parsed, "turns": cleaned_turns}, default=str), stripped
+        return agent_data, 0
+    if isinstance(agent_data, dict):
+        if isinstance(agent_data.get("turns"), list):
+            cleaned_turns, stripped = _sanitize_turns(agent_data["turns"])
+            return {**agent_data, "turns": cleaned_turns}, stripped
+        return agent_data, 0
+    turns = getattr(agent_data, "turns", None)
+    if isinstance(turns, list):
+        cleaned_turns, stripped = _sanitize_turns(turns)
+        if hasattr(agent_data, "model_copy"):
+            return agent_data.model_copy(update={"turns": cleaned_turns}), stripped
+    return agent_data, 0
+
+
+def sanitize_simulated_traces(simulated_traces: Any) -> Any:
+    """Strip ``content=None`` / empty-content ADK events before ``client.evals.evaluate()``.
+
+    Handles ``types.EvaluationDataset`` populated via ``eval_dataset_df["agent_data"]``,
+    ``eval_cases[*].agent_data.turns[*].events``, or both, without mutating caller inputs.
+    """
+    if simulated_traces is None:
+        return simulated_traces
+
+    stripped_total = 0
+    updates: dict[str, Any] = {}
+
+    df = getattr(simulated_traces, "eval_dataset_df", None)
+    if df is not None and hasattr(df, "columns") and "agent_data" in df.columns:
+        df_copy = df.copy()
+        sanitized_col: list[Any] = []
+        for entry in df_copy["agent_data"].tolist():
+            cleaned_entry, count = _sanitize_agent_data_entry(entry)
+            stripped_total += count
+            sanitized_col.append(cleaned_entry)
+        df_copy["agent_data"] = sanitized_col
+        updates["eval_dataset_df"] = df_copy
+
+    eval_cases = getattr(simulated_traces, "eval_cases", None)
+    if isinstance(eval_cases, list) and eval_cases:
+        cleaned_cases: list[Any] = []
+        for case in eval_cases:
+            if isinstance(case, dict) and "agent_data" in case:
+                cleaned_ad, count = _sanitize_agent_data_entry(case.get("agent_data"))
+                stripped_total += count
+                cleaned_cases.append({**case, "agent_data": cleaned_ad})
+            elif getattr(case, "agent_data", None) is not None:
+                cleaned_ad, count = _sanitize_agent_data_entry(case.agent_data)
+                stripped_total += count
+                if hasattr(case, "model_copy"):
+                    cleaned_cases.append(case.model_copy(update={"agent_data": cleaned_ad}))
+                else:
+                    cleaned_cases.append(case)
+            else:
+                cleaned_cases.append(case)
+        updates["eval_cases"] = cleaned_cases
+
+    if stripped_total > 0:
+        logger.info(
+            "Sanitized simulated traces: stripped %d empty-content ADK event(s) before grading.",
+            stripped_total,
+        )
+
+    if not updates:
+        return simulated_traces
+    if hasattr(simulated_traces, "model_copy"):
+        return simulated_traces.model_copy(update=updates)
+    for key, value in updates.items():
+        setattr(simulated_traces, key, value)
+    return simulated_traces
+
+
+def _inspect_grading_results(eval_result: Any) -> tuple[list[dict[str, Any]], list[str]]:
+    """Extract structured ``summary_metrics`` and surface any 100%-errored grading metrics."""
+    raw_metrics = getattr(eval_result, "summary_metrics", None)
+    if not isinstance(raw_metrics, list):
+        return [], []
+
+    serialized: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for item in raw_metrics:
+        metric_name = str(getattr(item, "metric_name", "unknown"))
+        num_total = int(getattr(item, "num_cases_total", 0) or 0)
+        num_valid = int(getattr(item, "num_cases_valid", 0) or 0)
+        num_error = int(getattr(item, "num_cases_error", 0) or 0)
+        serialized.append(
+            {
+                "metric_name": metric_name,
+                "num_cases_total": num_total,
+                "num_cases_valid": num_valid,
+                "num_cases_error": num_error,
+                "mean_score": getattr(item, "mean_score", None),
+                "stdev_score": getattr(item, "stdev_score", None),
+                "pass_rate": getattr(item, "pass_rate", None),
+            }
+        )
+        if num_error > 0 and num_valid == 0:
+            errors.append(
+                f"Metric {metric_name!r} failed on all cases "
+                f"(num_cases_error={num_error}, num_cases_valid=0)."
+            )
+    return serialized, errors
+
+
 def grade_simulated_traces(client: Any, simulated_traces: Any) -> Any:
-    """Step 3: Grade multi-turn traces strictly using ``MULTI_TURN_*`` metrics."""
+    """Step 3: Sanitize ADK 2.15 empty-content events and grade with ``MULTI_TURN_*`` metrics."""
     types = get_eval_types()
+    sanitized_traces = sanitize_simulated_traces(simulated_traces)
 
     return client.evals.evaluate(
-        dataset=simulated_traces,
+        dataset=sanitized_traces,
         metrics=[
             types.RubricMetric.MULTI_TURN_TASK_SUCCESS,
             types.RubricMetric.MULTI_TURN_TOOL_USE_QUALITY,
@@ -260,11 +430,22 @@ def main(argv: list[str] | None = None) -> int:
 
     logger.info("Step 3/4: Grading simulated traces with MULTI_TURN_* metrics...")
     eval_result = grade_simulated_traces(client, simulated_traces)
+    summary_rows, grading_errors = _inspect_grading_results(eval_result)
 
     output: dict[str, Any] = {
         "plan": plan,
-        "summary_metrics": str(getattr(eval_result, "summary_metrics", eval_result)),
+        "summary_metrics": summary_rows or str(getattr(eval_result, "summary_metrics", eval_result)),
     }
+    if grading_errors:
+        output["grading_errors"] = grading_errors
+
+    has_valid_cases = (
+        any(row["num_cases_valid"] > 0 for row in summary_rows) if summary_rows else True
+    )
+    if grading_errors and not has_valid_cases:
+        logger.error("Simulated evaluation grading produced 0 valid cases: %s", "; ".join(grading_errors))
+        print(json.dumps(output, indent=2, default=str))
+        return 1
 
     if not args.skip_loss_clusters:
         logger.info("Step 4/4: Running global Automatic Loss Analysis (%s)...", args.cluster_metric)

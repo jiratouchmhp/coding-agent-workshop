@@ -163,9 +163,18 @@ def _normalize_command_response(raw: Any, elapsed_ms: int) -> CommandExecutionOu
             try:
                 parsed = json.loads(stripped)
             except json.JSONDecodeError as exc:
+                auth_hint = ""
+                if "missing or invalid issuer" in stripped.lower() or "unauthorized" in stripped.lower():
+                    auth_hint = (
+                        " Hint: `sandboxes.send_command()` rejects standard ADC OAuth2 bearer "
+                        "tokens and requires a signed JWT from `generate_access_token("
+                        "service_account_email=...)` (with `roles/iam.serviceAccountTokenCreator`). "
+                        "For standard BYOC commands without `env`, omit `service_account_email` / "
+                        "`use_iam_bearer` so `execute_byoc_command()` delegates to caller-ADC `execute_bash()`."
+                    )
                 raise RuntimeError(
                     f"Sandbox runner returned non-JSON body (status_code={status_code!r}): "
-                    f"{stripped[:400]!r}"
+                    f"{stripped[:400]!r}{auth_hint}"
                 ) from exc
             if not isinstance(parsed, dict):
                 raise RuntimeError(f"Expected JSON object from sandbox runner, got {type(parsed).__name__}")
@@ -241,16 +250,28 @@ def generate_sandbox_access_token(client: Any, service_account_email: str) -> st
 
     Requires:
     - Caller holds ``roles/aiplatform.user`` and ``roles/iam.serviceAccountTokenCreator``
-      on ``service_account_email``.
+      (``iam.serviceAccounts.signJwt``) on ``service_account_email``.
     - Audited in Cloud Audit Logs (``DATA_WRITE``) as ``AuthorizeSandboxEnvironmentAccess``.
     """
     sandboxes_ns = get_sandboxes_namespace(client)
-    token = sandboxes_ns.generate_access_token(service_account_email=service_account_email)
+    try:
+        token = sandboxes_ns.generate_access_token(service_account_email=service_account_email)
+    except Exception as exc:
+        msg = str(exc)
+        if "403" in msg or "PERMISSION_DENIED" in msg.upper() or "signJwt" in msg:
+            raise PermissionError(
+                f"Failed to mint Managed Sandbox JWT for {service_account_email!r}: {exc}. "
+                "Grant your caller or Agent Runtime identity `roles/iam.serviceAccountTokenCreator` "
+                f"(`iam.serviceAccounts.signJwt`) on {service_account_email!r}, OR leave "
+                "`SANDBOX_SERVICE_ACCOUNT_EMAIL` unset for standard BYOC commands so execution "
+                "delegates automatically to caller-ADC `execute_bash()`."
+            ) from exc
+        raise
     return str(token)
 
 
 def fetch_iam_bearer_token() -> str:
-    """Fetch a short-lived Google Cloud OAuth 2.0 bearer token from ADC."""
+    """Fetch a short-lived Google Cloud OAuth 2.0 bearer token from ADC (direct HTTP only)."""
     import google.auth
     from google.auth.transport.requests import Request
 
@@ -277,31 +298,46 @@ def execute_byoc_command(
 ) -> CommandExecutionOutput:
     """Execute a command against a BYOC Custom Container's ``/exec`` runner endpoint.
 
-    Supports two verified transports:
+    Supports three verified execution paths:
     1. **Direct HTTP `/exec`** (when ``runner_base_url`` is set — e.g. private VPC PSC-E
        forwarding rule or local Docker test ``http://127.0.0.1:8080``) with optional
        short-lived sandbox access token or ADC IAM ``Authorization: Bearer ...`` header.
-    2. **Managed Sandbox Data-Plane Proxy** (when ``client`` and ``sandbox_name`` are set):
-       mints a short-lived token via ``generate_sandbox_access_token()`` (if not passed)
+    2. **Managed Sandbox Data-Plane Proxy (`send_command`)** (when ``client``,
+       ``sandbox_name``, and either ``access_token`` or ``service_account_email`` are set):
+       mints a short-lived signed JWT via ``generate_sandbox_access_token()`` (if not passed)
        and invokes ``sandboxes.send_command(http_method="POST", path="exec",
-       access_token=..., request_dict=..., sandbox_environment=...)``.
+       access_token=..., request_dict=..., sandbox_environment=...)``. Supports custom
+       per-exec allowlisted ``env`` injection.
+    3. **Caller-ADC Fallback (`execute_bash`)** (when ``runner_base_url``, ``access_token``,
+       ``service_account_email``, and ``env`` are all unset): delegates directly to
+       ``execute_shell_command()`` (``sandboxes.execute_bash()``), which works on our BYOC
+       container's ``/exec`` endpoint via caller ADC without requiring a signing service
+       account. (NEVER pass ``fetch_iam_bearer_token()`` to ``sandboxes.send_command()`` —
+       the Managed Sandbox data plane rejects OAuth2 tokens with HTTP 401
+       ``Missing or invalid issuer (iss) claim``.)
 
     Optional ``env`` forwards an allowlisted per-exec ephemeral env dict to the
     sandbox runner's child process (never logged or persisted to disk).
     """
-    # TODO(lab-2): Implement BOTH transports cleanly:
+    # TODO(lab-2): Implement all three BYOC execution paths cleanly:
     # 1. Build ``payload = {"command": command, "cwd": cwd, "timeout": max(1, int(timeout))}``
     #    and attach ``payload["env"] = dict(env)`` when ``env`` is provided.
     # 2. If ``runner_base_url`` is set: POST JSON ``payload`` to
     #    ``f"{runner_base_url.rstrip('/')}/exec"`` via ``httpx.Client``, attaching
     #    ``Authorization: Bearer <token>`` when ``access_token`` or ``use_iam_bearer``
-    #    is provided, raise_for_status(), and return ``_normalize_command_response(resp.json(), elapsed_ms)``.
-    # 3. Otherwise require ``client`` and ``sandbox_name``: fetch ``sandbox_env = sandboxes_ns.get(name=sandbox_name)``,
-    #    resolve ``token`` from ``access_token``, else ``generate_sandbox_access_token(client, service_account_email)``
-    #    when ``service_account_email`` is set, else ``fetch_iam_bearer_token()`` when ``use_iam_bearer`` is True
-    #    (matching ``check_byoc_health()`` when ``SANDBOX_SERVICE_ACCOUNT_EMAIL`` is unset),
-    #    invoke ``sandboxes_ns.send_command(http_method="POST", path="exec", access_token=token,
-    #    request_dict=payload, sandbox_environment=sandbox_env)``, and normalize into ``CommandExecutionOutput``.
+    #    is provided, call ``resp.raise_for_status()``, and return
+    #    ``_normalize_command_response(resp.json(), elapsed_ms)``.
+    # 3. Otherwise require ``client`` and ``sandbox_name``, and resolve a signed JWT
+    #    ``token = access_token or (generate_sandbox_access_token(client, service_account_email) if service_account_email else None)``:
+    #    - If ``token`` is None: NEVER call ``fetch_iam_bearer_token()`` for ``send_command()``
+    #      (Managed data plane rejects ADC OAuth2 tokens with HTTP 401). When ``not env``,
+    #      delegate directly to ``execute_shell_command(client, sandbox_name, command, cwd=cwd, timeout=timeout)``;
+    #      when ``env`` IS set, raise a clear ``ValueError`` instructing the caller to configure
+    #      ``SANDBOX_SERVICE_ACCOUNT_EMAIL`` (with ``roles/iam.serviceAccountTokenCreator``),
+    #      pass ``--service-account`` / ``--runner-url``, or omit ``env``.
+    #    - If ``token`` is present: fetch ``sandbox_env = sandboxes_ns.get(name=sandbox_name)``,
+    #      invoke ``sandboxes_ns.send_command(http_method="POST", path="exec", access_token=token,
+    #      request_dict=payload, sandbox_environment=sandbox_env)``, and normalize into ``CommandExecutionOutput``.
     _ = (
         command,
         cwd,
@@ -567,9 +603,10 @@ class AgentPlatformSandboxEnvironment(BaseEnvironment):
         """Execute a shell command inside the session's Managed Sandbox."""
         # TODO(lab-2): Ensure initialized, resolve active sandbox name, dispatch via
         # ``await asyncio.to_thread(...)`` to ``execute_shell_command`` (when mode == "shell")
-        # or ``execute_byoc_command`` (when mode == "byoc" or ``self._runner_base_url`` is set,
-        # passing ``use_iam_bearer=(not bool(self._runner_base_url) and not bool(self._service_account_email))``
-        # so managed BYOC falls back cleanly to ADC IAM bearer when no signing SA is set), and return
+        # or ``execute_byoc_command`` (when mode == "byoc" or ``self._runner_base_url`` is set —
+        # do NOT pass ``use_iam_bearer=True`` on Managed BYOC; ``execute_byoc_command`` uses
+        # ``generate_sandbox_access_token`` + ``send_command`` when ``service_account_email``
+        # is configured and delegates to caller-ADC ``execute_bash()`` otherwise), and return
         # ``ExecutionResult(exit_code=out.returncode, stdout=out.stdout,
         # stderr=out.stderr, timed_out=out.timed_out)``.
         _ = (command, timeout, ctx)
@@ -608,9 +645,6 @@ class AgentPlatformSandboxEnvironment(BaseEnvironment):
             sandbox_name=sandbox_name,
             service_account_email=self._service_account_email,
             runner_base_url=self._runner_base_url,
-            use_iam_bearer=(
-                not bool(self._runner_base_url) and not bool(self._service_account_email)
-            ),
         )
         return ExecutionResult(
             exit_code=out.returncode,
@@ -649,25 +683,35 @@ class AgentPlatformSandboxEnvironment(BaseEnvironment):
 
         def _fetch_proxied() -> dict[str, Any]:
             client = self._get_client()
-            sandboxes_ns = get_sandboxes_namespace(client)
-            sandbox_env = sandboxes_ns.get(name=sandbox_name)
-            token = (
-                generate_sandbox_access_token(client, self._service_account_email)
-                if self._service_account_email
-                else fetch_iam_bearer_token()
+            if self._service_account_email:
+                sandboxes_ns = get_sandboxes_namespace(client)
+                sandbox_env = sandboxes_ns.get(name=sandbox_name)
+                token = generate_sandbox_access_token(client, self._service_account_email)
+                raw = sandboxes_ns.send_command(
+                    http_method="GET",
+                    path="health",
+                    access_token=token,
+                    sandbox_environment=sandbox_env,
+                )
+                body = getattr(raw, "body", raw)
+                if isinstance(body, bytes | bytearray):
+                    return json.loads(body.decode("utf-8"))
+                if isinstance(body, str):
+                    return json.loads(body)
+                return dict(body) if isinstance(body, dict) else {}
+
+            # Without a signing SA, `send_command()` rejects ADC OAuth2 bearer tokens;
+            # probe the container's local `/health` endpoint via caller-ADC `execute_bash()`.
+            probe_cmd = (
+                "python3 -c \"import urllib.request; "
+                "print(urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"
+                ".read().decode('utf-8'))\""
             )
-            raw = sandboxes_ns.send_command(
-                http_method="GET",
-                path="health",
-                access_token=token,
-                sandbox_environment=sandbox_env,
-            )
-            body = getattr(raw, "body", raw)
-            if isinstance(body, bytes | bytearray):
-                return json.loads(body.decode("utf-8"))
-            if isinstance(body, str):
-                return json.loads(body)
-            return dict(body) if isinstance(body, dict) else {}
+            out = execute_shell_command(client, sandbox_name, probe_cmd, cwd="/workspace", timeout=10)
+            if out.returncode != 0 or not out.stdout.strip():
+                return {}
+            parsed = json.loads(out.stdout.strip())
+            return parsed if isinstance(parsed, dict) else {}
 
         try:
             return await asyncio.to_thread(_fetch_proxied)
@@ -801,6 +845,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p_probe.add_argument("--sandbox-name", default=None)
     p_probe.add_argument("--service-account", default=None)
     p_probe.add_argument("--runner-url", default=None)
+    p_probe.add_argument(
+        "--use-iam-bearer",
+        action="store_true",
+        help="Attach ADC IAM Bearer token when targeting a direct HTTP --runner-url.",
+    )
 
     return parser
 
@@ -864,6 +913,7 @@ def main(argv: list[str] | None = None) -> int:
                 sandbox_name=args.sandbox_name or settings.sandbox_resource_name or None,
                 service_account_email=args.service_account or settings.sandbox_service_account_email or None,
                 runner_base_url=runner_url,
+                use_iam_bearer=args.use_iam_bearer,
             )
         print(json.dumps(result.to_dict(), indent=2))
         passed = (

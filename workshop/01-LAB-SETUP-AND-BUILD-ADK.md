@@ -16,23 +16,24 @@ In this lab, you'll configure your workspace for Gemini 4, wire a local coding a
 
 **Already built for you (no edits needed):** [`starter/coding_agent/config.py`](../starter/coding_agent/config.py), [`starter/agents-cli-manifest.yaml`](../starter/agents-cli-manifest.yaml), [`starter/services.yaml`](../starter/services.yaml), [`starter/services.py`](../starter/services.py), plus validation and formatting helpers inside `models.py`, `agy_headless_harness.py`, and `architectures.py`.
 
-**Need help or running behind?** Point Antigravity at [`.agents/skills/adk-coding-agent-build`](../.agents/skills/adk-coding-agent-build/SKILL.md), or run `make fast-forward LAB=1` to sync only Lab 1 without touching Labs 2-8.
+**Need help or running behind?** Point Antigravity at [`.agents/skills/adk-coding-agent-build`](../.agents/skills/adk-coding-agent-build/SKILL.md), or run `make fast-forward LAB=1` to sync only Lab 1 without touching Labs 2-6.
 
 ---
 
 ## Step 1: Configure `.env`, Install Dependencies, and Validate Skills
 
+**Already completed Lab 0's setup checklist?** Confirm `.env` already has your `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_PROJECT_NUMBER` and skip straight to Step 2.
+
 Run these from the repo root. You do not need local Docker or `python3-venv`; standalone `uv` manages Python 3.11+ environments directly.
 
-1. Copy `.env.example` to `.env` (never commit `.env`) and fill in `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_PROJECT_NUMBER`:
+1. Create `.env` from `.env.example` if it does not exist yet (never commit `.env`), then fill in `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_PROJECT_NUMBER`:
    ```bash
-   cp .env.example .env
+   [ -f .env ] || cp .env.example .env
    ```
    Keep the regional defaults: Gemini 4 frontier models (`gemini-4-hydrogen` and `gemini-4-neon`) use `MODEL_LOCATION=global`, while Agent Platform runtime/sandboxes default to `asia-southeast1` and Artifact Registry/Cloud Build default to `asia-southeast3`. (For strict Singapore inference residency, switch to `MODEL_NAME=gemini-4-argon` with `MODEL_LOCATION=asia-southeast1`.)
 
-2. Install standalone `uv` if missing, run pre-flight, sync dependencies, and validate the 6 bundled Antigravity skills:
+2. Install `uv` if missing (via Homebrew `brew install uv`, `pipx install uv`, or the [official `uv` installation guide](https://docs.astral.sh/uv/getting-started/installation/)), then run pre-flight, sync dependencies, and validate the 6 bundled Antigravity skills:
    ```bash
-   command -v uv >/dev/null 2>&1 || (curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv_install.sh && sh /tmp/uv_install.sh && rm -f /tmp/uv_install.sh)
    make preflight && make install && make validate-skills
    ```
    Installing `google/agents-cli` (`uvx google-agents-cli setup`) is optional; every lab works directly with `uv`, `gcloud`, and Terraform.
@@ -109,7 +110,7 @@ ADK's `EnvironmentToolset` gives the agent `ReadFile`, `EditFile`, `WriteFile`, 
 What to update in `starter/coding_agent/agent.py`:
 - Add `LocalEnvironment` to the top import: `from google.adk.environment import BaseEnvironment, LocalEnvironment`.
 - In `build_local_environment_toolset()`: resolve `workspace_dir` as a `pathlib.Path` (a raw `str` crashes with `AttributeError: 'str' object has no attribute 'resolve'` on the first file call), call `.mkdir(parents=True, exist_ok=True)`, create `LocalEnvironment(working_dir=resolved_dir)`, and return `EnvironmentToolset(environment=local_env, max_output_chars=max_output_chars)` (`max_output_chars` belongs on `EnvironmentToolset`, not `LocalEnvironment`).
-- In `_assemble_runtime_components()`: remove the `# TODO(lab-1)` comment and `try/except NotImplementedError` wrapper so `cfg.sandbox_mode == "local"` calls `build_local_environment_toolset()` directly.
+- In `_assemble_runtime_components()`: remove the `# TODO(lab-1)` comment and `try/except NotImplementedError` wrapper so `cfg.sandbox_mode == "local"` calls `build_local_environment_toolset(workspace_dir=workspace_path, max_output_chars=cfg.max_output_chars)` directly (keep using `workspace_path`, or delete it if you pass `cfg.local_workspace_path` directly, so `ruff` doesn't flag an unused `workspace_path` variable with `F841`).
 - Keep `app = App(root_agent=root_agent, name="coding_agent", **_build_app_options())` unchanged: `App.name` must match the `coding_agent` directory name or ADK throws `"Session not found"`.
 
 <details>
@@ -120,15 +121,25 @@ What to update in `starter/coding_agent/agent.py`:
 from google.adk.environment import BaseEnvironment, LocalEnvironment
 
 
-def build_local_environment_toolset(workspace_dir: Path, max_output_chars: int = 12_000) -> EnvironmentToolset:
+def build_local_environment_toolset(
+    workspace_dir: Path,
+    max_output_chars: int = 12_000,
+) -> EnvironmentToolset:
     resolved_dir = Path(workspace_dir).resolve()
     resolved_dir.mkdir(parents=True, exist_ok=True)
-    return EnvironmentToolset(environment=LocalEnvironment(working_dir=resolved_dir), max_output_chars=max_output_chars)
+    return EnvironmentToolset(
+        environment=LocalEnvironment(working_dir=resolved_dir),
+        max_output_chars=max_output_chars,
+    )
 
 
 # Inside _assemble_runtime_components(cfg: Settings):
     if cfg.sandbox_mode == "local":
-        local_toolset = build_local_environment_toolset(workspace_dir=cfg.local_workspace_path, max_output_chars=cfg.max_output_chars)
+        workspace_path = cfg.local_workspace_path
+        local_toolset = build_local_environment_toolset(
+            workspace_dir=workspace_path,
+            max_output_chars=cfg.max_output_chars,
+        )
         active_environment = getattr(local_toolset, "_environment", None)
         tools.append(local_toolset)
 ```
@@ -158,6 +169,12 @@ Open `http://localhost:8000`, pick **`coding_agent`**, and try two prompts:
 1. *"Create `math_utils.py` with `safe_divide(a: float, b: float) -> float` raising `ValueError` on zero division, add `test_math_utils.py`, and run `pytest -v`."*
 2. *"Use `EditFile` to add `moving_average(values: list[float], window: int)` to `math_utils.py`, add tests, and run `pytest -v`."*
 
+**Headless SSH / Cloud Shell alternative (no browser or port-forwarding needed):** Call the pre-built `run_local_smoke_turn()` helper in `starter/coding_agent/agent.py`:
+
+```bash
+(cd starter && uv run python -c "import asyncio; from coding_agent.agent import run_local_smoke_turn; print(asyncio.run(run_local_smoke_turn('Create math_utils.py with safe_divide(a: float, b: float) -> float raising ValueError on zero division, add test_math_utils.py, and run pytest -v.')))")
+```
+
 **Check it works:** In the Events/Trace tab, Turn 1 calls `WriteFile` + `Execute` (`pytest` exit 0) and Turn 2 uses `EditFile` instead of rewriting the whole file. (An `Unclosed client session` message on shutdown is a benign `aiohttp` teardown warning.)
 
 **Security reality check:** Ask the agent to run `whoami && ls -la ~/.config/gcloud`. `LocalEnvironment` confines file paths, but `Execute` still runs under your local OS user. Lab 2 fixes that with a gVisor Managed Sandbox.
@@ -172,9 +189,9 @@ Run the Lab 1 verifier from the repo root:
 make verify-lab LAB=1
 ```
 
-All Core (Part A) checks (`models.py`, `agent.py`, `config.py`, `agents-cli-manifest.yaml`, `.agents/skills/`) should print `[PASS]`. If you skip Part B below, you'll see two expected `[FAIL]` lines for `# TODO(lab-1)` in `architectures.py` and `agy_headless_harness.py` (plus a harmless `[WARN]` if `agents-cli` isn't installed).
+All Core (Part A) checks (`models.py`, `agent.py`, `config.py`, `agents-cli-manifest.yaml`, `.agents/skills/`) should print `[PASS]`. If you stop after Part A, you'll see two expected `[FAIL]` lines for unfinished `# TODO(lab-1)` markers in `agy_headless_harness.py` and `architectures.py`, plus two expected `[WARN]` lines (`Skipping agy_headless_harness.py --dry-run...` until Step 6, and `agents-cli not found on PATH` if you skipped optional `agents-cli`). To inspect a passing reference run anytime, run `make TRACK=solution verify-lab LAB=1`.
 
-**Stopping after Part A?** Jump straight to **[Lab 2: Custom Sandbox (BYOC)](./02-LAB-CUSTOM-SANDBOX-BYOC.md)** (Labs 2-8 use `AGENT_ARCHITECTURE=simple`), or run `make fast-forward LAB=1` if you want those two Part B files filled in so `verify-lab LAB=1` and `LAB=all` are 100% green. Otherwise, continue to Part B (Steps 6-8).
+**Stopping after Part A?** Jump straight to **[Lab 2: Custom Sandbox (BYOC)](./02-LAB-CUSTOM-SANDBOX-BYOC.md)** (Labs 2-6 use `AGENT_ARCHITECTURE=simple`), or run `make fast-forward LAB=1` if you want those two Part B files filled in so `verify-lab LAB=1` and `LAB=all` are 100% green. Otherwise, continue to Part B (Steps 6-8).
 
 ---
 
@@ -288,11 +305,12 @@ For full structured content-block extraction, see [`solution/coding_agent/tools/
 
 </details>
 
-**Check it works:** Run the offline dry-run suite (works without Docker or a local `agy` binary):
+**Check it works:** Run the standalone Step 6 dry-run (exits `0` immediately) and the offline harness suite (works without Docker or a local `agy` binary):
 ```bash
+(cd starter && uv run python -m coding_agent.tools.agy_headless_harness --prompt "Verify stream-json NDJSON dry-run" --dry-run)
 make test-agy-harness
 ```
-Expected output: `[PASS]` for `AgyExitCode` and checks `(1/4)` through `(3/4)` (NDJSON parsing, `--conversation` continuity, and retry matrix `{0: False, 1: False, 2: False, 3: True}`). Check `(4/4)` passes after Step 7.
+Expected output: `agy_headless_harness --dry-run` prints parsed NDJSON JSON with `"exit_code": 0` and `"status": "success"`. In `make test-agy-harness`, `AgyExitCode` and checks `(1/4)` through `(3/4)` (NDJSON parsing, `--conversation` continuity, and retry matrix `{0: False, 1: False, 2: False, 3: True}`) print `[PASS]`, and check `(4/4)` prints `[INFO] (4/4) ... skipped until Lab 1 Step 7` (exiting `0`) until you implement `build_agy_harness_workflow()` in Step 7.
 
 ---
 
@@ -308,52 +326,655 @@ What each builder adds:
 - **`build_dynamic_coding_workflow()`**: `@node(rerun_on_resume=True)` orchestrator calling `ctx.run_node(coder_agent, ...)`, parallel checks via `asyncio.gather(ctx.run_node(..., use_sub_branch=True), ...)`, bounded `for` loop yielding `Event(state={"code": ..., "findings": ..., "fix_attempts": ...})` before calling `fixer_agent` (Python `{key}` templates read session state, not `node_input`), optional HITL, and one terminal `Event`.
 - **`build_agy_harness_workflow()`**: 5-stage workflow pairing `spec_planner` (`gemini-4-neon`, `SpecPlan`), `run_agy_harness_node` (`AgyHeadlessHarness` with `fallback_coder_agent` fallback and fail-fast on exit 1/2), independent parallel `pytest`/`ruff` gates, bounded `--conversation` fix loop, and independent `code_reviewer` (`gemini-4-neon`) + optional HITL.
 
+Each collapsible block below is a complete drop-in function you can paste directly over the matching stub in `starter/coding_agent/architectures.py` (keep the top-level imports untouched).
+
 <details>
-<summary>Stuck? Peek at the core patterns (complete builders in solution/coding_agent/architectures.py)</summary>
+<summary>Stuck on <code>build_collaborative_coding_team()</code>? Peek at the code</summary>
 
 ```python
-# 1. Collaborative team (set mode ONLY on subagents, never on root):
-coding_lead = LlmAgent(
-    name="coding_agent", model=_build_gemini_model(settings, role="coding"),
-    instruction="Delegate ambiguous specs to requirements_clarifier, edits to code_implementer, reviews to code_reviewer.",
-    sub_agents=[code_implementer, code_reviewer, requirements_clarifier],
-    generate_content_config=_build_generate_config(settings),
-)
-
-# 2. Declarative Graph Workflow edges (converge parallel checks via JoinNode -> single terminal node):
-return Workflow(name="coding_agent", edges=[
-    ("START", coder_agent),
-    (coder_agent, run_pytest_node, verify_join),
-    (coder_agent, run_ruff_node, verify_join),
-    (verify_join, verdict_router),
-    (verdict_router, {"NEEDS_FIX": coder_agent, "NEEDS_APPROVAL": request_human_approval, "PASS": finalize_report}),
-    (request_human_approval, finalize_report),
-])
-
-# 3. Dynamic Workflow loop (@node(rerun_on_resume=True) + yield Event(state=...) before fixer_agent):
-@node(name="dynamic_coding_workflow", rerun_on_resume=True)
-async def dynamic_coding_workflow(ctx: Context, node_input: str):
-    code_summary = await ctx.run_node(coder_agent, node_input)
-    pytest_res, ruff_res = await asyncio.gather(
-        ctx.run_node(run_pytest_node, code_summary, use_sub_branch=True),
-        ctx.run_node(run_ruff_node, code_summary, use_sub_branch=True),
+def build_collaborative_coding_team(
+    settings: Settings,
+    tools: Sequence[Any],
+    callbacks: Mapping[str, Any] | None = None,
+    code_executor: Any | None = None,
+) -> Any:
+    implementer_kwargs: dict[str, Any] = {
+        "name": "code_implementer",
+        "mode": "single_turn",
+        "model": _build_gemini_model(settings, role="coding"),
+        "description": "Reads, edits, writes, and tests code inside the workspace.",
+        "instruction": (
+            "You are the Code Implementer specialist. Inspect files with ReadFile, "
+            "apply minimal edits with EditFile/WriteFile, and verify with pytest and ruff."
+        ),
+        "tools": list(tools),
+        "generate_content_config": _build_generate_config(settings),
+    }
+    if code_executor is not None:
+        implementer_kwargs["code_executor"] = code_executor
+    _attach_optional_callbacks(
+        implementer_kwargs, callbacks, include_tool_callbacks=True, include_agent_callbacks=False
     )
-    latest_findings = _format_check_findings(pytest_res, ruff_res)
-    for attempt in range(settings.max_fix_rounds):
-        if not latest_findings:
-            break
-        yield Event(state={"code": str(code_summary), "findings": latest_findings, "fix_attempts": attempt + 1})
-        code_summary = await ctx.run_node(fixer_agent, {"code": str(code_summary), "findings": latest_findings})
+    code_implementer = LlmAgent(**implementer_kwargs)
+
+    code_reviewer = LlmAgent(
+        name="code_reviewer",
+        mode="single_turn",
+        model=_build_gemini_model(settings, role="reasoning"),
+        description="Reviews code changes and test output for bugs, edge cases, and security.",
+        instruction=(
+            "You are the Code Reviewer specialist. Audit the code changes and test output "
+            "for defects, missing tests, and security issues, and return a CodeReviewReport."
+        ),
+        output_schema=CodeReviewReport,
+        generate_content_config=_build_generate_config(settings),
+    )
+
+    requirements_clarifier = LlmAgent(
+        name="requirements_clarifier",
+        mode="task",
+        model=_build_gemini_model(settings, role="coding"),
+        description="Clarifies ambiguous engineering requirements before implementation.",
+        instruction=(
+            "Ask concise clarifying questions ONLY when the request is ambiguous. "
+            "Once clear, call finish_task with a short specification summary."
+        ),
+        generate_content_config=_build_generate_config(settings),
+    )
+
+    coordinator_kwargs: dict[str, Any] = {
+        "name": "coding_agent",
+        "model": _build_gemini_model(settings, role="coding"),
+        "description": "Collaborative Coding Coordinator delegating to specialist subagents.",
+        "instruction": (
+            "Orchestrate your specialists: delegate ambiguous specs to requirements_clarifier, "
+            "implementation and tests to code_implementer, and review to code_reviewer. "
+            "Send blocking review findings back to code_implementer before replying."
+        ),
+        "sub_agents": [code_implementer, code_reviewer, requirements_clarifier],
+        "generate_content_config": _build_generate_config(settings),
+    }
+    _attach_optional_callbacks(
+        coordinator_kwargs, callbacks, include_tool_callbacks=False, include_agent_callbacks=True
+    )
+    return LlmAgent(**coordinator_kwargs)
+```
+
+</details>
+
+<details>
+<summary>Stuck on <code>build_graph_coding_workflow()</code>? Peek at the code</summary>
+
+```python
+def build_graph_coding_workflow(
+    settings: Settings,
+    tools: Sequence[Any],
+    callbacks: Mapping[str, Any] | None = None,
+    code_executor: Any | None = None,
+) -> Any:
+    sandbox_env = _extract_sandbox_environment(tools)
+    coder_kwargs: dict[str, Any] = {
+        "name": "coder_agent",
+        "model": _build_gemini_model(settings, role="coding"),
+        "description": "Implements or repairs workspace code from user requests or check findings.",
+        "instruction": (
+            "Read existing files before editing, apply minimal surgical changes with your "
+            "workspace tools, and summarize the modified files. Fix all reported pytest/ruff issues."
+        ),
+        "tools": list(tools),
+        "output_key": "latest_code_summary",
+        "generate_content_config": _build_generate_config(settings),
+    }
+    if code_executor is not None:
+        coder_kwargs["code_executor"] = code_executor
+    _attach_optional_callbacks(
+        coder_kwargs, callbacks, include_tool_callbacks=True, include_agent_callbacks=False
+    )
+    coder_agent = LlmAgent(**coder_kwargs)
+
+    check_retry_config = RetryConfig(
+        max_attempts=3,
+        initial_delay=1.0,
+        exceptions=[TimeoutError, NodeTimeoutError],
+    )
+
+    @node(name="run_pytest_node", retry_config=check_retry_config, timeout=30.0)
+    async def run_pytest_node(ctx: Context, node_input: Any = None) -> CheckOutcome:
+        del node_input
+        return await _run_workspace_check(
+            settings,
+            check_name="pytest",
+            command=_pytest_command(),
+            allow_exit_codes=frozenset({0, 5}),
+            empty_exit_code_message="No pytest tests collected in workspace.",
+            sandbox_env=sandbox_env,
+            remote_command="python3 -m pytest -q",
+            ctx=ctx,
+        )
+
+    @node(name="run_ruff_node", retry_config=check_retry_config, timeout=30.0)
+    async def run_ruff_node(ctx: Context, node_input: Any = None) -> CheckOutcome:
+        del node_input
+        return await _run_workspace_check(
+            settings,
+            check_name="ruff",
+            command=_ruff_command(),
+            allow_exit_codes=frozenset({0}),
+            empty_exit_code_message="ruff check passed with zero violations.",
+            sandbox_env=sandbox_env,
+            remote_command="ruff check .",
+            ctx=ctx,
+        )
+
+    verify_join = JoinNode(name="verify_join")
+
+    @node(name="verdict_router")
+    async def verdict_router(
+        ctx: Context,
+        node_input: dict[str, Any],
+        fix_attempts: int = 0,
+    ) -> Any:
+        del ctx
+        joined = node_input if isinstance(node_input, Mapping) else {}
+        findings = _format_check_findings(joined.get("run_pytest_node"), joined.get("run_ruff_node"))
+        all_passed = not findings
+
+        if not all_passed and fix_attempts < settings.max_fix_rounds:
+            next_attempt = fix_attempts + 1
+            return Event(
+                route="NEEDS_FIX",
+                output=(
+                    f"Verification failed on attempt {next_attempt}/{settings.max_fix_rounds}.\n"
+                    f"Fix every issue below:\n\n{findings}"
+                ),
+                state={
+                    "fix_attempts": next_attempt,
+                    "latest_findings": findings,
+                    "checks_passed": False,
+                },
+            )
+
+        summary_payload = {
+            "checks_passed": all_passed,
+            "fix_attempts": fix_attempts,
+            "findings": findings or "All checks (pytest + ruff) passed cleanly.",
+        }
+        route_key = "NEEDS_APPROVAL" if settings.enable_hitl_approval else "PASS"
+        return Event(
+            route=route_key,
+            output=summary_payload,
+            state={
+                "fix_attempts": fix_attempts,
+                "latest_findings": findings,
+                "checks_passed": all_passed,
+            },
+        )
+
+    @node(name="request_human_approval", rerun_on_resume=False)
+    async def request_human_approval(ctx: Context, node_input: Any):
+        del ctx
+        yield RequestInput(
+            message="Verification finished. Submit ApprovalDecision (approved, reviewer_notes).",
+            payload=node_input,
+            response_schema=ApprovalDecision,
+        )
+
+    @node(name="finalize_report")
+    async def finalize_report(
+        ctx: Context,
+        node_input: Any,
+        fix_attempts: int = 0,
+        latest_findings: str = "",
+        latest_code_summary: str = "",
+    ) -> Any:
+        approval_note = _format_approval_note(node_input) if settings.enable_hitl_approval else ""
+        report = _build_final_report(
+            code_summary=str(latest_code_summary or "").strip(),
+            findings=latest_findings,
+            fix_attempts=fix_attempts,
+            approval_note=approval_note,
+        )
+        await _invoke_optional_after_agent_callback(callbacks, ctx)
+        return Event(
+            message=report,
+            output=report,
+            state={"fix_attempts": 0, "latest_findings": "", "latest_code_summary": ""},
+        )
+
+    return Workflow(
+        name="coding_agent",
+        description="Declarative graph workflow with parallel checks, JoinNode, bounded fix loop, and HITL.",
+        edges=[
+            ("START", coder_agent),
+            (coder_agent, run_pytest_node, verify_join),
+            (coder_agent, run_ruff_node, verify_join),
+            (verify_join, verdict_router),
+            (
+                verdict_router,
+                {
+                    "NEEDS_FIX": coder_agent,
+                    "NEEDS_APPROVAL": request_human_approval,
+                    "PASS": finalize_report,
+                },
+            ),
+            (request_human_approval, finalize_report),
+        ],
+    )
+```
+
+</details>
+
+<details>
+<summary>Stuck on <code>build_dynamic_coding_workflow()</code>? Peek at the code</summary>
+
+```python
+def build_dynamic_coding_workflow(
+    settings: Settings,
+    tools: Sequence[Any],
+    callbacks: Mapping[str, Any] | None = None,
+    code_executor: Any | None = None,
+) -> Any:
+    sandbox_env = _extract_sandbox_environment(tools)
+    coder_kwargs: dict[str, Any] = {
+        "name": "coder_agent",
+        "model": _build_gemini_model(settings, role="coding"),
+        "description": "Generates and edits workspace code for the user request.",
+        "instruction": (
+            "Inspect existing workspace files, apply minimal surgical edits with your tools, "
+            "and summarize the modified files."
+        ),
+        "tools": list(tools),
+        "generate_content_config": _build_generate_config(settings),
+    }
+    if code_executor is not None:
+        coder_kwargs["code_executor"] = code_executor
+    _attach_optional_callbacks(
+        coder_kwargs, callbacks, include_tool_callbacks=True, include_agent_callbacks=False
+    )
+    coder_agent = LlmAgent(**coder_kwargs)
+
+    fixer_kwargs: dict[str, Any] = {
+        "name": "fixer_agent",
+        "model": _build_gemini_model(settings, role="coding"),
+        "description": "Fixes workspace code based on pytest and ruff findings.",
+        "instruction": (
+            "Fix every verification finding below.\n\n"
+            "Previous summary:\n{code}\n\n"
+            "Findings:\n{findings}\n\n"
+            "Apply minimal edits and summarize the fixes."
+        ),
+        "tools": list(tools),
+        "generate_content_config": _build_generate_config(settings),
+    }
+    if code_executor is not None:
+        fixer_kwargs["code_executor"] = code_executor
+    _attach_optional_callbacks(
+        fixer_kwargs, callbacks, include_tool_callbacks=True, include_agent_callbacks=False
+    )
+    fixer_agent = LlmAgent(**fixer_kwargs)
+
+    check_retry_config = RetryConfig(
+        max_attempts=3,
+        initial_delay=1.0,
+        exceptions=[TimeoutError, NodeTimeoutError],
+    )
+
+    @node(name="run_pytest_node", retry_config=check_retry_config, timeout=30.0)
+    async def run_pytest_node(ctx: Context, node_input: Any = None) -> CheckOutcome:
+        del node_input
+        return await _run_workspace_check(
+            settings,
+            check_name="pytest",
+            command=_pytest_command(),
+            allow_exit_codes=frozenset({0, 5}),
+            empty_exit_code_message="No pytest tests collected in workspace.",
+            sandbox_env=sandbox_env,
+            remote_command="python3 -m pytest -q",
+            ctx=ctx,
+        )
+
+    @node(name="run_ruff_node", retry_config=check_retry_config, timeout=30.0)
+    async def run_ruff_node(ctx: Context, node_input: Any = None) -> CheckOutcome:
+        del node_input
+        return await _run_workspace_check(
+            settings,
+            check_name="ruff",
+            command=_ruff_command(),
+            allow_exit_codes=frozenset({0}),
+            empty_exit_code_message="ruff check passed with zero violations.",
+            sandbox_env=sandbox_env,
+            remote_command="ruff check .",
+            ctx=ctx,
+        )
+
+    @node(name="request_human_approval", rerun_on_resume=False)
+    async def request_human_approval(ctx: Context, node_input: Any):
+        del ctx
+        yield RequestInput(
+            message="Dynamic checks finished. Submit ApprovalDecision (approved, reviewer_notes).",
+            payload=node_input,
+            response_schema=ApprovalDecision,
+        )
+
+    @node(name="dynamic_coding_workflow", rerun_on_resume=True)
+    async def dynamic_coding_workflow(ctx: Context, node_input: str):
+        code_summary = await ctx.run_node(coder_agent, node_input)
         pytest_res, ruff_res = await asyncio.gather(
             ctx.run_node(run_pytest_node, code_summary, use_sub_branch=True),
             ctx.run_node(run_ruff_node, code_summary, use_sub_branch=True),
         )
         latest_findings = _format_check_findings(pytest_res, ruff_res)
+        attempts_used = 0
+
+        for attempt in range(settings.max_fix_rounds):
+            if not latest_findings:
+                break
+            attempts_used = attempt + 1
+            yield Event(
+                state={
+                    "code": str(code_summary),
+                    "findings": latest_findings,
+                    "fix_attempts": attempts_used,
+                }
+            )
+            code_summary = await ctx.run_node(
+                fixer_agent,
+                {"code": str(code_summary), "findings": latest_findings},
+            )
+            pytest_res, ruff_res = await asyncio.gather(
+                ctx.run_node(run_pytest_node, code_summary, use_sub_branch=True),
+                ctx.run_node(run_ruff_node, code_summary, use_sub_branch=True),
+            )
+            latest_findings = _format_check_findings(pytest_res, ruff_res)
+
+        approval_note = ""
+        if settings.enable_hitl_approval:
+            decision = await ctx.run_node(
+                request_human_approval,
+                {
+                    "code_summary": str(code_summary),
+                    "findings": latest_findings or "All checks (pytest + ruff) passed cleanly.",
+                    "fix_attempts": attempts_used,
+                },
+            )
+            approval_note = _format_approval_note(decision)
+
+        final_report = _build_final_report(
+            code_summary=str(code_summary),
+            findings=latest_findings,
+            fix_attempts=attempts_used,
+            approval_note=approval_note,
+        )
+        await _invoke_optional_after_agent_callback(callbacks, ctx)
+        yield Event(
+            message=final_report,
+            output=final_report,
+            state={"code": "", "findings": "", "fix_attempts": 0},
+        )
+
+    return Workflow(
+        name="coding_agent",
+        description="Dynamic programmatic workflow with parallel checks, bounded fix loop, and HITL.",
+        edges=[("START", dynamic_coding_workflow)],
+    )
 ```
 
-Copy or compare the complete builders in [`solution/coding_agent/architectures.py`](../solution/coding_agent/architectures.py).
+</details>
+
+<details>
+<summary>Stuck on <code>build_agy_harness_workflow()</code>? Peek at the code</summary>
+
+```python
+def build_agy_harness_workflow(
+    settings: Settings,
+    tools: Sequence[Any],
+    callbacks: Mapping[str, Any] | None = None,
+    code_executor: Any | None = None,
+) -> Any:
+    from coding_agent.tools.agy_headless_harness import AgyExitCode, AgyHeadlessHarness
+
+    sandbox_env = _extract_sandbox_environment(tools)
+    harness = AgyHeadlessHarness(settings=settings, sandbox_env=sandbox_env)
+
+    spec_planner = LlmAgent(
+        name="spec_planner",
+        model=_build_gemini_model(settings, role="reasoning"),
+        description="Gemini 4 Neon planner producing concrete file targets and acceptance criteria.",
+        instruction=(
+            "Convert the user request into a structured SpecPlan with target files, "
+            "verifiable pytest/ruff acceptance criteria, and a clear implementation brief."
+        ),
+        output_schema=SpecPlan,
+        generate_content_config=_build_generate_config(settings),
+    )
+
+    fallback_kwargs: dict[str, Any] = {
+        "name": "fallback_coder_agent",
+        "model": _build_gemini_model(settings, role="coding"),
+        "description": "Native ADK coding fallback when agy is unavailable.",
+        "instruction": (
+            "Inspect workspace files with ReadFile, apply minimal edits with EditFile/WriteFile, "
+            "and summarize the modified files."
+        ),
+        "tools": list(tools),
+        "generate_content_config": _build_generate_config(settings),
+    }
+    if code_executor is not None:
+        fallback_kwargs["code_executor"] = code_executor
+    _attach_optional_callbacks(
+        fallback_kwargs, callbacks, include_tool_callbacks=True, include_agent_callbacks=False
+    )
+    fallback_coder_agent = LlmAgent(**fallback_kwargs)
+
+    code_reviewer = LlmAgent(
+        name="code_reviewer",
+        model=_build_gemini_model(settings, role="reasoning"),
+        description="Independent Gemini 4 Neon code reviewer.",
+        instruction=(
+            "Audit the spec, implementation summary, and independent pytest/ruff outputs. "
+            "Return an objective CodeReviewReport."
+        ),
+        output_schema=CodeReviewReport,
+        generate_content_config=_build_generate_config(settings),
+    )
+
+    check_retry_config = RetryConfig(
+        max_attempts=3,
+        initial_delay=1.0,
+        exceptions=[TimeoutError, NodeTimeoutError],
+    )
+
+    @node(name="run_agy_harness_node")
+    async def run_agy_harness_node(ctx: Context, node_input: Any) -> dict[str, Any]:
+        payload = node_input if isinstance(node_input, Mapping) else {"prompt": str(node_input)}
+        prompt = str(payload.get("prompt", "")).strip()
+        conv_id = payload.get("conversation_id")
+        result = await harness.run_with_retry_and_fallback(
+            prompt=prompt,
+            conversation_id=str(conv_id) if conv_id else None,
+            max_retries=1,
+            ctx=ctx,
+        )
+        return result.to_dict()
+
+    @node(name="run_pytest_node", retry_config=check_retry_config, timeout=30.0)
+    async def run_pytest_node(ctx: Context, node_input: Any = None) -> CheckOutcome:
+        del node_input
+        return await _run_workspace_check(
+            settings,
+            check_name="pytest",
+            command=_pytest_command(),
+            allow_exit_codes=frozenset({0, 5}),
+            empty_exit_code_message="No pytest tests collected in workspace.",
+            sandbox_env=sandbox_env,
+            remote_command="python3 -m pytest -q",
+            ctx=ctx,
+        )
+
+    @node(name="run_ruff_node", retry_config=check_retry_config, timeout=30.0)
+    async def run_ruff_node(ctx: Context, node_input: Any = None) -> CheckOutcome:
+        del node_input
+        return await _run_workspace_check(
+            settings,
+            check_name="ruff",
+            command=_ruff_command(),
+            allow_exit_codes=frozenset({0}),
+            empty_exit_code_message="ruff check passed with zero violations.",
+            sandbox_env=sandbox_env,
+            remote_command="ruff check .",
+            ctx=ctx,
+        )
+
+    @node(name="request_human_approval", rerun_on_resume=False)
+    async def request_human_approval(ctx: Context, node_input: Any):
+        del ctx
+        yield RequestInput(
+            message="Antigravity harness checks finished. Submit ApprovalDecision to finalize.",
+            payload=node_input,
+            response_schema=ApprovalDecision,
+        )
+
+    def _extract_exit_code(result: Any) -> int:
+        if not isinstance(result, Mapping):
+            return int(AgyExitCode.FAILURE)
+        try:
+            return int(result.get("exit_code", int(AgyExitCode.FAILURE)))
+        except (TypeError, ValueError):
+            return int(AgyExitCode.FAILURE)
+
+    def _format_failure(result: Any, *, exit_code: int, stage: str) -> str:
+        if isinstance(result, Mapping):
+            status_label = str(result.get("status") or "failure").strip()
+            detail = str(result.get("agy_error") or result.get("stderr") or "Unknown agy error").strip()
+            hint = str(result.get("actionable_hint") or "").strip()
+            lines = [f"[agy_harness exit={exit_code} status={status_label} stage={stage}]", detail]
+            if hint:
+                lines.append(f"Hint: {hint}")
+            return "\n".join(lines)
+        return f"[agy_harness exit={exit_code} stage={stage}]\n{result}"
+
+    @node(name="agy_harness_workflow", rerun_on_resume=True)
+    async def agy_harness_workflow(ctx: Context, node_input: str):
+        spec_plan = await ctx.run_node(spec_planner, node_input)
+        brief = _format_spec_brief(spec_plan, node_input)
+
+        agy_result = await ctx.run_node(run_agy_harness_node, {"prompt": brief, "conversation_id": None})
+        conversation_id = agy_result.get("conversation_id") if isinstance(agy_result, Mapping) else None
+        using_fallback = isinstance(agy_result, Mapping) and agy_result.get("status") == "unavailable"
+        backend = str(agy_result.get("execution_mode", "fallback") if isinstance(agy_result, Mapping) else "fallback")
+        agy_failure, fail_fast = "", False
+
+        if using_fallback:
+            backend = "adk_native_fallback"
+            code_summary = str(await ctx.run_node(fallback_coder_agent, brief))
+        else:
+            exit_code = _extract_exit_code(agy_result)
+            if exit_code == int(AgyExitCode.SUCCESS):
+                code_summary = str(agy_result.get("response_text") or "").strip()
+            else:
+                agy_failure = _format_failure(agy_result, exit_code=exit_code, stage="initial")
+                code_summary, fail_fast = agy_failure, True
+
+        pytest_res, ruff_res = await asyncio.gather(
+            ctx.run_node(run_pytest_node, code_summary, use_sub_branch=True),
+            ctx.run_node(run_ruff_node, code_summary, use_sub_branch=True),
+        )
+        check_findings = _format_check_findings(pytest_res, ruff_res)
+        latest_findings = "\n\n".join(p for p in (agy_failure, check_findings) if p)
+        attempts_used = 0
+
+        if not fail_fast:
+            for attempt in range(settings.max_fix_rounds):
+                if not check_findings:
+                    break
+                attempts_used = attempt + 1
+                fix_prompt = (
+                    f"Verification failed on round {attempts_used}/{settings.max_fix_rounds}.\n"
+                    f"Fix all pytest/ruff issues below:\n\n{check_findings}"
+                )
+                yield Event(
+                    state={
+                        "agy_conversation_id": conversation_id or "",
+                        "fix_attempts": attempts_used,
+                        "latest_findings": latest_findings,
+                    }
+                )
+                if using_fallback:
+                    code_summary = str(await ctx.run_node(fallback_coder_agent, fix_prompt))
+                else:
+                    agy_result = await ctx.run_node(
+                        run_agy_harness_node,
+                        {"prompt": fix_prompt, "conversation_id": conversation_id},
+                    )
+                    if isinstance(agy_result, Mapping) and agy_result.get("status") == "unavailable":
+                        using_fallback, backend, agy_failure = True, "adk_native_fallback", ""
+                        code_summary = str(await ctx.run_node(fallback_coder_agent, fix_prompt))
+                    else:
+                        if isinstance(agy_result, Mapping):
+                            conversation_id = agy_result.get("conversation_id") or conversation_id
+                        fix_code = _extract_exit_code(agy_result)
+                        if fix_code == int(AgyExitCode.SUCCESS):
+                            agy_failure = ""
+                            code_summary = str(agy_result.get("response_text") or code_summary).strip()
+                        else:
+                            agy_failure = _format_failure(agy_result, exit_code=fix_code, stage=f"fix_round_{attempts_used}")
+                            code_summary, fail_fast = agy_failure, True
+
+                pytest_res, ruff_res = await asyncio.gather(
+                    ctx.run_node(run_pytest_node, code_summary, use_sub_branch=True),
+                    ctx.run_node(run_ruff_node, code_summary, use_sub_branch=True),
+                )
+                check_findings = _format_check_findings(pytest_res, ruff_res)
+                latest_findings = "\n\n".join(p for p in (agy_failure, check_findings) if p)
+                if fail_fast:
+                    break
+
+        review_input = (
+            f"Specification:\n{brief}\n\nBackend: {backend} (conversation={conversation_id or 'n/a'})\n"
+            f"Implementation:\n{code_summary}\n\n"
+            f"Checks:\n{latest_findings or 'All deterministic checks (pytest + ruff) passed cleanly.'}"
+        )
+        review_section = _format_review_section(await ctx.run_node(code_reviewer, review_input))
+
+        approval_note = ""
+        if settings.enable_hitl_approval:
+            decision = await ctx.run_node(
+                request_human_approval,
+                {
+                    "backend": backend,
+                    "conversation_id": conversation_id,
+                    "code_summary": code_summary,
+                    "findings": latest_findings or "All checks (pytest + ruff) passed cleanly.",
+                    "review": review_section,
+                    "fix_attempts": attempts_used,
+                },
+            )
+            approval_note = _format_approval_note(decision)
+
+        base_report = _build_final_report(
+            code_summary=f"[backend={backend}, conversation_id={conversation_id or 'n/a'}]\n{code_summary}",
+            findings=latest_findings,
+            fix_attempts=attempts_used,
+            approval_note=approval_note,
+        )
+        final_report = f"{base_report}\n\n### Independent Gemini 4 Neon Review\n{review_section}"
+        await _invoke_optional_after_agent_callback(callbacks, ctx)
+        yield Event(
+            message=final_report,
+            output=final_report,
+            state={"agy_conversation_id": "", "fix_attempts": 0, "latest_findings": ""},
+        )
+
+    return Workflow(
+        name="coding_agent",
+        description="5-stage Antigravity agy harness workflow with Gemini 4 Neon planning/review and independent checks.",
+        edges=[("START", agy_harness_workflow)],
+    )
+```
 
 </details>
+
+Compare anytime against [`solution/coding_agent/architectures.py`](../solution/coding_agent/architectures.py).
 
 **Check it works:** Re-run `make test-agy-harness` (all 4/4 checks pass), then switch architectures in `adk web`:
 ```bash
@@ -428,10 +1049,11 @@ Confirm zero `[FAIL]` lines (`WARN: agents-cli not found on PATH` is benign if y
 <details>
 <summary><code>agy</code> CLI Install, Flags &amp; Execution Modes</summary>
 
-Install the static Go `agy` binary locally (download, execute, delete):
+Install the static Go `agy` binary locally (download, review `/tmp/agy_install.sh`, execute, and delete):
 ```bash
-curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy_install.sh \
-  && bash /tmp/agy_install.sh && rm -f /tmp/agy_install.sh
+curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy_install.sh
+less /tmp/agy_install.sh   # inspect before running
+bash /tmp/agy_install.sh && rm -f /tmp/agy_install.sh
 AGY_ADC_AUTH=true agy models
 ```
 

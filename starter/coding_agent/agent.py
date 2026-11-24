@@ -159,12 +159,11 @@ def _assemble_runtime_components(
     code_executor: Any | None = None
 
     if cfg.sandbox_mode == "local":
-        workspace_path = cfg.local_workspace_path
-        # TODO(lab-1): Call ``build_local_environment_toolset(workspace_path, cfg.max_output_chars)``
-        # and append the resulting ``EnvironmentToolset`` to ``tools``.
+        # TODO(lab-1): Call ``build_local_environment_toolset(workspace_dir=cfg.local_workspace_path,
+        # max_output_chars=cfg.max_output_chars)`` and append the resulting ``EnvironmentToolset`` to ``tools``.
         try:
             local_toolset = build_local_environment_toolset(
-                workspace_dir=workspace_path,
+                workspace_dir=cfg.local_workspace_path,
                 max_output_chars=cfg.max_output_chars,
             )
             active_environment = getattr(local_toolset, "_environment", None)

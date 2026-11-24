@@ -1,10 +1,14 @@
-# GKE Agent Sandbox Reference Overlay — SandboxWarmPool (Starter Track)
+# Module 8 Architecture Guide — Read-Only GKE Agent Sandbox Reference Manifest (SandboxWarmPool)
+#
+# Ready-to-inspect complete reference manifest for the Module 8 Architecture Guide
+# (`workshop/08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md`). No coding exercises and no
+# live GKE cluster are required during this workshop.
 #
 # Pre-warms gVisor Sandbox Pods from `coding-sandbox-template` so incoming
 # `SandboxClaim` requests bind to an initialized Pod in < 1 second instead of
 # waiting on cold Pod scheduling and container startup.
 #
-# Verified operational checks:
+# Verified operational checks (if later applied to your own GKE cluster):
 # 1. Wait for warm-pool readiness before issuing claims (claiming early falls
 #    back to cold Sandbox creation; Autopilot node scale-up may take minutes):
 #      kubectl wait sandboxwarmpool coding-sandbox-warmpool \
@@ -30,9 +34,7 @@ metadata:
     app: coding-sandbox-warmpool
     app.kubernetes.io/part-of: gemini-coding-agent-workshop
 spec:
-  # TODO(lab-8): Increase `replicas` (e.g., to 2) to maintain pre-warmed gVisor
-  # Pods for <1s SandboxClaim assignment, and verify `sandboxTemplateRef.name`
-  # matches `starter/gke_reference/sandbox_template.yaml`.
-  replicas: 1
+  replicas: 2
   sandboxTemplateRef:
+    # Must match `metadata.name` of the `SandboxTemplate` in the same namespace.
     name: coding-sandbox-template

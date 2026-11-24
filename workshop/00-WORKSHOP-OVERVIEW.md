@@ -32,9 +32,8 @@ You do all your hands-on coding inside [`starter/`](../starter/). Repetitive boi
 | **Lab 4** | [`coding_agent/tools/registry_loader.py`](../starter/coding_agent/tools/registry_loader.py), [`coding_agent/agent.py`](../starter/coding_agent/agent.py) | `GCPSkillRegistry` + `SkillToolset`, `AgentRegistry` A2A/MCP discovery, and wiring into the agent |
 | **Lab 5** | [`main.py`](../starter/main.py), [`terraform/main.tf`](../starter/terraform/main.tf) | FastAPI Agent Runtime HTTP adapter (`GET /`, `/api/reasoning_engine`, `/api/stream_reasoning_engine`) and Terraform runtime + IAM |
 | **Lab 6** | [`eval/run_offline_eval.py`](../starter/eval/run_offline_eval.py), [`eval/run_simulated_eval.py`](../starter/eval/run_simulated_eval.py), [`eval/setup_online_monitor.py`](../starter/eval/setup_online_monitor.py), [`eval/setup_quality_alerts.py`](../starter/eval/setup_quality_alerts.py), [`eval/optimize_prompt.py`](../starter/eval/optimize_prompt.py) | Split single/multi-turn offline eval, 2-step user simulator, online monitor check, Cloud Monitoring quality alerts, and prompt/skill tuning |
-| **Lab 8** | [`gke_reference/gke_agent_example.py`](../starter/gke_reference/gke_agent_example.py), [`gke_reference/sandbox_template.yaml`](../starter/gke_reference/sandbox_template.yaml), [`gke_reference/sandbox_warmpool.yaml`](../starter/gke_reference/sandbox_warmpool.yaml), [`gke_reference/rbac.yaml`](../starter/gke_reference/rbac.yaml) | Self-hosted GKE Agent Sandbox manifests, RBAC, and Python client reference |
 
-*Lab 7 has zero `starter/` TODOs (it uses CLI commands, policy checks, and Terraform diffs).*
+Lab 7 has zero `starter/` TODOs (CLI commands, policy checks, and Terraform review), and Module 8 is a read-only Architecture Information Guide (no coding lab, no live cluster).
 
 ### Pre-Built Files (No Edits Needed)
 
@@ -53,9 +52,11 @@ starter/
 │   ├── SKILL.md, references/owasp-checklist.md
 ├── terraform/                               # Supporting TF files alongside editable main.tf
 │   ├── versions.tf, variables.tf, outputs.tf, terraform.tfvars.example
-└── eval/                                    # Lab 6 configs and split JSON/JSONL datasets
-    ├── eval_config.yaml, sampler_config.json
-    └── datasets/coding_agent_{eval.jsonl,single_turn.json,multi_turn.json}
+├── eval/                                    # Lab 6 configs and split JSON/JSONL datasets
+│   ├── eval_config.yaml, sampler_config.json
+│   └── datasets/coding_agent_{eval.jsonl,single_turn.json,multi_turn.json}
+└── gke_reference/                           # Module 8 read-only GKE Agent Sandbox reference manifests (no edits needed)
+    ├── rbac.yaml, sandbox_template.yaml, sandbox_warmpool.yaml, gke_agent_example.py
 ```
 
 If you fall behind on any lab, run `make fast-forward LAB=N` from the repo root. It copies only Lab `N`'s completed functions from `solution/` into `starter/` without touching later labs' TODO markers (see [Hard Cutover Checkpoints](FACILITATOR-GUIDE.md#hard-cutover-checkpoints)).
@@ -69,14 +70,14 @@ If you fall behind on any lab, run `make fast-forward LAB=N` from the repo root.
 | **Lab 0** | Overview, starter map, GCP APIs, service agents, pre-flight | 20 min | 10 min |
 | **[Lab 1](01-LAB-SETUP-AND-BUILD-ADK.md)** | **Part A (Core):** Gemini 4 + `LlmAgent` + `LocalEnvironment`. **Part B (Optional):** Collaborative, Graph, Dynamic, `agy_harness` | 60 min (30m A + 30m B) | 35 min (Part A + 5m overview) |
 | **[Lab 2](02-LAB-CUSTOM-SANDBOX-BYOC.md)** | Backing instance, BYOC sandbox image, Bangkok Cloud Build, Singapore sandbox lifecycle & execution | 60 min | 40 min |
-| *Break* | *Morning coffee break* | *10 min* | *10 min* |
+| Break | Morning coffee break | 10 min | 10 min |
 | **[Lab 3](03-LAB-SESSIONS-MEMORY-FEEDBACK.md)** | Managed Sessions, Memory Bank, Feedback API, OTel traces & parent sandbox logs | 40 min | 15 min (live demo) |
 | **[Lab 4](04-LAB-SKILLS-AND-AGENT-REGISTRY.md)** | Skill Registry 16-check packaging, `GCPSkillRegistry` + `SkillToolset`, Bangkok `AgentRegistry` | 40 min | 30 min |
-| *Break* | *Lunch break (Full-Day only)* | *40 min* | *-* |
+| Break | Lunch break (Full-Day only) | 40 min | - |
 | **[Lab 5](05-LAB-DEPLOY-RUNTIME-TERRAFORM.md)** | Build and deploy complete agent once via Bangkok Cloud Build + Singapore Terraform / `agents-cli` | 45 min | 30 min |
 | **[Lab 6](06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md)** | Offline & simulated eval (`global`), loss clustering, online monitors, alerts, prompt/skill tuning | 40 min | 15 min (live demo) |
-| **[Lab 7](07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md)** | **Optional:** Blocking skill scans, NLC Semantic Governance, Model Armor, SPIFFE, CMEK/VPC-SC, WORM/SIEM/SCC | 35 min (optional) | *Skipped* |
-| **[Lab 8](08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md)** | Agent Runtime vs. self-hosted GKE (`asia-southeast3`) decision matrix & manifests | 30 min | 25 min (Q&A) |
+| **[Lab 7](07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md)** | **Optional:** Blocking skill scans, NLC Semantic Governance, Model Armor, SPIFFE, CMEK/VPC-SC, WORM/SIEM/SCC | 35 min (optional) | Skipped |
+| **[Architecture Guide (08)](08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md)** | **Read-Only Briefing (no coding lab, no live cluster):** Agent Runtime vs. self-hosted GKE (`asia-southeast3`) decision guide & reference manifests | 30 min | 25 min (Q&A) |
 
 > [!TIP]
 > **Two ways to work through the TODOs:** Edit the `# TODO(lab-N)` markers manually, or open the repo in **Antigravity** so all 6 `.agents/skills/` auto-load and pair-program through each lab. Mix both freely, and use `make verify-lab LAB=N` at the end of every lab.
@@ -95,12 +96,10 @@ gcloud auth application-default login
 gcloud components install alpha --quiet
 ```
 
-If `uv` is not installed yet (works without `python3-venv` or Docker):
+If `uv` is not installed yet (works without `python3-venv` or Docker), install it with your package manager (recommended) or follow the [official `uv` installation guide](https://docs.astral.sh/uv/getting-started/installation/):
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv_install.sh \
-  && sh /tmp/uv_install.sh \
-  && rm -f /tmp/uv_install.sh
+brew install uv   # macOS/Linux Homebrew; or: pipx install uv
 ```
 
 Optional local extras: run `uvx google-agents-cli setup` for `agents-cli` shortcuts, and install `agy` locally if you plan to run Lab 1 Part B live without `--dry-run`. Cloud Build bakes `/usr/local/bin/agy` into Lab 2 and Lab 5 containers automatically.
@@ -108,28 +107,16 @@ Optional local extras: run `uvx google-agents-cli setup` for `agents-cli` shortc
 ### Step 2: Configure `.env` and Shell Variables
 
 ```bash
-cp .env.example .env
+[ -f .env ] || cp .env.example .env
 # Edit .env and set GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_PROJECT_NUMBER
+# (keep the Bangkok-first regional defaults already populated in .env.example)
 
-export GOOGLE_CLOUD_PROJECT="YOUR_PROJECT_ID"
-export GOOGLE_CLOUD_PROJECT_NUMBER="$(gcloud projects describe "$GOOGLE_CLOUD_PROJECT" --format='value(projectNumber)')"
-export PRIMARY_REGION="asia-southeast3"
-export AR_LOCATION="asia-southeast3"
-export BUILD_LOCATION="asia-southeast3"
-export AGENT_REGISTRY_LOCATION="asia-southeast3"
-export GKE_LOCATION="asia-southeast3"
-export GOOGLE_CLOUD_LOCATION="asia-southeast1"
-export MODEL_NAME="gemini-4-hydrogen"
-export REASONING_MODEL_NAME="gemini-4-neon"
-export MODEL_LOCATION="global"
-export THINKING_LEVEL="MEDIUM"
-export SKILL_REGISTRY_LOCATION="us-central1"
-export EVAL_LOCATION="global"
-export AGENT_REGISTRY_SKILLS_LOCATION="global"
-
+set -a && source .env && set +a
 gcloud config set project "$GOOGLE_CLOUD_PROJECT"
 gcloud auth application-default set-quota-project "$GOOGLE_CLOUD_PROJECT"
 ```
+
+Verify `.env` exports the Bangkok-first defaults (`PRIMARY_REGION=asia-southeast3`, `AR_LOCATION=asia-southeast3`, `BUILD_LOCATION=asia-southeast3`, `AGENT_REGISTRY_LOCATION=asia-southeast3`, `GKE_LOCATION=asia-southeast3`, `GOOGLE_CLOUD_LOCATION=asia-southeast1`, `MODEL_NAME=gemini-4-hydrogen`, `REASONING_MODEL_NAME=gemini-4-neon`, `MODEL_LOCATION=global`, `THINKING_LEVEL=MEDIUM`, `SKILL_REGISTRY_LOCATION=us-central1`, `EVAL_LOCATION=global`, `AGENT_REGISTRY_SKILLS_LOCATION=global`).
 
 ### Step 3: Enable Required APIs & Provision Service Identities
 
@@ -166,7 +153,7 @@ Verify your user account holds `roles/aiplatform.admin` (or `roles/aiplatform.us
 
 ```bash
 make preflight        # Checks gcloud, ADC, APIs, uv, and regional vars (zero Docker needed)
-make install          # Runs `uv sync --dev` in starter/ and solution/ (or `make install-pip`)
+make install          # Fast default: syncs starter/ deps with uv (use `make install-all` for both, or `make install-pip`)
 make validate-skills  # Validates .agents/skills/
 ```
 
@@ -180,7 +167,7 @@ We default to **Bangkok (`asia-southeast3`)** wherever Google Cloud supports the
 
 | Scope | Region & Env Vars | Workshop Services | Practical Notes |
 |---|---|---|---|
-| **1. Default (Bangkok)** | `asia-southeast3`<br/>`PRIMARY_REGION`, `AR_LOCATION`, `BUILD_LOCATION`, `AGENT_REGISTRY_LOCATION`, `GKE_LOCATION` | Artifact Registry, Cloud Build, Secret Manager, Agent Registry A2A/MCP discovery, Lab 8 GKE | Keeps builds, images, secrets, and GKE in Bangkok. One Bangkok Artifact Registry repo pulls directly into both Singapore Agent Runtime and Singapore BYOC Sandboxes. |
+| **1. Default (Bangkok)** | `asia-southeast3`<br/>`PRIMARY_REGION`, `AR_LOCATION`, `BUILD_LOCATION`, `AGENT_REGISTRY_LOCATION`, `GKE_LOCATION` | Artifact Registry, Cloud Build, Secret Manager, Agent Registry A2A/MCP discovery, GKE (Architecture Guide 08) | Keeps builds, images, secrets, and GKE in Bangkok. One Bangkok Artifact Registry repo pulls directly into both Singapore Agent Runtime and Singapore BYOC Sandboxes. |
 | **2. Fallback (Singapore)** | `asia-southeast1`<br/>`GOOGLE_CLOUD_LOCATION` | Agent Runtime, Managed Sandboxes, Managed Sessions, Memory Bank, Agent Gateway, optional `gemini-4-argon` | Nearest region where Agent Platform services are live. Both Memory Bank and Agent Gateway are supported here (unlike `asia-southeast2`). |
 | **3. Preview (`us-central1`)** | `us-central1`<br/>`SKILL_REGISTRY_LOCATION` | Vertex AI Skill Registry (`v1beta1`, Lab 4) | Preview is limited to `us-central1`, `europe-west4`, and `us-east5`. |
 | **4. Global (`global`)** | `global`<br/>`MODEL_LOCATION`, `EVAL_LOCATION`, `AGENT_REGISTRY_SKILLS_LOCATION` | Gemini 4 (`gemini-4-hydrogen`, `gemini-4-neon`), Gen AI Evaluation Service, `gcloud alpha agent-registry skills` | `gemini-4-hydrogen` and `gemini-4-neon` require `MODEL_LOCATION=global` (decoupled via ADK `Gemini(client_kwargs=...)`). `global` Eval also supports `generate_loss_clusters` in the same client. |
@@ -194,7 +181,7 @@ Running in the US or EMEA instead of APAC? Set all regional env vars to `us-cent
 ## Optional Reference Details
 
 <details>
-<summary>Express Mode vs. Standard GCP Project (Why Labs 2–8 need billing)</summary>
+<summary>Express Mode vs. Standard GCP Project (Why Labs 2–7 need billing)</summary>
 
 Do **not** use Express Mode (`GOOGLE_GENAI_API_KEY`) or AI Studio (`GEMINI_API_KEY`) after Lab 1. Unset both keys before starting Lab 2.
 
@@ -221,7 +208,7 @@ Open this repository root in Antigravity to auto-load all 6 skills below. Each d
 | [`agent-platform-runtime-and-state`](../.agents/skills/agent-platform-runtime-and-state/SKILL.md) | Labs 3 & 5: Managed Sessions, Memory Bank, Feedback, OTel telemetry, Terraform `google_vertex_ai_reasoning_engine` |
 | [`agent-platform-governance-and-registries`](../.agents/skills/agent-platform-governance-and-registries/SKILL.md) | Lab 4 & Lab 7: 16-check Skill Registry packaging, `GCPSkillRegistry`/`AgentRegistry`, blocking scans, NLC, SPIFFE |
 | [`agent-platform-optimize-and-eval`](../.agents/skills/agent-platform-optimize-and-eval/SKILL.md) | Lab 6: Offline/Simulated/Online Eval, loss clustering, `monitoring_v3` alerts, prompt & skill optimization |
-| [`agent-runtime-vs-gke-architecture`](../.agents/skills/agent-runtime-vs-gke-architecture/SKILL.md) | Lab 8: Agent Runtime vs. self-hosted GKE Agent Sandbox & Agent Substrate decision guide |
+| [`agent-runtime-vs-gke-architecture`](../.agents/skills/agent-runtime-vs-gke-architecture/SKILL.md) | Architecture Guide 08: Agent Runtime vs. self-hosted GKE Agent Sandbox & Agent Substrate decision guide |
 
 </details>
 

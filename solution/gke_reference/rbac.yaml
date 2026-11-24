@@ -1,4 +1,8 @@
-# GKE Agent Sandbox Reference Overlay — RBAC for ADK `GkeCodeExecutor` (Solution Track)
+# Module 8 Architecture Guide — Read-Only GKE Agent Sandbox Reference Manifest (RBAC — Solution Track)
+#
+# Ready-to-inspect complete reference manifest for the Module 8 Architecture Guide
+# (`workshop/08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md`), matching `starter/gke_reference/rbac.yaml`.
+# No coding exercises and no live GKE cluster are required during this workshop.
 #
 # Verified against:
 #   https://adk.dev/integrations/gke-code-executor/

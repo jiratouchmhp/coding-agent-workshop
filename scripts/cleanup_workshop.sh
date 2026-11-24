@@ -128,13 +128,33 @@ warn()    { printf "${C_YELLOW}[WARN]${C_RESET} %s\n" "$1"; }
 dry()     { printf "${C_CYAN}[DRY-RUN]${C_RESET} %s\n" "$1"; }
 section() { printf "\n${C_BLUE}=== %s ===${C_RESET}\n" "$1"; }
 
-# Load .env if present
+# Load .env if present WITHOUT clobbering non-empty caller-exported overrides
+CALLER_AR_REPO="${AR_REPO:-${AR_REPOSITORY:-}}"
 if [[ -f "${ENV_FILE}" ]]; then
   info "Loading configuration from ${ENV_FILE}"
+  _env_keys=()
+  _env_vals=()
+  while IFS= read -r _k; do
+    case "${_k}" in ''|[0-9]*|*[!A-Za-z0-9_]*) continue ;; esac
+    if [[ -n "${!_k:-}" ]]; then
+      _env_keys+=("${_k}")
+      _env_vals+=("${!_k}")
+    fi
+  done < <(compgen -e)
   set -a
   # shellcheck disable=SC1090
   source "${ENV_FILE}"
   set +a
+  if [[ "${#_env_keys[@]}" -gt 0 ]]; then
+    for _i in "${!_env_keys[@]}"; do
+      _k="${_env_keys[${_i}]}"
+      _v="${_env_vals[${_i}]}"
+      if [[ "${!_k:-}" != "${_v}" ]]; then
+        export "${_k}=${_v}"
+      fi
+    done
+  fi
+  unset _env_keys _env_vals _k _v _i
 else
   info "No ${ENV_FILE} found; using active shell environment and regional defaults."
 fi
@@ -153,7 +173,7 @@ fi
 PRIMARY_REG="${PRIMARY_REGION:-asia-southeast3}"
 AGENT_PLATFORM_LOC="${GOOGLE_CLOUD_LOCATION:-asia-southeast1}"
 AR_LOC="${AR_LOCATION:-${PRIMARY_REG}}"
-AR_REPO="${AR_REPOSITORY:-coding-agent-repo}"
+AR_REPO="${CALLER_AR_REPO:-${AR_REPO:-${AR_REPOSITORY:-coding-agent-repo}}}"
 AGENT_REG_LOC="${AGENT_REGISTRY_LOCATION:-${PRIMARY_REG}}"
 AGENT_REG_SKILLS_LOC="${AGENT_REGISTRY_SKILLS_LOCATION:-global}"
 SKILL_REG_LOC="${SKILL_REGISTRY_LOCATION:-us-central1}"
@@ -376,18 +396,28 @@ def _drain_stage(label: str, list_fn, delete_fn, max_attempts: int = 12, delay_s
             return True
 
         print(f"  [{label}] Pass {attempt}/{max_attempts}: deleting {len(items)} resource(s)...")
+        deleted_any = False
+        errored_any = False
+        not_found_count = 0
         for item in items:
             res_name = getattr(item, "name", "")
             if not res_name:
                 continue
             try:
                 delete_fn(res_name)
+                deleted_any = True
             except NotImplementedError as exc:
                 print(f"  [{label}] SandboxLifecycleManager delete not yet implemented ({exc}); skipping drain.", file=sys.stderr)
                 return False
             except Exception as exc:
-                if not _is_not_found(exc):
+                if _is_not_found(exc):
+                    not_found_count += 1
+                else:
+                    errored_any = True
                     print(f"    retrying delete {res_name} after error: {exc}", file=sys.stderr)
+        if not deleted_any and not errored_any and not_found_count > 0:
+            print(f"  [{label}] All {not_found_count} listed item(s) are already soft-deleted tombstones (404); continuing.")
+            return True
         time.sleep(delay_s)
 
     try:
@@ -616,6 +646,25 @@ AR_IMAGES=(
   "${AR_LOC}-docker.pkg.dev/${PROJECT_ID:-<project>}/${AR_REPO}/coding-sandbox"
   "${AR_LOC}-docker.pkg.dev/${PROJECT_ID:-<project>}/${AR_REPO}/coding-agent"
 )
+
+# Also include any custom SANDBOX_IMAGE_URI / AGENT_IMAGE_URI package targeting this project
+for custom_uri in "${SANDBOX_IMAGE_URI:-}" "${AGENT_IMAGE_URI:-}"; do
+  [[ -z "${custom_uri}" ]] && continue
+  pkg_path="${custom_uri%%@*}"
+  pkg_path="${pkg_path%%:*}"
+  if [[ -n "${PROJECT_ID}" && "${pkg_path}" == *-docker.pkg.dev/"${PROJECT_ID}"/* ]]; then
+    already_listed=0
+    for existing_img in "${AR_IMAGES[@]}"; do
+      if [[ "${existing_img}" == "${pkg_path}" ]]; then
+        already_listed=1
+        break
+      fi
+    done
+    if [[ "${already_listed}" -eq 0 ]]; then
+      AR_IMAGES+=("${pkg_path}")
+    fi
+  fi
+done
 
 if [[ "${DRY_RUN}" -eq 1 ]]; then
   for img in "${AR_IMAGES[@]}"; do

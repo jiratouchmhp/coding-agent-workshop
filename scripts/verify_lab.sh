@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Enterprise Coding Agent Workshop — Automated Lab Checkpoint Verifier (Labs 1-8)
+# Enterprise Coding Agent Workshop — Automated Lab Checkpoint Verifier (Labs 1-7 & Module 8)
 # =============================================================================
 # Usage:
 #   ./scripts/verify_lab.sh <1|2|3|4|5|6|7|8|all> [--track starter|solution]
 #   TRACK=solution ./scripts/verify_lab.sh all
 #   TRACK=solution ./scripts/verify_lab.sh 7
-#   TRACK=solution ./scripts/verify_lab.sh 8
+#   ./scripts/verify_lab.sh --track starter 8
+#   ./scripts/verify_lab.sh --track solution 8
 # =============================================================================
 
 set -euo pipefail
@@ -28,7 +29,7 @@ usage() {
   cat <<'EOF'
 Usage: ./scripts/verify_lab.sh <1|2|3|4|5|6|7|8|all> [--track starter|solution]
 
-Verify workshop checkpoints locally for Labs 1-8:
+Verify workshop checkpoints locally for Labs 1-7 and Module 8 Architecture Guide:
   1    Lab 1: Setup, Gemini 4 models, agy headless harness, .agents/skills/ & ADK LlmAgent + LocalEnvironment
   2    Lab 2: Non-root BYOC Sandbox Dockerfile (+ agy CLI & env allowlist), Lifecycle & BaseEnvironment execution
   3    Lab 3: Managed Sessions, Memory Bank, Prompt-Injection Sanitizer & Telemetry/Feedback
@@ -36,7 +37,7 @@ Verify workshop checkpoints locally for Labs 1-8:
   5    Lab 5: Agent Runtime BYOC Dockerfile/main.py/requirements.txt & Terraform IaC + IAM
   6    Lab 6: Split JSON Eval Datasets, Offline/Simulated Eval, Online Monitor, Alerts & Optimize
   7    Lab 7 (Optional): Enterprise Security & Governance Hardening checks
-  8    Lab 8: Self-Hosted GKE Agent Sandbox overlay (RBAC, VAP hardening, WarmPool)
+  8    Module 8: Architecture Guide Reference Manifests (Read-Only, No Live Cluster)
   all  Run checkpoints for core Labs 1-6
 
 Options:
@@ -174,15 +175,26 @@ has_todo_markers() {
 check_no_todo_markers() {
   local path="$1"
   local lab_tag="$2"
+  local context_hint="${3:-}"
   if [[ ! -f "${path}" ]]; then
     return 0
   fi
-  local count
-  count="$(grep -c "TODO(${lab_tag})" "${path}" || true)"
-  if [[ "${count}" -eq 0 ]]; then
+  local total_count comment_count suffix=""
+  total_count="$(grep -c "TODO(${lab_tag})" "${path}" || true)"
+  comment_count="$(grep -Ec "(^|[[:space:]])(#|//)[[:space:]]*TODO\(${lab_tag}\)" "${path}" || true)"
+  if [[ -n "${context_hint}" ]]; then
+    suffix=" [${context_hint}]"
+  fi
+  if [[ "${total_count}" -eq 0 ]]; then
     pass "Zero remaining TODO(${lab_tag}) markers in ${path}"
+  elif [[ "${comment_count}" -gt 0 ]]; then
+    if [[ "${context_hint}" == *"Part B"* ]]; then
+      fail "${path} still has ${comment_count} unfinished # TODO(${lab_tag}) checkpoint(s)${suffix} (expected if you only completed Part A; finish Part B, run 'make fast-forward LAB=1', or compare against solution/)."
+    else
+      fail "${path} still has ${comment_count} unfinished # TODO(${lab_tag}) checkpoint(s)${suffix} (complete them or compare against solution/)."
+    fi
   else
-    fail "${path} still has ${count} unfinished TODO(${lab_tag}) marker(s) (complete them or compare against solution/)."
+    fail "${path} still has ${total_count} unfinished TODO(${lab_tag}) stub reference(s)${suffix} (replace remaining NotImplementedError stubs or compare against solution/)."
   fi
 }
 
@@ -313,6 +325,42 @@ PYEOF
     fi
   fi
 
+  # Regression check: Makefile `push-sandbox` and `push-agent` must preserve
+  # caller-exported image URI / repo overrides (never clobbered by blank lines in .env)
+  # and accept both AR_REPO and AR_REPOSITORY (defaulting to coding-agent-repo).
+  if [[ -f "Makefile" ]]; then
+    if python3 - "Makefile" <<'PYEOF'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+for target, uri_var in (("push-sandbox", "SANDBOX_IMAGE_URI"), ("push-agent", "AGENT_IMAGE_URI")):
+    m = re.search(
+        rf"^{re.escape(target)}:[^\n]*\n((?:\t[^\n]*\n|[ \t]*\n)*)",
+        text,
+        flags=re.MULTILINE,
+    )
+    if not m:
+        sys.exit(1)
+    recipe = m.group(1)
+    if uri_var not in recipe:
+        sys.exit(1)
+    if "AR_REPO" not in recipe or "AR_REPOSITORY" not in recipe:
+        sys.exit(1)
+    if "coding-agent-repo" not in recipe:
+        sys.exit(1)
+    if "CALLER_IMG_URI" not in recipe or "CALLER_AR_REPO" not in recipe:
+        sys.exit(1)
+PYEOF
+    then
+      pass "Makefile push-sandbox and push-agent preserve caller URI/repo overrides and accept both AR_REPO and AR_REPOSITORY"
+    else
+      fail "Makefile push-sandbox and push-agent must preserve caller SANDBOX_IMAGE_URI/AGENT_IMAGE_URI overrides and accept both AR_REPO and AR_REPOSITORY"
+    fi
+  fi
+
   # Regression check: scripts/live_gcp_e2e_validate.sh must not invoke bare
   # `gcloud beta services identity create` (hangs invisibly if gcloud beta component is absent).
   if [[ -f "scripts/live_gcp_e2e_validate.sh" ]]; then
@@ -351,10 +399,10 @@ PYEOF
   check_py_compile "${TRACK}/coding_agent/agent.py"
   check_py_compile "${TRACK}/coding_agent/architectures.py"
   check_py_compile "${TRACK}/services.py"
-  check_no_todo_markers "${TRACK}/coding_agent/models.py" "lab-1"
-  check_no_todo_markers "${TRACK}/coding_agent/tools/agy_headless_harness.py" "lab-1"
-  check_no_todo_markers "${TRACK}/coding_agent/agent.py" "lab-1"
-  check_no_todo_markers "${TRACK}/coding_agent/architectures.py" "lab-1"
+  check_no_todo_markers "${TRACK}/coding_agent/models.py" "lab-1" "Lab 1 Part A core"
+  check_no_todo_markers "${TRACK}/coding_agent/tools/agy_headless_harness.py" "lab-1" "Lab 1 Part B stretch"
+  check_no_todo_markers "${TRACK}/coding_agent/agent.py" "lab-1" "Lab 1 Part A core"
+  check_no_todo_markers "${TRACK}/coding_agent/architectures.py" "lab-1" "Lab 1 Part B stretch"
 
   check_pattern "${TRACK}/coding_agent/config.py" "gemini-4-hydrogen" "config.py defaults MODEL_NAME to gemini-4-hydrogen"
   check_pattern "${TRACK}/coding_agent/config.py" "gemini-4-neon" "config.py defaults REASONING_MODEL_NAME to gemini-4-neon"
@@ -443,7 +491,7 @@ PYEOF
         fail "agy_headless_harness.py --dry-run failed (${agy_mod})"
       fi
     else
-      warn "Skipping agy_headless_harness.py --dry-run until TODO(lab-1) markers are resolved."
+      warn "Skipping agy_headless_harness.py --dry-run until Lab 1 Part B TODO(lab-1) checkpoints are resolved."
     fi
   fi
 
@@ -644,9 +692,9 @@ PYEOF
   fi
 
   if command -v agents-cli >/dev/null 2>&1; then
-    pass "agents-cli found on PATH ($(command -v agents-cli)) — optional for Labs 1-8"
+    pass "agents-cli found on PATH ($(command -v agents-cli)) — optional for Labs 1-7"
   else
-    warn "agents-cli not found on PATH (optional for Labs 1-8; install anytime with: uvx google-agents-cli setup)"
+    warn "agents-cli not found on PATH (optional for Labs 1-7; install anytime with: uvx google-agents-cli setup)"
   fi
 }
 
@@ -2047,10 +2095,10 @@ verify_lab_7() {
 }
 
 # -----------------------------------------------------------------------------
-# Lab 8: Self-Hosted GKE Agent Sandbox Reference Overlay & Architecture Capstone
+# Module 8: Architecture Guide Reference Manifests (Read-Only, No Live Cluster)
 # -----------------------------------------------------------------------------
 verify_lab_8() {
-  section "Lab 8 Verification (${TRACK}/ — GKE Reference & Architecture Capstone)"
+  section "Module 8 Verification (${TRACK}/ — Architecture Guide Reference Manifests (Read-Only, No Live Cluster))"
   local gke_dir="${TRACK}/gke_reference"
   local rbac="${gke_dir}/rbac.yaml"
   local tpl="${gke_dir}/sandbox_template.yaml"
@@ -2220,8 +2268,14 @@ printf "========================================================================
 
 if [[ "${FAIL_COUNT}" -gt 0 ]]; then
   if [[ "${TRACK}" == "starter" ]]; then
-    printf "Tip: Complete the remaining # TODO(lab-N) markers or compare against solution/.\n"
-    printf "     To verify the reference solution directly: TRACK=solution ./scripts/verify_lab.sh %s\n" "${TARGET}"
+    if [[ "${TARGET}" == "7" ]]; then
+      printf "Tip: Review Optional Lab 7 guidance in workshop/07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md.\n"
+    elif [[ "${TARGET}" == "8" ]]; then
+      printf "Tip: Module 8 manifests in starter/gke_reference/ are read-only reference files; restore from solution/gke_reference/ with 'make fast-forward LAB=8'.\n"
+    else
+      printf "Tip: Complete the remaining # TODO(lab-N) checkpoints, run 'make fast-forward LAB=%s', or compare against solution/.\n" "${TARGET}"
+    fi
+    printf "     To verify the reference solution directly: make TRACK=solution verify-lab LAB=%s\n" "${TARGET}"
   fi
   exit 1
 fi

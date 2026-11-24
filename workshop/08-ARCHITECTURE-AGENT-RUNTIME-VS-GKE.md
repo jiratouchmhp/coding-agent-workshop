@@ -1,314 +1,28 @@
-# Lab 8: Agent Runtime vs. Self-Hosted GKE
+# Architecture Guide: Agent Runtime vs. Self-Hosted GKE
 
-In this final lab, you'll complete a self-hosted GKE Agent Sandbox overlay (verified completely offline with no live cluster) and map out when to stay on managed Agent Runtime vs. move to GKE or a hybrid setup. If you're only here for the architecture briefing, jump straight to [Choosing Your Deployment Architecture](#choosing-your-deployment-architecture).
+This is a **read-only architecture briefing** (no coding lab, no `# TODO` homework, and no live GKE cluster required). Use it to decide when to keep your coding agent on managed **Vertex AI Agent Runtime + Managed Sandboxes**, when to self-host on **GKE (`asia-southeast3` or any GKE region)**, and when a hybrid topology makes the most sense.
 
-**Duration:** 30 min (Full-Day Track) | 25 min (Half-Day Architecture Briefing)  
+**Duration:** 30 min (Full-Day Track) | 25 min (Half-Day Architecture Briefing & Q&A)  
 **Navigation:** [Lab 6: Optimize, Evaluate & Alert](./06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md) · [Lab 7 (Optional): Security & Governance](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md) · [Workshop Overview](./00-WORKSHOP-OVERVIEW.md) · [Facilitator Guide](./FACILITATOR-GUIDE.md)
 
-## Files You Will Edit (Optional GKE Hands-On — No Live Cluster Required)
-
-| Step | File | Where to edit | What you're adding |
-|---|---|---|---|
-| 1 | [`starter/gke_reference/rbac.yaml`](../starter/gke_reference/rbac.yaml) | `Role.rules` (`# TODO(lab-8)`) | Second RBAC rule for core API group `agents.x-k8s.io` (`sandboxes`) |
-| 2 | [`starter/gke_reference/sandbox_template.yaml`](../starter/gke_reference/sandbox_template.yaml) | `spec.podTemplate.spec` & `resources` (`# TODO(lab-8)`) | `secure-sandbox-policy` VAP hardening and explicit CPU/memory `limits` |
-| 3 | [`starter/gke_reference/sandbox_warmpool.yaml`](../starter/gke_reference/sandbox_warmpool.yaml) | `spec.replicas` (`# TODO(lab-8)`) | Set `replicas: 2` for `< 1s` warm-pool claims |
-| 4 | [`starter/gke_reference/gke_agent_example.py`](../starter/gke_reference/gke_agent_example.py) | `build_gke_code_executor()`, `build_gke_coding_agent()`, `run_warmpool_sdk_smoke_test()` (`# TODO(lab-8)`) | Wire ADK `GkeCodeExecutor`, Gemini 4 `LlmAgent`, and `k8s-agent-sandbox` warm-pool SDK |
-
-**Already built for you (no edits needed):** `GkeSandboxSettings`, `run_direct_sandbox_execution()`, and the CLI `--mode` runner in `gke_agent_example.py`, plus the `ServiceAccount`, `RoleBinding`, `extensions.agents.x-k8s.io` RBAC rules, and base gVisor `SandboxTemplate` scaffolding.
-
-**Fell behind or want AI help?** Use [`.agents/skills/agent-runtime-vs-gke-architecture/SKILL.md`](../.agents/skills/agent-runtime-vs-gke-architecture/SKILL.md) in Antigravity, or run `make fast-forward LAB=8` to sync all four files from [`solution/gke_reference/`](../solution/gke_reference/).
-
 ---
 
-## Step 1: Add the Core Agent Sandbox RBAC Rule
+## Four Deployment Options
 
-**File:** [`starter/gke_reference/rbac.yaml`](../starter/gke_reference/rbac.yaml) (`Role` -> `rules`, `# TODO(lab-8)`)
+Before taking a coding agent to production, pick among four topologies based on residency rules, hardware needs, scale, and day-2 operations capacity:
 
-Kubernetes SIG Apps `agent-sandbox` (`v1.0.6`, `v1beta1`) splits its CRDs across two API groups: `extensions.agents.x-k8s.io` for `sandboxclaims`, `sandboxtemplates`, and `sandboxwarmpools`, and `agents.x-k8s.io` for `sandboxes`. The starter manifest already grants the `extensions.agents.x-k8s.io` rules, so you need to add the second rule for `agents.x-k8s.io` so ADK `GkeCodeExecutor(executor_type="sandbox")` can watch and clean up underlying `Sandbox` objects.
-
-- Uncomment and finish the `# TODO(lab-8)` rule under `Role.rules` with `apiGroups: [agents.x-k8s.io]`, `resources: [sandboxes]`, and `verbs: [create, get, list, watch, delete]`.
-- Delete the `# TODO(lab-8)` comment when done.
-- Remember for live deploys: `adk deploy gke` defaults to the `default/default` KSA, which returns `403 PERMISSION_DENIED` on Vertex AI calls until bound via Workload Identity Federation (WIF) to `roles/aiplatform.user`. Prefer this dedicated `coding-agent-orchestrator-sa` in production.
-
-<details>
-<summary>Stuck? Peek at the code</summary>
-
-```yaml
-  # Core Agent Sandbox CRD (`agents.x-k8s.io/v1beta1`):
-  # Required alongside `sandboxclaims` so `GkeCodeExecutor(executor_type="sandbox")`
-  # can inspect readiness and clean up underlying `Sandbox` resources.
-  - apiGroups:
-      - agents.x-k8s.io
-    resources:
-      - sandboxes
-    verbs:
-      - create
-      - get
-      - list
-      - watch
-      - delete
-```
-
-</details>
-
-**Check it works:**
-
-```bash
-grep -A9 "agents.x-k8s.io" starter/gke_reference/rbac.yaml
-```
-
-You should see rules for both `extensions.agents.x-k8s.io` and `agents.x-k8s.io`, with zero `TODO(lab-8)` lines remaining.
-
----
-
-## Step 2: Harden the SandboxTemplate for VAP Compliance
-
-**File:** [`starter/gke_reference/sandbox_template.yaml`](../starter/gke_reference/sandbox_template.yaml) (`spec.podTemplate.spec` and `containers[0].resources`, two `# TODO(lab-8)` markers)
-
-GKE Agent Sandbox ships an optional `secure-sandbox-policy` ValidatingAdmissionPolicy (VAP) that rejects insecure sandbox pods at admission time. You'll add the pod and container hardening fields VAP requires. Using a `SandboxTemplate` (instead of a bare `Sandbox`) also tells the controller to create a managed `NetworkPolicy` automatically, allowing ingress only from `app: sandbox-router` and blocking RFC 1918, CoreDNS, and `169.254.0.0/16` metadata egress.
-
-- Under `spec.podTemplate.spec` (right below `runtimeClassName: gvisor`), add `automountServiceAccountToken: false` and a pod-level `securityContext` with `runAsNonRoot: true` and `runAsUser: 1000`.
-- Under the `python-runtime` container, add `resources.limits` (`cpu: "500m"`, `memory: "1Gi"`) and a container-level `securityContext` with `allowPrivilegeEscalation: false` and `capabilities.drop: [ALL]`.
-- Production namespace note: this workshop keeps manifests in `agent-sandbox-system` for compact demos, but `secure-sandbox-policy` skips controller system namespaces by default. Deploy templates into a dedicated workload namespace like `coding-sandboxes` in production.
-
-<details>
-<summary>Stuck? Peek at the code</summary>
-
-```yaml
-    spec:
-      runtimeClassName: gvisor
-      automountServiceAccountToken: false
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-      nodeSelector:
-        sandbox.gke.io/runtime: gvisor
-      tolerations:
-        - key: "sandbox.gke.io/runtime"
-          value: "gvisor"
-          effect: "NoSchedule"
-      containers:
-        - name: python-runtime
-          image: registry.k8s.io/agent-sandbox/python-runtime-sandbox:v0.1.0
-          ports:
-            - containerPort: 8888
-          readinessProbe:
-            httpGet:
-              path: "/"
-              port: 8888
-            initialDelaySeconds: 0
-            periodSeconds: 1
-          resources:
-            requests:
-              cpu: "250m"
-              memory: "512Mi"
-            limits:
-              cpu: "500m"
-              memory: "1Gi"
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-                - ALL
-      restartPolicy: OnFailure
-```
-
-</details>
-
-**Check it works:**
-
-```bash
-python3 - << 'EOF'
-import yaml
-spec = yaml.safe_load(open("starter/gke_reference/sandbox_template.yaml"))["spec"]["podTemplate"]["spec"]
-c0 = spec["containers"][0]
-print(spec["runtimeClassName"], spec["automountServiceAccountToken"], spec["securityContext"], c0["resources"]["limits"], c0["securityContext"])
-EOF
-```
-
-Expected output prints `gvisor False {'runAsNonRoot': True, 'runAsUser': 1000} {'cpu': '500m', 'memory': '1Gi'} {'allowPrivilegeEscalation': False, 'capabilities': {'drop': ['ALL']}}`.
-
----
-
-## Step 3: Scale the SandboxWarmPool to 2 Replicas
-
-**File:** [`starter/gke_reference/sandbox_warmpool.yaml`](../starter/gke_reference/sandbox_warmpool.yaml) (`spec.replicas`, `# TODO(lab-8)`)
-
-Cold sandbox pods take seconds to schedule (or minutes if Autopilot has to scale up a node). A `SandboxWarmPool` keeps initialized gVisor pods waiting so incoming `SandboxClaim` requests bind in under a second.
-
-- Update `spec.replicas` from `1` to `2`, verify `sandboxTemplateRef.name` is `coding-sandbox-template`, and remove the `# TODO(lab-8)` comment.
-- Keep two operational details in mind on live clusters: claiming before warm-pool replicas are `Ready` falls back to cold pod creation, and every pod in a single warm pool shares the same KSA/WIF identity bound at pod creation (split tenants across separate warm pools if needed). Inspect `metadata.ownerReferences[*].kind` on `Sandbox` objects to tell idle (`SandboxWarmPool`) from claimed (`SandboxClaim`) pods.
-
-<details>
-<summary>Stuck? Peek at the code</summary>
-
-```yaml
-spec:
-  replicas: 2
-  sandboxTemplateRef:
-    # Must match `metadata.name` of the `SandboxTemplate` in the same namespace.
-    name: coding-sandbox-template
-```
-
-</details>
-
-**Check it works:**
-
-```bash
-grep -A3 "^spec:" starter/gke_reference/sandbox_warmpool.yaml
-```
-
-Expected output shows `replicas: 2` and `name: coding-sandbox-template`.
-
----
-
-## Step 4: Wire `GkeCodeExecutor`, Gemini 4 `LlmAgent`, and the WarmPool SDK
-
-**File:** [`starter/gke_reference/gke_agent_example.py`](../starter/gke_reference/gke_agent_example.py) (`build_gke_code_executor()`, `build_gke_coding_agent()`, `run_warmpool_sdk_smoke_test()`, three `# TODO(lab-8)` blocks)
-
-This script swaps Lab 2's managed `AgentEngineSandboxCodeExecutor` for ADK's `GkeCodeExecutor` and also shows how to claim a warm-pool pod directly with the standalone `k8s-agent-sandbox==1.0.6` Python SDK.
-
-- **`build_gke_code_executor(settings)`:** Import `GkeCodeExecutor` from `google.adk.code_executors` and instantiate it with `namespace=settings.namespace`, `executor_type="sandbox"`, `sandbox_template=settings.sandbox_template`, plus optional `sandbox_gateway_name`, `kubeconfig_path`, and `kubeconfig_context` when truthy.
-- **`build_gke_coding_agent(settings)`:** Add `import inspect` (at the top of the file or inside the function), check `inspect.signature(genai.Client.__init__).parameters` to pick `"enterprise"` vs. `"vertexai"`, pass `client_kwargs` into `Gemini(model=settings.model_name, ...)` so `gemini-4-hydrogen` routes to `settings.model_location` (`global` by default, or `gemini-4-argon` on `asia-southeast1`), and return `LlmAgent(name="gke_sandbox_coding_agent", model=gemini_model, instruction=GKE_SYSTEM_INSTRUCTION, code_executor=build_gke_code_executor(settings))`.
-- **`run_warmpool_sdk_smoke_test(settings, command)`:** Create `SandboxClient(connection_config=SandboxLocalTunnelConnectionConfig(), cleanup=True)`, call `client.create_sandbox(warmpool=settings.warmpool, namespace=settings.namespace)`, run `sandbox.commands.run(command)`, and return `str(result.stdout)`.
-
-> [!WARNING]
-> **SDK Version Skew (`google-adk==2.15.0` vs. `k8s-agent-sandbox==1.0.6`):** In `google-adk==2.15.0`, `GkeCodeExecutor._execute_in_sandbox()` still calls the pre-1.0 `k8s-agent-sandbox` context-manager API (`with SandboxClient(template_name=...) as sandbox:`), which breaks if `k8s-agent-sandbox==1.0.6` is installed in the same virtualenv. Keep ADK `GkeCodeExecutor` and standalone `k8s-agent-sandbox==1.0.6` in separate virtual environments until ADK migrates to v1.x.
-
-<details>
-<summary>Stuck? Peek at the code</summary>
-
-```python
-# Add `import inspect` to the top-level imports alongside `import argparse`.
-
-def build_gke_code_executor(settings: GkeSandboxSettings) -> Any:
-    try:
-        from google.adk.code_executors import GkeCodeExecutor
-    except ImportError as exc:
-        raise ImportError(
-            "ADK GKE Code Executor requires `pip install \"google-adk[extensions]\"`."
-        ) from exc
-
-    kwargs: dict[str, Any] = {
-        "namespace": settings.namespace,
-        "executor_type": "sandbox",
-        "sandbox_template": settings.sandbox_template,
-    }
-    if settings.sandbox_gateway_name:
-        kwargs["sandbox_gateway_name"] = settings.sandbox_gateway_name
-    if settings.kubeconfig_path:
-        kwargs["kubeconfig_path"] = settings.kubeconfig_path
-    if settings.kubeconfig_context:
-        kwargs["kubeconfig_context"] = settings.kubeconfig_context
-
-    return GkeCodeExecutor(**kwargs)
-
-
-def build_gke_coding_agent(settings: GkeSandboxSettings) -> Any:
-    try:
-        from google import genai
-        from google.adk.agents import LlmAgent
-        from google.adk.models import Gemini
-    except ImportError as exc:
-        raise ImportError(
-            "ADK LlmAgent requires `pip install \"google-adk[extensions]\"`."
-        ) from exc
-
-    try:
-        params = inspect.signature(genai.Client.__init__).parameters
-    except (TypeError, ValueError):
-        params = {}
-    auth_key = "enterprise" if "enterprise" in params else "vertexai"
-
-    client_kwargs: dict[str, Any] = {
-        auth_key: True,
-        "location": settings.model_location,
-    }
-    project = (
-        settings.google_cloud_project
-        or os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
-        or None
-    )
-    if project:
-        client_kwargs["project"] = project
-
-    gemini_kwargs: dict[str, Any] = {"model": settings.model_name}
-    model_fields = getattr(Gemini, "model_fields", None)
-    if model_fields is None or "client_kwargs" in model_fields:
-        gemini_kwargs["client_kwargs"] = client_kwargs
-    gemini_model = Gemini(**gemini_kwargs)
-
-    executor = build_gke_code_executor(settings)
-    return LlmAgent(
-        name="gke_sandbox_coding_agent",
-        model=gemini_model,
-        instruction=GKE_SYSTEM_INSTRUCTION,
-        code_executor=executor,
-    )
-
-
-def run_warmpool_sdk_smoke_test(
-    settings: GkeSandboxSettings,
-    command: str = "echo 'Hello from GKE Agent Sandbox WarmPool!'",
-) -> str:
-    try:
-        from k8s_agent_sandbox import SandboxClient
-        from k8s_agent_sandbox.models import SandboxLocalTunnelConnectionConfig
-    except ImportError as exc:
-        raise ImportError(
-            "Standalone GKE Sandbox client requires `pip install k8s-agent-sandbox==1.0.6`."
-        ) from exc
-
-    client = SandboxClient(
-        connection_config=SandboxLocalTunnelConnectionConfig(),
-        cleanup=True,
-    )
-    sandbox = client.create_sandbox(
-        warmpool=settings.warmpool,
-        namespace=settings.namespace,
-    )
-    result = sandbox.commands.run(command)
-    return str(result.stdout)
-```
-
-</details>
-
-**Check it works:**
-
-```bash
-python3 starter/gke_reference/gke_agent_example.py --mode inspect
-```
-
-Expected output prints JSON containing `"namespace": "agent-sandbox-system"`, `"sandbox_template": "coding-sandbox-template"`, `"warmpool": "coding-sandbox-warmpool"`, `"model_name": "gemini-4-hydrogen"`, and `"model_location": "global"`.
-
----
-
-## Step 5: Lab 8 Checkpoint
-
-Run the offline verifier from the repository root (zero live GKE cluster required):
-
-```bash
-make verify-lab LAB=8
-# Or verify the reference solution manifests directly:
-make verify-lab LAB=8 TRACK=solution
-```
-
-Expected output: `PASS=12 | FAIL=0 | WARN=0` across Python syntax, zero `TODO(lab-8)` markers, `gemini-4-hydrogen` default, dual API-group RBAC, `secure-sandbox-policy` VAP pod hardening, warm-pool template matching, and `--mode inspect`.
-
----
-
-## Choosing Your Deployment Architecture
-
-Before taking a coding agent to production, pick among four deployment topologies based on your residency, hardware, scale, and ops capacity:
-
-1. **Option A: Agent Runtime + Managed BYOC Sandbox (Recommended Default):** Serverless `ReasoningEngine` containers plus Google-managed gVisor sandboxes. You get zero cluster or CRD upgrades, native SPIFFE Agent Identity (24h X.509 mTLS), Google-managed Agent Gateway, Semantic Governance, 3LO Auth Manager, Managed Sessions/Memory Bank, and `publish gemini`. Hard limits: CPU-only (no GPUs/TPUs), gVisor only (no microVMs), 7-day BYOC / 14-day Code Exec TTLs, up to 2-minute cold sandbox starts, no built-in FQDN allowlist on Scale Sandboxes (needs PSC-I + Cloud NGFW/SWP), no auto-collected sandbox stdout/stderr, and default regional quotas (`90 QPM`, `10 Bidi/min`, `950` non-adjustable revisions/agent).
-2. **Option B: Self-Hosted GKE + GKE Agent Sandbox (`kubernetes-sigs/agent-sandbox` `v1.0.6`):** Your ADK agent runs on GKE and claims one dedicated Kubernetes Pod per sandbox (`v1beta1` CRDs). Gives you strict in-country compute residency in any GKE region, full `PodSpec` control, `< 1s` warm-pool claims, gVisor or Cloud Hypervisor microVMs (or self-managed Kata without a Google SLA), GPUs/TPUs (gVisor only), GKE Pod Snapshots (`>= 1.35.3-gke.1234000`), Hyperdisk/Filestore volumes, and no Agent Platform QPM or revision caps. Trade-offs: you own cluster/controller upgrades, `sandbox-router` HA, VAP/WIF/NetworkPolicy config, and Dataplane V2 limits.
-3. **Option C: Self-Hosted GKE + GKE Agent Substrate (`agent-substrate/substrate`):** Built for high-density intermittent CPU agents. Multiplexes many lightweight Actor sessions onto shared pre-warmed Worker Pods (`WorkerPool`) using a control plane outside `kube-apiserver` and `etcd`. Scales to millions of suspended actors with `< 1s` 3-layer GCS checkpoint restore, `< 100 ms` Filestore agent volume re-attach, and out-of-sandbox Envoy credential injection. Trade-offs: GKE Standard `>= 1.37` only (no Autopilot or Extended release channel), x86 CPU only (min `c3-standard-4`, no E2, no Arm, no GPUs/TPUs), 5 Linux kernel sysctls above ~800 sandboxes/node, and highest Day-2 ops ownership.
-4. **Option D: Hybrid Topologies and Progressive Graduation (`agents-cli`):** Mix managed control-plane services with self-hosted compute without rewriting your ADK code:
+1. **Option A: Agent Runtime + Managed BYOC Sandbox (Default Choice):** Serverless `ReasoningEngine` containers paired with Google-managed gVisor sandboxes. You get zero cluster or CRD upgrades, native SPIFFE Agent Identity (24h X.509 mTLS), Google-managed Agent Gateway, Semantic Governance, 3LO Auth Manager, Managed Sessions and Memory Bank, and `publish gemini`. Hard limits: CPU-only (no GPUs or TPUs), gVisor only (no microVMs), 7-day BYOC / 14-day Code Exec TTLs, up to 2-minute cold sandbox starts, no built-in FQDN allowlist on Scale Sandboxes (needs PSC-I + Cloud NGFW or SWP), no auto-collected sandbox stdout/stderr, and default regional quotas (`90 QPM`, `10 Bidi/min`, `950` non-adjustable revisions/agent).
+2. **Option B: Self-Hosted GKE + GKE Agent Sandbox (`kubernetes-sigs/agent-sandbox` `v1.0.6`):** Your ADK agent runs on GKE and claims one dedicated Kubernetes Pod per sandbox (`v1beta1` CRDs). Gives you strict in-country compute residency in any GKE region (including Bangkok `asia-southeast3`), full `PodSpec` control, `< 1s` warm-pool claims, gVisor or Cloud Hypervisor microVMs (or self-managed Kata without a Google SLA), GPUs and TPUs (gVisor only), GKE Pod Snapshots (`>= 1.35.3-gke.1234000`), Hyperdisk/Filestore volumes, and no Agent Platform QPM or revision caps. Trade-offs: you own cluster and controller upgrades, `sandbox-router` HA, VAP/WIF/NetworkPolicy config, and Dataplane V2 limits.
+3. **Option C: Self-Hosted GKE + GKE Agent Substrate (`agent-substrate/substrate`):** Built for high-density intermittent CPU agents. Multiplexes many lightweight Actor sessions onto shared pre-warmed Worker Pods (`WorkerPool`) using a control plane outside `kube-apiserver` and `etcd`. Scales to millions of suspended actors with `< 1s` 3-layer GCS checkpoint restore, `< 100 ms` Filestore agent volume re-attach, and out-of-sandbox Envoy credential injection. Trade-offs: GKE Standard `>= 1.37` only (no Autopilot or Extended release channel), x86 CPU only (min `c3-standard-4`, no E2, no Arm, no GPUs/TPUs), 5 Linux kernel sysctls above ~800 sandboxes/node, and highest day-2 operations ownership.
+4. **Option D: Hybrid Topologies & Progressive Graduation (`agents-cli`):** Mix managed control-plane services with self-hosted compute without rewriting your ADK code:
    - **Hybrid A (GKE or Cloud Run orchestrator -> Managed Sandbox & State):** Escape the `90 QPM` / `10 Bidi/min` runtime cap or run custom WebSockets and `kubectl rollout undo`, while keeping a minimal `ReasoningEngine` strictly for Managed Sandboxes, Managed Sessions, and Memory Bank.
    - **Hybrid B (Agent Runtime orchestrator -> GKE Sandbox or Substrate):** Keep SPIFFE identity, Agent Gateway, Semantic Governance, and `publish gemini` on Agent Runtime, and call GKE sandboxes over PSC-I + GKE Gateway API whenever a job needs GPUs/TPUs, microVMs, >14d workspaces, or >1,000 sandboxes.
    - **Hybrid C (Dual-Tier GKE):** Run Agent Sandbox on a gVisor GPU/TPU node pool alongside Agent Substrate on separate non-gVisor x86 node pools in the same Standard `>= 1.37` cluster (never put the `sandbox.gke.io/runtime` taint on Substrate worker pools).
    - **Hybrid D (`agents-cli` Progressive Graduation):** Prototype locally, ship Day-1 to `agent_runtime` (or `cloud_run`), and graduate to `gke` (`agents-cli scaffold enhance -d gke`) while keeping the same ADK agent, evals, and `--session-type agent_platform_sessions`.
+
+---
+
+## Decision Flowchart & Bangkok Residency Trigger
 
 ```mermaid
 flowchart TD
@@ -321,7 +35,7 @@ flowchart TD
     Q2 -->|"Yes: dedicated Pod / Autopilot /<br/>Arm / custom sidecars"| GKE_SB["Option B: GKE Agent Sandbox<br/>(SandboxWarmPool <1s,<br/>gVisor or microVM, Pod Snapshots >=1.35.3)"]
     Q2 -->|"No: standard gVisor container<br/><= 7d/14d TTL"| Q3{"Need custom routing/rollback or<br/>exceed 90 QPM / 10 Bidi /<br/>VPC-SC 100 max instances?"}
     Q3 -->|"Yes (want zero sandbox ops)"| HybA["Option D (Hybrid Pattern A):<br/>ADK on GKE / Cloud Run +<br/>Managed Sandbox & Managed Sessions"]
-    Q3 -->|"No (or pre-approved quota increase)"| Managed["Option A (Recommended Default):<br/>Agent Runtime + Managed BYOC Sandbox<br/>Zero cluster ops + SPIFFE + Agent Gateway"]
+    Q3 -->|"No (or pre-approved quota increase)"| Managed["Option A (Default Choice):<br/>Agent Runtime + Managed BYOC Sandbox<br/>Zero cluster ops + SPIFFE + Agent Gateway"]
 ```
 
 > [!IMPORTANT]
@@ -338,10 +52,35 @@ flowchart TD
 
 ---
 
-## Optional Reference & Deep Dive
+## Reference Manifests (Read-Only, Ready to Inspect)
+
+Four complete, ready-to-inspect reference files live under [`starter/gke_reference/`](../starter/gke_reference/) (mirrored in [`solution/gke_reference/`](../solution/gke_reference/)). No edits and no live GKE cluster are needed; open them to see how Option B (`kubernetes-sigs/agent-sandbox` `v1.0.6`, `v1beta1`) maps onto real Kubernetes manifests and ADK Python code:
+
+| File | What It Demonstrates | Key Architectural Notes |
+|---|---|---|
+| [`starter/gke_reference/rbac.yaml`](../starter/gke_reference/rbac.yaml) | Dedicated `coding-agent-orchestrator-sa`, `Role`, and `RoleBinding` | Grants `create/get/list/watch/delete` across **both** CRD API groups (`extensions.agents.x-k8s.io` for `sandboxclaims` and `agents.x-k8s.io` for `sandboxes`). Bind this KSA via Workload Identity Federation (`roles/aiplatform.user`) instead of `adk deploy gke`'s `default/default` KSA (`403 PERMISSION_DENIED`). |
+| [`starter/gke_reference/sandbox_template.yaml`](../starter/gke_reference/sandbox_template.yaml) | Hardened `gVisor` `SandboxTemplate` (`port 8888`) | Meets `secure-sandbox-policy` ValidatingAdmissionPolicy (`runtimeClassName: gvisor`, `automountServiceAccountToken: false`, `runAsNonRoot: true`, `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`, explicit CPU/memory limits). Using `SandboxTemplate` also auto-creates a managed `NetworkPolicy` blocking RFC 1918, CoreDNS, and `169.254.0.0/16`. Deploy in a dedicated workload namespace like `coding-sandboxes` in production so VAP enforces on every Pod. |
+| [`starter/gke_reference/sandbox_warmpool.yaml`](../starter/gke_reference/sandbox_warmpool.yaml) | `SandboxWarmPool` (`replicas: 2`) bound to `coding-sandbox-template` | Cuts claim latency to `< 1s`. Wait for `status.readyReplicas == 2` before claiming (early claims fall back to cold Pods), check `metadata.ownerReferences[*].kind` (`SandboxWarmPool` = idle vs. `SandboxClaim` = active), and split multi-tenant workloads across separate warm pools because all Pods in a warm pool share one KSA/WIF identity. |
+| [`starter/gke_reference/gke_agent_example.py`](../starter/gke_reference/gke_agent_example.py) | ADK `GkeCodeExecutor`, Gemini 4 `LlmAgent`, and `k8s-agent-sandbox==1.0.6` warm-pool client | Shows how swapping `AgentEngineSandboxCodeExecutor` (Lab 2) for `GkeCodeExecutor(executor_type="sandbox", sandbox_template=...)` keeps the same Gemini 4 (`gemini-4-hydrogen` on `MODEL_LOCATION=global`) agent code intact. |
+
+> [!WARNING]
+> **SDK Version Skew (`google-adk==2.15.0` vs. `k8s-agent-sandbox==1.0.6`):** In `google-adk==2.15.0`, `GkeCodeExecutor._execute_in_sandbox()` still calls the pre-1.0 `k8s-agent-sandbox` context-manager API, which conflicts with `k8s-agent-sandbox==1.0.6` if both are installed in the same virtual environment. Keep ADK `GkeCodeExecutor` and the standalone `k8s-agent-sandbox==1.0.6` warm-pool SDK in separate virtual environments until ADK migrates to v1.x.
+
+**Optional offline sanity check (no live GKE cluster required):**
+
+```bash
+python3 starter/gke_reference/gke_agent_example.py --mode inspect
+make verify-lab LAB=8
+```
+
+For AI-assisted architecture Q&A in Antigravity, load [`.agents/skills/agent-runtime-vs-gke-architecture/SKILL.md`](../.agents/skills/agent-runtime-vs-gke-architecture/SKILL.md).
+
+---
+
+## Reference Deep Dives
 
 <details>
-<summary>14-Dimension Comparison & Limitations Matrix (All 4 Options)</summary>
+<summary>14-Dimension Comparison &amp; Limitations Matrix (All 4 Options)</summary>
 
 | # | Dimension | Option A: Agent Runtime + Managed Sandbox | Option B: GKE + GKE Agent Sandbox (`v1.0.6`) | Option C: GKE + GKE Agent Substrate | Option D: `agents-cli` (`v1.15.0`) Orchestrator |
 |---|---|---|---|---|---|
@@ -363,7 +102,7 @@ flowchart TD
 </details>
 
 <details>
-<summary>Agent Platform Quotas & 250-Developer Sizing Math</summary>
+<summary>Agent Platform Quotas &amp; 250-Developer Sizing Math</summary>
 
 Default regional quotas are sized for pilots. Production coding agents hit `90 QPM` and `300 session event appends/min` quickly unless you request quota increases before launch.
 
@@ -410,7 +149,7 @@ Assume `U = 250` peak concurrent developers, `X = 2` requests/user/min, and `Y =
 </details>
 
 <details>
-<summary>GKE Pod Snapshots & Storage Engineering Notes</summary>
+<summary>GKE Pod Snapshots &amp; Storage Engineering Notes</summary>
 
 - **Prerequisites & Scopes:** GKE Pod Snapshots (`~3–5s` restore with background memory streaming) require GKE `>= 1.35.3-gke.1234000` (`--enable-pod-snapshots`, Rapid channel), `gVisor` only, no TPUs, and no GCS FUSE CSI sidecar.
   - Default **`whole-pod`** scope captures process memory + rootfs and requires matching machine series, CPU vendor, and `CPUID` flags (forbids E2; on Autopilot, define a custom `ComputeClass` like `non-e2-class` with `machineFamily: n2`/`c3`, `activeMigration.optimizeRulePriority: false`, `whenUnsatisfiable: DoNotScaleUp`).
@@ -422,9 +161,9 @@ Assume `U = 250` peak concurrent developers, `X = 2` requests/user/min, and `Y =
 </details>
 
 <details>
-<summary>Optional: Deploying and Safely Tearing Down on a Live GKE Cluster</summary>
+<summary>Optional Reference: Deploying and Safely Tearing Down on Your Own GKE Cluster</summary>
 
-If you have a live GKE cluster with a gVisor node pool (`--sandbox=type=gvisor`), such as in Bangkok (`GKE_LOCATION=asia-southeast3`), deploy the completed overlay like this:
+No live GKE cluster is used in this workshop. If you later deploy these manifests onto your own GKE cluster with a gVisor node pool (`--sandbox=type=gvisor`), such as in Bangkok (`GKE_LOCATION=asia-southeast3`), follow this order:
 
 ```bash
 # export GKE_LOCATION="${GKE_LOCATION:-asia-southeast3}"
@@ -439,16 +178,16 @@ kubectl wait --for=condition=Available deployment/agent-sandbox-controller \
   -n agent-sandbox-system --timeout=120s
 
 # 2. Apply workshop RBAC, SandboxTemplate, and SandboxWarmPool
-kubectl apply -f solution/gke_reference/rbac.yaml
-kubectl apply -f solution/gke_reference/sandbox_template.yaml
-kubectl apply -f solution/gke_reference/sandbox_warmpool.yaml
+kubectl apply -f starter/gke_reference/rbac.yaml
+kubectl apply -f starter/gke_reference/sandbox_template.yaml
+kubectl apply -f starter/gke_reference/sandbox_warmpool.yaml
 
 # 3. Verify warm-pool readiness (<1s claim path)
 kubectl get sandboxwarmpool,sandbox -n agent-sandbox-system
 ```
 
 > [!CAUTION]
-> **Safe Teardown Warning:** Delete only your namespace manifests (`kubectl delete -f solution/gke_reference/`). **Never run `kubectl delete -f sandbox-with-extensions.yaml` on a shared cluster** — it deletes the CRDs themselves and cascading-deletes every `Sandbox`, `SandboxTemplate`, `SandboxClaim`, and `SandboxWarmPool` across all namespaces.
+> **Safe Teardown Warning:** Delete only your namespace manifests (`kubectl delete -f starter/gke_reference/`). **Never run `kubectl delete -f sandbox-with-extensions.yaml` on a shared cluster**, because it deletes the CRDs themselves and cascading-deletes every `Sandbox`, `SandboxTemplate`, `SandboxClaim`, and `SandboxWarmPool` across all namespaces.
 
 </details>
 

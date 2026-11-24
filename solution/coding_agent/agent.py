@@ -76,6 +76,17 @@ def _build_remote_execution_components(
 ) -> tuple[BaseEnvironment | None, list[Any], Any | None]:
     """Build remote Managed Sandbox toolset or Code Execution executor."""
     if settings.sandbox_mode in {"shell", "byoc"}:
+        if (
+            settings.sandbox_mode == "byoc"
+            and not settings.sandbox_service_account_email
+            and not settings.sandbox_runner_base_url
+        ):
+            logger.info(
+                "SANDBOX_MODE=byoc without SANDBOX_SERVICE_ACCOUNT_EMAIL: standard commands "
+                "delegate to caller-ADC execute_bash() on the BYOC container (set "
+                "SANDBOX_SERVICE_ACCOUNT_EMAIL with roles/iam.serviceAccountTokenCreator "
+                "only when per-exec env injection via send_command() is needed)."
+            )
         remote_env = AgentPlatformSandboxEnvironment(
             project_id=settings.require_gcp_project(),
             location=settings.google_cloud_location,

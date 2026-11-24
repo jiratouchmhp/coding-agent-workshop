@@ -22,6 +22,8 @@ description: >-
 
 Decision playbook and technical reference for choosing between **Gemini Enterprise Agent Platform** (Serverless Agent Runtime + Managed BYOC Sandbox), **Self-Hosted ADK on GKE + GKE Agent Sandbox** (`kubernetes-sigs/agent-sandbox` `v1.0.6`), **Self-Hosted GKE + GKE Agent Substrate** (`agent-substrate/substrate`), and **`agents-cli`** (`google-agents-cli` `v1.15.0`) multi-target graduation workflows.
 
+> **Workshop Module 8 Mode (Read-Only Architecture Information Guide):** Module 8 (`workshop/08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md`) is a **read-only Architecture Information Guide** — there are **no hands-on coding exercises and no live GKE cluster required**. Both `starter/gke_reference/` and `solution/gke_reference/` ship complete, hardened, ready-to-inspect reference files (`rbac.yaml`, `sandbox_template.yaml`, `sandbox_warmpool.yaml`, and `gke_agent_example.py` — inspect offline via `python starter/gke_reference/gke_agent_example.py --mode inspect`).
+
 > **Four Distinct Layers — Never Conflate Them:**
 > 1. **Agent Runtime + Managed Sandbox**: Serverless `ReasoningEngine` + Google-managed tenant gVisor `SandboxEnvironment` (lowest ops, SPIFFE Identity, Managed Agent Gateway, 3LO OAuth, CPU-only, 7d/14d sandbox TTLs).
 > 2. **GKE Agent Sandbox (Pod-based, `v1.0.6`)**: 1 dedicated K8s Pod per sandbox (`v1beta1` CRDs), Standard & Autopilot, GPU/TPU (`gVisor`), microVMs (Standard), custom `PodSpec`/sidecars, Pod Snapshots (`whole-pod` `>= 1.35.3-gke.1234000`, gVisor, non-E2, + NVIDIA `cuda-checkpoint` GPU support; `rootfs-only` `>= 1.35.3-gke.1031000`, supports E2/cross-family restore).

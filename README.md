@@ -20,7 +20,7 @@ Work through the labs in order. Every hands-on lab edits specific `# TODO(lab-N)
 | [Lab 5: Deploy Once (CLI & Terraform)](workshop/05-LAB-DEPLOY-RUNTIME-TERRAFORM.md) | Package and deploy the finished Labs 1–4 agent once via `agents-cli` and Terraform (`google_vertex_ai_reasoning_engine`), custom SA, revisions, and emergency stop | 45 min | 30 min | Core |
 | [Lab 6: Eval, Alerts & Optimization](workshop/06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md) | Split single/multi-turn offline eval, simulated user eval, failure clustering, online monitors, Cloud Monitoring alerts, and prompt/skill tuning | 40 min | 15 min (demo) | Core |
 | [Lab 7: Security & Governance](workshop/07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md) | `ENABLED_BLOCKING` skill scanning, NLC Semantic Governance, Model Armor, SPIFFE `AGENT_IDENTITY`, IAM conditions, CMEK/VPC-SC, WORM/SIEM/SCC | 35 min | Skipped | Optional |
-| [Lab 8: Agent Runtime vs. GKE](workshop/08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) | 14-dimension comparison of Agent Runtime + Managed Sandboxes vs. self-hosted GKE + `kubernetes-sigs/agent-sandbox` | 30 min | 25 min (Q&A) | Core |
+| [Architecture Guide: Agent Runtime vs. GKE](workshop/08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) | Read-only architecture briefing (no coding lab, no live cluster): 4 deployment options, Bangkok PDPA/BoT residency trigger, and ready-to-inspect GKE manifests | 30 min | 25 min (Q&A) | Briefing (Read-Only) |
 
 Running an instructor-led session? See [FACILITATOR-GUIDE.md](workshop/FACILITATOR-GUIDE.md) for T-7d/T-1d/T-0 checklists, shared-project quota math, pacing cutoffs, and troubleshooting.
 
@@ -101,7 +101,7 @@ Every service defaults to **Bangkok (`asia-southeast3`)**. We only fall back to 
 
 | Scope | Region & Env Vars | Services Hosted Here |
 |---|---|---|
-| **Default (Bangkok)** | `asia-southeast3` (`PRIMARY_REGION`, `AR_LOCATION`, `BUILD_LOCATION`, `AGENT_REGISTRY_LOCATION`, `GKE_LOCATION`) | Artifact Registry, Cloud Build, Secret Manager, Agent Registry A2A/MCP discovery, and Lab 8 GKE. One Bangkok Artifact Registry repo pulls directly into both Singapore Agent Runtime and Singapore BYOC Sandboxes, so you never need a second repo. |
+| **Default (Bangkok)** | `asia-southeast3` (`PRIMARY_REGION`, `AR_LOCATION`, `BUILD_LOCATION`, `AGENT_REGISTRY_LOCATION`, `GKE_LOCATION`) | Artifact Registry, Cloud Build, Secret Manager, Agent Registry A2A/MCP discovery, and GKE (Architecture Guide 08). One Bangkok Artifact Registry repo pulls directly into both Singapore Agent Runtime and Singapore BYOC Sandboxes, so you never need a second repo. |
 | **Fallback (Singapore)** | `asia-southeast1` (`GOOGLE_CLOUD_LOCATION`) | Agent Runtime (`ReasoningEngine`), Managed Sandboxes, Managed Sessions, Memory Bank, Agent Gateway, and optional `gemini-4-argon` (`MODEL_LOCATION=asia-southeast1`) if you need regional model inference. Used only because these services are not yet launched in Bangkok. |
 | **Global (GCP-Mandated)** | `global` (`MODEL_LOCATION`, `EVAL_LOCATION`, `AGENT_REGISTRY_SKILLS_LOCATION`) | Gemini 4 (`gemini-4-hydrogen` for fast coding, `gemini-4-neon` for deeper planning/review via `google-genai>=2.34.0`), Gen AI Evaluation Service (including failure clustering), and `gcloud alpha agent-registry skills`. |
 | **Preview (GCP-Mandated)** | `us-central1` (`SKILL_REGISTRY_LOCATION`) | Vertex AI Skill Registry (`v1beta1` preview, available only in `us-central1`, `europe-west4`, and `us-east5`). |
@@ -118,17 +118,15 @@ For full regional caveats and single-region US/EMEA overrides, see [Regional Ava
 ### Prerequisites
 
 - **Python 3.11+** and **[`uv`](https://docs.astral.sh/uv/)** (standalone binary works even without `python3-venv` or Docker).
-- **`gcloud` CLI + `alpha` component** authenticated to a **standard billing-enabled GCP project** (do not use Express Mode for Labs 2–8; see [Express Mode caveats](workshop/00-WORKSHOP-OVERVIEW.md#optional-reference-details)).
+- **`gcloud` CLI + `alpha` component** authenticated to a **standard billing-enabled GCP project** (do not use Express Mode for Labs 2–7; see [Express Mode caveats](workshop/00-WORKSHOP-OVERVIEW.md#optional-reference-details)).
 - **Terraform >= 1.5.0** for Lab 5.
 - **Optional locally:** `google/agents-cli` (`uvx google-agents-cli setup`) and the `agy` headless CLI. Cloud Build bakes `/usr/local/bin/agy` into the Lab 2 and Lab 5 images automatically, and `make test-agy-harness` runs offline via `--dry-run`.
 
 ### 1. Install Tools & Authenticate GCP
 
 ```bash
-# Install standalone uv if you don't already have it
-curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv_install.sh \
-  && sh /tmp/uv_install.sh \
-  && rm -f /tmp/uv_install.sh
+# Install uv if missing (recommended: Homebrew or pipx; or see https://docs.astral.sh/uv/getting-started/installation/)
+brew install uv   # or: pipx install uv
 
 # Required for Agent Registry standalone skills (Labs 4, 6, 7)
 gcloud components install alpha --quiet
@@ -144,11 +142,11 @@ gcloud auth application-default login
 ### 2. Configure `.env`, Check Pre-Flight & Install Dependencies
 
 ```bash
-cp .env.example .env
+[ -f .env ] || cp .env.example .env
 # Edit .env and fill in GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_PROJECT_NUMBER
 
 make preflight        # Checks gcloud, ADC, APIs, uv, and regional env vars
-make install          # Syncs starter/ and solution/ Python deps with uv
+make install          # Syncs starter/ Python deps with uv (use `make install-all` for starter/ + solution/)
 make validate-skills  # Checks the 6 bundled .agents/skills/ definitions
 ```
 
@@ -161,7 +159,7 @@ Open this repository root in **Antigravity** (or any IDE supporting `.agents/ski
 - [`agent-platform-runtime-and-state`](.agents/skills/agent-platform-runtime-and-state/SKILL.md) (Labs 3 & 5)
 - [`agent-platform-governance-and-registries`](.agents/skills/agent-platform-governance-and-registries/SKILL.md) (Lab 4 & Optional Lab 7)
 - [`agent-platform-optimize-and-eval`](.agents/skills/agent-platform-optimize-and-eval/SKILL.md) (Lab 6)
-- [`agent-runtime-vs-gke-architecture`](.agents/skills/agent-runtime-vs-gke-architecture/SKILL.md) (Lab 8)
+- [`agent-runtime-vs-gke-architecture`](.agents/skills/agent-runtime-vs-gke-architecture/SKILL.md) (Architecture Guide 08)
 
 ---
 
@@ -181,8 +179,8 @@ Run `make help` for the full list. Pass `TRACK=solution` to run any command agai
 | `make push-agent` / `make pack-agent-source` | Builds runtime image via Bangkok Cloud Build, or packs a `<= 8 MB` tarball for `source_code_spec` | Lab 5 |
 | `make tf-plan` / `make tf-apply` | Plans and applies Terraform for Agent Runtime + IAM | Lab 5 |
 | `make eval-offline` / `make eval-simulated` | Runs offline split-JSON and simulated user evaluations (`global`) | Lab 6 |
-| `make verify-lab LAB=N` | Runs local checkpoint checks for Lab `1`–`8` or `all` (core Labs 1–6) | Labs 1–8 |
-| `make fast-forward LAB=N` | Syncs only Lab `N` from `solution/` into `starter/` without spoiling later TODOs | Labs 1–6, 8 |
+| `make verify-lab LAB=N` | Runs local checkpoint checks for Labs `1`–`7`, optional Module `8` offline check, or `all` (core Labs 1–6) | Labs 1–7, Guide 08 |
+| `make fast-forward LAB=N` | Syncs only Lab `N` from `solution/` into `starter/` without spoiling later TODOs | Labs 1–6 |
 | `make cleanup` | Safely deletes workshop sandboxes, templates, alert policies, and runtimes (`CLEANUP_ARGS=--dry-run`) | Teardown |
 
 ---

@@ -15,7 +15,7 @@ In this lab, you'll swap Lab 1's local subprocess execution for gVisor-isolated 
 
 **Already built for you (no edits needed):** [`starter/sandbox_image/Dockerfile`](../starter/sandbox_image/Dockerfile), [`starter/sandbox_image/runner.py`](../starter/sandbox_image/runner.py) (with baked `/usr/local/bin/agy` and allowlisted `/exec` `env`), CRUD helpers (`get`, `list`, `update`, `resume`, `delete`) in `sandbox_lifecycle.py`, and `execute_shell_command()`, `execute_code_snippet()`, `build_code_execution_executor()`, plus `initialize()`/`read_file()`/`write_file()` in `sandbox_execution.py`.
 
-**Need help or running behind?** Point Antigravity at [`.agents/skills/agent-platform-sandbox-byoc`](../.agents/skills/agent-platform-sandbox-byoc/SKILL.md), or run `make fast-forward LAB=2` to sync only Lab 2 without touching Labs 3-8.
+**Need help or running behind?** Point Antigravity at [`.agents/skills/agent-platform-sandbox-byoc`](../.agents/skills/agent-platform-sandbox-byoc/SKILL.md), or run `make fast-forward LAB=2` to sync only Lab 2 without touching Labs 3-6.
 
 ---
 
@@ -30,14 +30,17 @@ make test-sandbox-local
 
 Next, pick **BYOC (recommended)** or the **zero-build fast-track**:
 - **Zero-build fast-track:** Skip the Artifact Registry / Cloud Build commands below and use `SANDBOX_MODE=shell` in Step 4. Managed Shell Sandboxes work immediately in `asia-southeast1` with zero image builds.
-- **BYOC container path:** Create one Docker repository in Bangkok (`asia-southeast3`) and submit the build remotely via Cloud Build (Singapore `asia-southeast1` sandboxes pull directly from Bangkok Artifact Registry, so one repo covers everything):
+- **BYOC container path:** Create one Docker repository in Bangkok (`asia-southeast3`), save `SANDBOX_IMAGE_URI` (and `AR_REPOSITORY` if you customize the repo name; `Makefile` reads `AR_REPOSITORY`, not `AR_REPO`) into `.env` **before** running `make push-sandbox`, and submit the build remotely via Cloud Build. Updating `.env` first ensures a blank `SANDBOX_IMAGE_URI=` line in `.env` never overrides a shell-only `export`. Singapore `asia-southeast1` sandboxes pull directly from Bangkok Artifact Registry, so one repo covers everything:
 
 ```bash
-source .env
+set -a && source .env && set +a
 export AR_LOCATION="${AR_LOCATION:-asia-southeast3}"
-gcloud artifacts repositories create coding-agent-repo \
-  --repository-format=docker --location="$AR_LOCATION" --project="$GOOGLE_CLOUD_PROJECT" || true
-export SANDBOX_IMAGE_URI="${AR_LOCATION}-docker.pkg.dev/${GOOGLE_CLOUD_PROJECT}/coding-agent-repo/coding-sandbox:v1"
+export AR_REPOSITORY="${AR_REPOSITORY:-coding-agent-repo}"
+gcloud artifacts repositories create "${AR_REPOSITORY}" \
+  --repository-format=docker --location="${AR_LOCATION}" --project="${GOOGLE_CLOUD_PROJECT}" || true
+
+# Set SANDBOX_IMAGE_URI in .env BEFORE `make push-sandbox`:
+# SANDBOX_IMAGE_URI=asia-southeast3-docker.pkg.dev/<YOUR_PROJECT_ID>/coding-agent-repo/coding-sandbox:v1
 make push-sandbox
 ```
 
@@ -47,8 +50,8 @@ Grant the **Agent Sandbox Service Agent** pull access to `coding-agent-repo`:
 > **Grant `roles/artifactregistry.reader` to `gcp-sa-vertex-sandbox`, NOT `gcp-sa-aiplatform-re`!** `gcp-sa-vertex-sandbox` pulls Lab 2 BYOC Sandbox images; `gcp-sa-aiplatform-re` pulls Lab 5 Agent Runtime images. Using the wrong service agent breaks template image pulls.
 
 ```bash
-gcloud artifacts repositories add-iam-policy-binding coding-agent-repo \
-  --location="${AR_LOCATION:-asia-southeast3}" --project="$GOOGLE_CLOUD_PROJECT" \
+gcloud artifacts repositories add-iam-policy-binding "${AR_REPOSITORY:-coding-agent-repo}" \
+  --location="${AR_LOCATION:-asia-southeast3}" --project="${GOOGLE_CLOUD_PROJECT}" \
   --member="serviceAccount:service-${GOOGLE_CLOUD_PROJECT_NUMBER}@gcp-sa-vertex-sandbox.iam.gserviceaccount.com" \
   --role="roles/artifactregistry.reader"
 ```
@@ -59,7 +62,7 @@ Finally, create a standalone backing instance (`ReasoningEngine`) in `asia-south
 (cd starter && uv run python -m coding_agent.tools.sandbox_lifecycle create-instance)
 ```
 
-Save the printed `instance_name` to `REASONING_ENGINE_NAME` (and its trailing numeric ID to `REASONING_ENGINE_ID`) in `.env`, plus `SANDBOX_IMAGE_URI` if you pushed the BYOC image.
+Save the printed `instance_name` to `REASONING_ENGINE_NAME` and its trailing numeric ID to `REASONING_ENGINE_ID` in `.env` (always update or clear both together, because `config.py` reconstructs `reasoning_engine_name` from `REASONING_ENGINE_ID` if a stale ID remains), plus confirm `SANDBOX_IMAGE_URI` is set in `.env` if you pushed the BYOC image.
 
 **Check it works:** `make test-sandbox-local` prints 5 `[PASS]` lines (including HTTP 400 rejections for `cwd='/etc'` and disallowed `env` keys), and `create-instance` prints JSON with `projects/.../locations/asia-southeast1/reasoningEngines/...`.
 
@@ -139,9 +142,11 @@ Expected output: JSON showing timings for each step and sequential cleanup with 
 `execute_shell_command()`, `execute_code_snippet()`, `build_code_execution_executor()`, and `AgentPlatformSandboxEnvironment`'s `initialize()`, `read_file()`, and `write_file()` methods are pre-filled. Wire the two remaining execution hooks:
 
 - **`execute_byoc_command()`**: Import `httpx` (at top-level or inline) and build `payload = {"command": command, "cwd": cwd, "timeout": max(1, int(timeout))}` (plus `"env": dict(env)` if provided).
-  - If `runner_base_url` is set (local test or VPC PSC-E), POST JSON `payload` to `f"{runner_base_url.rstrip('/')}/exec"` via `httpx.Client` with optional `Authorization: Bearer <token>`, call `resp.raise_for_status()`, and return `_normalize_command_response(resp.json(), elapsed_ms)`.
-  - Otherwise require `client` and `sandbox_name`, fetch `sandbox_env = sandboxes_ns.get(name=sandbox_name)`, resolve `token` (`access_token`, else `generate_sandbox_access_token(client, service_account_email)`, else `fetch_iam_bearer_token()` when `use_iam_bearer=True`), call `sandboxes_ns.send_command(http_method="POST", path="exec", access_token=token, request_dict=payload, sandbox_environment=sandbox_env)`, and return `_normalize_command_response(raw_response, elapsed_ms)`. (`send_command()` doesn't raise on 401/403 and can return an empty body, which `_normalize_command_response()` validates.)
-- **`AgentPlatformSandboxEnvironment.execute()`**: Call `await self.initialize(ctx=ctx)`, dispatch via `await asyncio.to_thread(...)` to `execute_byoc_command()` (when `self._mode == "byoc" or self._runner_base_url`, setting `use_iam_bearer=(not bool(self._runner_base_url) and not bool(self._service_account_email))`) or `execute_shell_command()` (when `shell`), and return `ExecutionResult(exit_code=out.returncode, stdout=out.stdout, stderr=out.stderr, timed_out=out.timed_out)`.
+  - If `runner_base_url` is set (local test or VPC PSC-E), POST JSON `payload` to `f"{runner_base_url.rstrip('/')}/exec"` via `httpx.Client` with optional `Authorization: Bearer <token>` (using `access_token` or `fetch_iam_bearer_token()` when `use_iam_bearer=True`), call `resp.raise_for_status()`, and return `_normalize_command_response(resp.json(), elapsed_ms)`.
+  - Otherwise require `client` and `sandbox_name`:
+    - **Laptop default (no signing SA, no per-exec `env`):** Managed `sandboxes.send_command()` strictly requires a signed JWT from `generate_access_token(service_account_email=...)` and rejects raw ADC OAuth2 bearer tokens (`ya29...`) with HTTP `401 Unauthorized: Malformed token. Missing or invalid issuer (iss) claim.` When neither `access_token` nor `service_account_email` is set and `env` is `None`, delegate directly to `execute_shell_command(client, sandbox_name, command, cwd=cwd, timeout=timeout)` (`client.sandboxes.execute_bash()`), which runs on the BYOC `/exec` container as `appuser` using your caller ADC (~12ms, zero SA signing setup).
+    - **Signed JWT `send_command()` path (deployed Agent Runtime in Lab 5, or laptop with `SANDBOX_SERVICE_ACCOUNT_EMAIL`):** When `access_token` or `service_account_email` is set, fetch `sandbox_env = sandboxes_ns.get(name=sandbox_name)`, mint a signed JWT via `generate_sandbox_access_token(client, service_account_email)` if needed (requires `roles/iam.serviceAccountTokenCreator` / `iam.serviceAccounts.signJwt`, auto-configured in Lab 5 Terraform), call `sandboxes_ns.send_command(http_method="POST", path="exec", access_token=token, request_dict=payload, sandbox_environment=sandbox_env)`, and return `_normalize_command_response(raw, elapsed_ms)`. If `env` is passed without `access_token` or `service_account_email`, raise a clear `ValueError` instructing the caller to set `SANDBOX_SERVICE_ACCOUNT_EMAIL` with `roles/iam.serviceAccountTokenCreator`.
+- **`AgentPlatformSandboxEnvironment.execute()`**: Call `await self.initialize(ctx=ctx)`, dispatch via `await asyncio.to_thread(...)` to `execute_byoc_command()` (when `self._mode == "byoc" or self._runner_base_url`, without setting `use_iam_bearer=True` on managed proxy calls) or `execute_shell_command()` (when `shell`), and return `ExecutionResult(exit_code=out.returncode, stdout=out.stdout, stderr=out.stderr, timed_out=out.timed_out)`.
 
 > [!IMPORTANT]
 > **Three ADK `BaseEnvironment` rules:**
@@ -153,7 +158,7 @@ Expected output: JSON showing timings for each step and sequential cleanup with 
 <summary>Stuck? Peek at the code</summary>
 
 ```python
-# Inside execute_byoc_command():
+# Inside execute_byoc_command() (indent 4 spaces):
     import httpx
 
     start = time.monotonic()
@@ -174,14 +179,21 @@ Expected output: JSON showing timings for each step and sequential cleanup with 
     if client is None or not sandbox_name:
         raise ValueError("execute_byoc_command() requires `runner_base_url` OR both `client` and `sandbox_name`.")
 
+    if not access_token and not service_account_email:
+        if not env:
+            # Managed send_command() rejects raw ADC OAuth2 bearer tokens with HTTP 401.
+            # On a laptop without SANDBOX_SERVICE_ACCOUNT_EMAIL, execute_bash() works on
+            # BYOC containers directly via caller ADC (~12ms, zero SA signing setup).
+            return execute_shell_command(client, sandbox_name, command, cwd=cwd, timeout=timeout)
+        raise ValueError(
+            "Per-exec `env` injection over managed BYOC `send_command()` requires `access_token` "
+            "or `service_account_email` (`SANDBOX_SERVICE_ACCOUNT_EMAIL` with "
+            "`roles/iam.serviceAccountTokenCreator`, wired automatically in Lab 5 Terraform)."
+        )
+
     sandboxes_ns = get_sandboxes_namespace(client)
     sandbox_env = sandboxes_ns.get(name=sandbox_name)
-    token = access_token or (
-        generate_sandbox_access_token(client, service_account_email) if service_account_email
-        else (fetch_iam_bearer_token() if use_iam_bearer else None)
-    )
-    if not token:
-        raise ValueError("Managed BYOC requires `access_token`, `service_account_email`, or `use_iam_bearer=True`.")
+    token = access_token or generate_sandbox_access_token(client, service_account_email or "")
     raw = sandboxes_ns.send_command(
         http_method="POST", path="exec", access_token=token, request_dict=payload, sandbox_environment=sandbox_env,
     )
@@ -189,7 +201,7 @@ Expected output: JSON showing timings for each step and sequential cleanup with 
 ```
 
 ```python
-# Inside AgentPlatformSandboxEnvironment.execute():
+# Inside AgentPlatformSandboxEnvironment.execute() (indent 8 spaces):
         await self.initialize(ctx=ctx)
         cwd_str = str(self._working_dir)
         sandbox_name = self._get_active_sandbox_name(ctx)
@@ -198,7 +210,6 @@ Expected output: JSON showing timings for each step and sequential cleanup with 
                 execute_byoc_command, command=command, cwd=cwd_str, timeout=timeout if timeout is not None else 60,
                 client=None if self._runner_base_url else self._get_client(), sandbox_name=sandbox_name,
                 service_account_email=self._service_account_email, runner_base_url=self._runner_base_url,
-                use_iam_bearer=(not bool(self._runner_base_url) and not bool(self._service_account_email)),
             )
         else:
             if not sandbox_name:
@@ -212,10 +223,10 @@ Expected output: JSON showing timings for each step and sequential cleanup with 
 **Check it works:** Verify the CLI loads cleanly and (against any active sandbox) run the isolation probe:
 ```bash
 (cd starter && uv run python -m coding_agent.tools.sandbox_execution --help)
-# Optional live probe:
+# Optional live probe (works with --mode shell or --mode byoc once Step 3's fallback is wired):
 # (cd starter && uv run python -m coding_agent.tools.sandbox_execution probe-isolation --mode shell --sandbox-name "$SANDBOX_RESOURCE_NAME")
 ```
-Expected output: `probe-isolation` prints `PASS:METADATA_UNREACHABLE` and `PASS:NO_SUDO` as `appuser`.
+Expected output: `probe-isolation` prints `PASS:METADATA_UNREACHABLE` and `PASS:NO_SUDO` as `appuser`. (Pass `--service-account "$SANDBOX_SERVICE_ACCOUNT_EMAIL"` only if testing the signed-JWT `send_command()` path from your laptop.)
 
 ---
 
@@ -267,6 +278,10 @@ def _build_remote_execution_components(settings: Settings) -> tuple[BaseEnvironm
 ```
 Ask: *"Run `id && whoami` and check if `http://169.254.169.254/computeMetadata/v1/` is reachable."* Confirm commands run as `appuser` inside `/workspace` with the metadata server unreachable.
 
+**Laptop vs. deployed runtime BYOC note:** On your laptop with `SANDBOX_SERVICE_ACCOUNT_EMAIL` unset, `SANDBOX_MODE=byoc` executes commands on your BYOC container cleanly via caller ADC (`execute_bash()`), so you will never hit a surprise `401` or `403` during local testing. When you deploy to Agent Runtime in Lab 5, Terraform automatically sets `SANDBOX_SERVICE_ACCOUNT_EMAIL` (`coding-agent-runtime-sa`) and grants self `roles/iam.serviceAccountTokenCreator` so `send_command()` endpoints (`/health` and per-exec `env` injection) also work automatically. (To test `send_command()` from your laptop, create a dedicated SA, grant yourself `roles/iam.serviceAccountTokenCreator` on it, and set `SANDBOX_SERVICE_ACCOUNT_EMAIL` in `.env`.)
+
+**Shell mode template note:** Running `SANDBOX_MODE=shell` without a template auto-creates an inline `shell-sandbox-template` under your backing `ReasoningEngine` on each new session. Pass `--include-templates` to `cleanup-all` below when you finish so unused templates don't pile up.
+
 ---
 
 ## Step 5: Lab 2 Checkpoint & Cleanup
@@ -275,11 +290,13 @@ Run the Lab 2 verifier from the repo root and delete temporary demo sandboxes so
 
 ```bash
 make verify-lab LAB=2
-# Delete temporary demo sandboxes/snapshots (add --include-templates to remove templates too):
+# Delete temporary demo sandboxes/snapshots (add --include-templates to remove unused shell templates too):
 (cd starter && uv run python -m coding_agent.tools.sandbox_lifecycle cleanup-all)
 ```
 
-Keep `REASONING_ENGINE_NAME` in `.env` for Lab 3, then continue to **[Lab 3: Managed Sessions, Memory Bank, Feedback Service & Runtime Telemetry](./03-LAB-SESSIONS-MEMORY-FEEDBACK.md)**.
+Note that GCP's `list-templates` and `list-snapshots` endpoints can briefly continue returning soft-deleted tombstones right after deletion (attempting to delete a tombstone returns `404 NOT_FOUND`).
+
+Keep `REASONING_ENGINE_NAME` (and `REASONING_ENGINE_ID`) in `.env` for Lab 3, then continue to **[Lab 3: Managed Sessions, Memory Bank, Feedback Service & Runtime Telemetry](./03-LAB-SESSIONS-MEMORY-FEEDBACK.md)**.
 
 ---
 
@@ -292,9 +309,9 @@ Keep `REASONING_ENGINE_NAME` in `.env` for Lab 3, then continue to **[Lab 3: Man
 |---|---|---|---|
 | 1. Agent Platform Scale Sandboxes (`scale/sandbox`) | `agentplatform.Client.sandboxes.*` under a parent `ReasoningEngine` | gVisor containers: Code Execution, Shell, Computer Use, BYOC. No built-in FQDN allowlist field (use PSC-I + Cloud NGFW/SWP). | This Lab (Lab 2) |
 | 2. Managed Agents API Sandbox (Pre-GA) | `google.genai` Interactions API (`global` only) | Built-in `antigravity-preview-05-2026` harness with native network allowlist and `env_id` sharing. Pre-GA. | Reference contrast |
-| 3. Self-Hosted GKE Agent Sandbox (`kubernetes-sigs/agent-sandbox`) | Kubernetes CRDs (`Sandbox`, `SandboxTemplate`, `SandboxWarmPool`, `PodSnapshot`) + `sandbox-router` (`8888`) | Self-managed GKE clusters with GPU/TPU, `<1s` warm pools, Kata/gVisor, Kubernetes `NetworkPolicy`. | [Lab 8](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) |
+| 3. Self-Hosted GKE Agent Sandbox (`kubernetes-sigs/agent-sandbox`) | Kubernetes CRDs (`Sandbox`, `SandboxTemplate`, `SandboxWarmPool`, `PodSnapshot`) + `sandbox-router` (`8888`) | Self-managed GKE clusters with GPU/TPU, `<1s` warm pools, Kata/gVisor, Kubernetes `NetworkPolicy`. | [Architecture Guide: Agent Runtime vs. GKE](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) |
 
-Never mix data-plane APIs across sandbox categories (Shell uses `execute_bash()`, Code Execution uses `execute_code()`, BYOC / Computer Use use `generate_access_token()` + `send_command()`):
+Never mix data-plane APIs across sandbox categories (Shell uses `execute_bash()`, Code Execution uses `execute_code()`, and BYOC / Computer Use use `generate_access_token()` + `send_command()` for custom endpoints or `execute_bash()` for standard BYOC bash commands via caller ADC):
 
 | Sandbox Type | Spec / Template Key | Execution Path | Network Access | Snapshots | Max TTL |
 |---|---|---|---|---|---|

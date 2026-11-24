@@ -1,9 +1,9 @@
 # Lab 7 (Optional): Enterprise Security & Governance Hardening
 
-This lab is optional and requires zero edits to `starter/` code. If you're short on time, skip straight to [Lab 8](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) — Labs 1–6 stay completely green.
+This lab is optional and requires zero edits to `starter/` code. If you're short on time, skip straight to [Architecture Guide: Agent Runtime vs. Self-Hosted GKE](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) (read-only briefing, no coding lab, no live cluster); Labs 1–6 stay completely green.
 
 **Duration:** 35 min (Full-Day Track) | Skipped in Half-Day Fast-Track  
-**Navigation:** [Lab 6: Optimize, Evaluate & Alert](./06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md) · [Lab 8: Agent Runtime vs. Self-Hosted GKE](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md)
+**Navigation:** [Lab 6: Optimize, Evaluate & Alert](./06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md) · [Architecture Guide: Agent Runtime vs. Self-Hosted GKE](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md)
 
 ## Files Referenced (Read-Only / Optional Hardening)
 
@@ -32,7 +32,7 @@ Standalone Agent Registry skills currently run in `global` (`AGENT_REGISTRY_SKIL
 > 3. **Use the `private-` prefix everywhere after create:** Agent Registry automatically prepends `private-` to user-created skills (`private-secure-code-review`) and grants `roles/agentregistry.admin` to the creator (plus `roles/agentregistry.viewer` to the project's agent workload `principalSet` in org-backed projects).
 > 4. **Set both `--default-revision` and `--target-state=active` before runtime use:** ADK `GCPSkillRegistry.get_skill()` fails with HTTP 400 `FAILED_PRECONDITION` until the skill is `ACTIVE` (or `DEPRECATED`).
 
-1. Enable the API, create the bare skill shell with `ENABLED_BLOCKING` scanning, and upload your validated ZIP (`<= 1 MB` compressed) as `rev-1`:
+1. Enable the API, create the bare skill shell with `ENABLED_BLOCKING` scanning, and upload your validated ZIP (`<= 1 MB` compressed) as `rev-1`. (If you already ran Lab 4 Step 3's optional Agent Registry standalone skill creation, pick a fresh skill ID such as `secure-code-review-blocking` and use `private-secure-code-review-blocking` below, or skip `skills create` to avoid `ALREADY_EXISTS`.)
 
    ```bash
    gcloud services enable agentregistry.googleapis.com --project="${GOOGLE_CLOUD_PROJECT}"
@@ -55,7 +55,7 @@ Standalone Agent Registry skills currently run in `global` (`AGENT_REGISTRY_SKIL
      --payload="dist/secure-code-review.zip"
    ```
 
-2. Check the async LLM scan result and list any `VULNERABILITY` or `SECRET` findings:
+2. Check the async LLM scan result and list any `VULNERABILITY` or `SECRET` findings (when 0 findings exist, `gcloud` logs a benign `WARNING: The following filter keys were not present in any resource : resource` message):
 
    ```bash
    gcloud alpha agent-registry skills revisions describe rev-1 \
@@ -89,7 +89,7 @@ Standalone Agent Registry skills currently run in `global` (`AGENT_REGISTRY_SKIL
 
    When you later optimize `SKILL.md` in [Lab 6](./06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md) and publish `rev-2`, `ENABLED_BLOCKING` scans `rev-2` automatically before promotion while letting you roll back to `rev-1` in one command. To stop teams from opting out of scanning org-wide, deploy the `custom.skillsScanningEnforcement` Custom Org Policy in the Reference section below.
 
-**Check it works:** Run `gcloud alpha agent-registry skills describe private-secure-code-review --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_SKILLS_LOCATION}"`. You should see `state: ACTIVE`, `defaultRevision` ending in `/revisions/rev-1`, and `skills search` returning `private-secure-code-review`.
+**Check it works:** Run `gcloud alpha agent-registry skills describe private-secure-code-review --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_SKILLS_LOCATION}"`. You should see `state: STATE_ACTIVE` (while `revisions describe` prints `state: ACTIVE`), `defaultRevision` ending in `/revisions/rev-1`, and `skills search` returning `private-secure-code-review`.
 
 ---
 
@@ -342,7 +342,7 @@ bash scripts/verify_lab.sh 7 --track solution
 
 `make verify-lab LAB=all` covers core Labs 1–6 and passes whether or not you run Lab 7.
 
-**Next:** Continue to [Lab 8: Agent Runtime vs. Self-Hosted GKE](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md).
+**Next:** Read [Architecture Guide: Agent Runtime vs. Self-Hosted GKE](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) (read-only briefing, no coding lab, no live cluster).
 
 ---
 

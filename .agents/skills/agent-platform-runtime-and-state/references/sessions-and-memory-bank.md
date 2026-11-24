@@ -286,6 +286,9 @@ mb_name = "projects/PROJECT_ID/locations/asia-southeast1/reasoningEngines/MEMORY
 #    - `wait_for_completion=True` is the SDK default across CreateRuntimeSessionConfig, GenerateMemoriesConfig,
 #      and CreateRuntimeFeedbackEntryConfig; pass `"wait_for_completion": False` in prod to avoid blocking!
 #    - `scope` is OPTIONAL when `vertex_session_source` is supplied (derived automatically from the session if omitted).
+#    - LIVE GOTCHA: `vertex_session_source` requires a **server-generated numeric session ID** (omit `session_id`
+#      when calling `sessions.create()`). Custom string session IDs (e.g. `workshop-sess-...`) return HTTP 404
+#      `NOT_FOUND` on `vertex_session_source` — read events via `sessions.events.list()` and pass `direct_contents_source` instead.
 op = client.memory_banks.memories.generate(
     name=mb_name,
     vertex_session_source={

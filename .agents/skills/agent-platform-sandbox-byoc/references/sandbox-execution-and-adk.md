@@ -9,7 +9,7 @@ Authoritative guide for executing commands, scripts, browser actions, and file I
 | Path | Sandbox Type | SDK / Transport Method | Caller Auth | Stateful Across Calls? |
 |---|---|---|---|---|
 | **A. Shell Sandbox** | `shell_environment` / `DEFAULT_CONTAINER_CATEGORY_SHELL_SANDBOX` | `client.sandboxes.execute_bash(name, command, cwd, timeout)` -> container `/exec` | Caller ADC/IAM (`roles/aiplatform.user`) — **no JWT needed** | Files under `/workspace` persist; **shell cwd & env vars reset every call** |
-| **B. BYOC Custom Container** | `custom_container_environment` (`ports`) | `generate_access_token` + `send_command(http_method="POST", path="exec", ...)` OR direct HTTP `/exec` over PSC-E / local Docker | Short-lived sandbox JWT (`roles/iam.serviceAccountTokenCreator` + `roles/aiplatform.user`) or IAM bearer | Container filesystem persists; runner spawns fresh child process per `/exec` |
+| **B. BYOC Custom Container** | `custom_container_environment` (`ports`) | `generate_access_token` + `send_command(http_method="POST", path="exec", ...)` (for custom `env` / `/health`), caller-ADC `execute_bash()` (standard commands without a signing SA), OR direct HTTP `/exec` over PSC-E / local Docker | Short-lived signed JWT (`roles/iam.serviceAccountTokenCreator` + `roles/aiplatform.user`) for `send_command()`; caller ADC for `execute_bash()` or direct HTTP | Container filesystem persists; runner spawns fresh child process per `/exec` |
 | **C. Code Execution** | `code_execution_environment` | `client.sandboxes.execute_code(name, input_data)` or ADK `AgentEngineSandboxCodeExecutor` | Caller ADC/IAM (`roles/aiplatform.user`) | **Yes** — Python/JS variables, imported modules & files persist (TTL resets on each call) |
 | **D. Computer Use** | `DEFAULT_CONTAINER_CATEGORY_COMPUTER_USE` | `send_command` (`/cdp`, `/tabs`, `/`) OR `generate_browser_ws_headers` + Playwright `connect_over_cdp` + noVNC | Short-lived JWT / browser WS headers (`roles/iam.serviceAccountTokenCreator` + `roles/aiplatform.user`) | Browser tabs, cookies, session & disk persist |
 | **E. Custom ADK `BaseEnvironment`** | Shell or BYOC backing `EnvironmentToolset` | Subclass `google.adk.environment.BaseEnvironment` (`execute`, `read_file`, `write_file`) | Delegates to Path A or Path B | Per-session sandbox name stored in `ctx.state` (`EnvironmentScope.SESSION`) |
@@ -60,62 +60,65 @@ if test_res["returncode"] != 0:
 
 Expose a TCP port (e.g., `8080`) on `SandboxEnvironmentTemplate.config.custom_container_environment.ports` and invoke your container runner via either the managed data-plane proxy or private PSC-E ingress:
 
-### Required IAM & Token Paths (`generate_access_token()` vs. ADC Bearer Fallback)
+### Required IAM & Token Paths (`generate_access_token()` vs. Caller-ADC `execute_bash()` Fallback)
 
-- **Signing SA JWT (`generate_access_token`, recommended in production / Agent Runtime):**
-  - Caller holds `roles/aiplatform.user` on the project AND `roles/iam.serviceAccountTokenCreator` on `SERVICE_ACCOUNT_EMAIL` (on Agent Runtime, bind `roles/iam.serviceAccountTokenCreator` on the Custom Runtime SA to itself).
+- **Signing SA JWT (`generate_access_token` + `send_command`, required for custom `env` / `/health` and recommended on Agent Runtime):**
+  - Caller holds `roles/aiplatform.user` on the project AND `roles/iam.serviceAccountTokenCreator` (`iam.serviceAccounts.signJwt`) on `SERVICE_ACCOUNT_EMAIL` (on Agent Runtime, bind `roles/iam.serviceAccountTokenCreator` on the Custom Runtime SA to itself).
   - `SERVICE_ACCOUNT_EMAIL` holds `roles/aiplatform.user` on the project.
   - Audited in Cloud Audit Logs (`DATA_WRITE`) as `AuthorizeSandboxEnvironmentAccess`.
-- **ADC OAuth Bearer Fallback (when `SANDBOX_SERVICE_ACCOUNT_EMAIL` is unset):**
-  - When no dedicated signing SA is configured, obtain a short-lived caller IAM bearer token via `google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])` + `creds.refresh(google.auth.transport.requests.Request())` and pass `creds.token` as `access_token`.
+- **CRITICAL Live Auth Trap — NEVER pass ADC OAuth2 bearer tokens to `send_command()`:**
+  - Managed `client.sandboxes.send_command()` **rejects** standard ADC OAuth2 bearer tokens (`ya29...` from `google.auth.default()`) with HTTP 401 `Unauthorized: Malformed token. Missing or invalid issuer (iss) claim.` — it strictly requires a signed JWT minted by `generate_access_token(service_account_email=...)`. (ADC OAuth2 bearer tokens are valid ONLY on direct HTTP `runner_base_url` proxies, never on Managed `send_command()`.)
+  - When `SANDBOX_SERVICE_ACCOUNT_EMAIL` is unset (e.g., local laptop dev) and no per-exec `env` payload is needed, delegate standard BYOC commands to **`client.sandboxes.execute_bash()`** — verified live to execute against our BYOC `/exec` container (`appuser`) via caller ADC with zero SA signing setup!
 - **CRITICAL `send_command()` Error-Handling Trap (`google-cloud-agentplatform >= 2.10.0`):** `client.sandboxes.send_command()` calls `requests.request(...)` **without** `raise_for_status()` and returns `HttpResponse(headers=..., body=response.text)` even on HTTP 401/403 with an empty `body=""` or plain-text error! Always validate that `response.body` is non-empty JSON (and inspect headers like `www-authenticate` on empty/non-JSON bodies) before calling `json.loads()`.
 
-### Managed Data-Plane Proxy (`generate_access_token` / ADC Fallback + `send_command` + Allowlisted `env`)
+### Managed Data-Plane Proxy (`generate_access_token` + `send_command`) with Caller-ADC Fallback
 
 ```python
 import json
 import os
 import agentplatform
-import google.auth
-from google.auth.transport.requests import Request
 
 client = agentplatform.Client(
     project="PROJECT_ID",
     location="asia-southeast1",
     http_options={"api_version": "v1beta1"},
 )
-sandbox = client.sandboxes.get(name=sandbox_name)
 
-# Mint short-lived data-plane JWT when SANDBOX_SERVICE_ACCOUNT_EMAIL is set; otherwise fall back to ADC bearer
+# Use `generate_access_token` + `send_command` when SANDBOX_SERVICE_ACCOUNT_EMAIL is configured
+# (required for per-exec allowlisted `env` injection or custom GET /health).
+# When unset (local dev), delegate standard commands to caller-ADC `execute_bash()` —
+# NEVER pass a raw ADC OAuth2 token to `send_command()` (rejected with HTTP 401)!
 sa_email = os.environ.get("SANDBOX_SERVICE_ACCOUNT_EMAIL", "").strip()
 if sa_email:
+    sandbox = client.sandboxes.get(name=sandbox_name)
     access_token = client.sandboxes.generate_access_token(service_account_email=sa_email)
-else:
-    creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
-    creds.refresh(Request())
-    access_token = creds.token
-
-# POST /exec on the BYOC container's exposed port (optional allowlisted per-exec `env`)
-request_payload = {
-    "command": "ruff check /workspace && pytest -q",
-    "cwd": "/workspace",
-    "timeout": 60,
-    # Optional: pass ONLY keys allowed by runner.py ALLOWED_EXEC_ENV_KEYS (unknown keys -> HTTP 400)
-    "env": {"GOOGLE_CLOUD_LOCATION": "global"},
-}
-response = client.sandboxes.send_command(
-    http_method="POST",
-    path="exec",
-    access_token=access_token,
-    request_dict=request_payload,
-    sandbox_environment=sandbox,
-)
-raw_body = response.body.decode("utf-8") if isinstance(response.body, bytes) else (response.body or "")
-if not raw_body.strip():
-    raise RuntimeError(
-        f"BYOC send_command returned empty body (check auth headers={getattr(response, 'headers', {})})"
+    request_payload = {
+        "command": "ruff check /workspace && pytest -q",
+        "cwd": "/workspace",
+        "timeout": 60,
+        # Optional: pass ONLY keys allowed by runner.py ALLOWED_EXEC_ENV_KEYS (unknown keys -> HTTP 400)
+        "env": {"GOOGLE_CLOUD_LOCATION": "global"},
+    }
+    response = client.sandboxes.send_command(
+        http_method="POST",
+        path="exec",
+        access_token=access_token,
+        request_dict=request_payload,
+        sandbox_environment=sandbox,
     )
-result = json.loads(raw_body) if isinstance(raw_body, str) else raw_body
+    raw_body = response.body.decode("utf-8") if isinstance(response.body, bytes) else (response.body or "")
+    if not raw_body.strip():
+        raise RuntimeError(
+            f"BYOC send_command returned empty body (check auth headers={getattr(response, 'headers', {})})"
+        )
+    result = json.loads(raw_body) if isinstance(raw_body, str) else raw_body
+else:
+    result = client.sandboxes.execute_bash(
+        name=sandbox_name,
+        command="ruff check /workspace && pytest -q",
+        cwd="/workspace",
+        timeout=60,
+    )
 print(result["returncode"], result["stdout"], result["stderr"])
 ```
 

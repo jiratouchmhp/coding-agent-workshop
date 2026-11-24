@@ -15,7 +15,9 @@ Verified Platform Rules & Gotchas:
 - ``user_id`` max length is **128 characters**.
 - Custom ``session_id`` starting with a letter: up to **63 chars** ``[a-z0-9-]``
   ending with a letter/digit; starting with a digit: up to **9 chars** ``[0-9]``
-  with no leading zeros.
+  with no leading zeros. NOTE: Vertex AI Memory Bank ``vertex_session_source``
+  requires **server-generated numeric session IDs** (omit ``session_id`` in
+  ``create_session()``) and returns HTTP 404 for custom string session IDs.
 - Default TTL is **365 days** if neither ``ttl`` nor ``expire_time`` is set.
 - IAM Conditions use ``api.getAttribute('aiplatform.googleapis.com/sessionUserId', '')``
   (max **1,500** unique principals; ``ListSessions`` does **not** support IAM Conditions).
@@ -383,12 +385,15 @@ class SessionLifecycleManager:
         ttl_days: int = DEFAULT_SESSION_TTL_DAYS,
         keep_session: bool = False,
     ) -> SessionDemoReport:
-        """Run an end-to-end Managed Sessions create -> append -> list -> get -> delete demo."""
+        """Run an end-to-end Managed Sessions create -> append -> list -> get -> delete demo.
+
+        Omit ``session_id`` (default ``None``) to obtain a server-generated numeric session ID
+        that works seamlessly with Memory Bank ``vertex_session_source``.
+        """
         runtime_name = self.ensure_parent_runtime()
-        effective_session_id = session_id or f"workshop-sess-{uuid.uuid4().hex[:8]}"
         session_name = self.create_session(
             user_id=user_id,
-            session_id=effective_session_id,
+            session_id=session_id,
             ttl_days=ttl_days,
         )
 

@@ -52,16 +52,17 @@ into starter/ without spoiling later labs' # TODO(lab-N) checkpoints:
               terraform/terraform.tfvars.example
   6    Lab 6: eval/{run_offline_eval,run_simulated_eval,setup_online_monitor,
               setup_quality_alerts,optimize_prompt}.py
-  8    Lab 8: gke_reference/{gke_agent_example.py,rbac.yaml,
-              sandbox_template.yaml,sandbox_warmpool.yaml}
+  8    Module 8 (Read-Only Architecture Information Guide): starter/gke_reference/
+       manifests are already complete (no coding lab, no live cluster); running
+       LAB=8 re-syncs them idempotently from solution/gke_reference/ without error
   all  Run core Labs 1, 2, 3, 4, 5, and 6 in sequence
-       (leaves Optional Lab 7 untouched; run LAB=8 separately for GKE reference)
+       (Optional Lab 7 has no starter stubs; Module 8 reference manifests are already complete)
 
 Options:
   --dry-run        Preview exact files to copy and functions/imports to splice
                    without modifying any file on disk
   --with-prereqs   Also fast-forward prerequisite labs 1..(N-1) before Lab N
-                   (for Lab 8, fast-forwards core Labs 1-6 first)
+                   (for Module 8, fast-forwards core Labs 1-6 first and verifies starter/gke_reference/)
   --force          Explicitly overwrite starter/ files without confirmation
   -h, --help       Show this help message
 EOF
@@ -173,6 +174,36 @@ copy_solution_file() {
   mkdir -p "$(dirname "${dst}")"
   cp "${src}" "${dst}"
   ok "Copied solution/${rel_path} -> starter/${rel_path}"
+}
+
+sync_reference_file_idempotent() {
+  local rel_path="$1"
+  local src="${REPO_ROOT}/solution/${rel_path}"
+  local dst="${REPO_ROOT}/starter/${rel_path}"
+
+  if [[ ! -f "${src}" ]]; then
+    fail "Missing source file in solution/: ${src}"
+    return 1
+  fi
+
+  if [[ -f "${dst}" ]] && cmp -s "${src}" "${dst}"; then
+    ok "Already up-to-date (no changes needed): starter/${rel_path}"
+    return 0
+  fi
+
+  if [[ "${FORCE}" -eq 0 && -s "${dst}" ]] && ! grep -q "TODO(lab-8)" "${dst}"; then
+    ok "Already complete (read-only reference, no changes needed; pass --force to overwrite from solution/): starter/${rel_path}"
+    return 0
+  fi
+
+  if [[ "${DRY_RUN}" -eq 1 ]]; then
+    info "[DRY-RUN] Sync solution/${rel_path} -> starter/${rel_path}"
+    return 0
+  fi
+
+  mkdir -p "$(dirname "${dst}")"
+  cp "${src}" "${dst}"
+  ok "Synced solution/${rel_path} -> starter/${rel_path}"
 }
 
 splice_agent_py() {
@@ -695,11 +726,14 @@ fast_forward_lab() {
       copy_solution_file "eval/optimize_prompt.py"
       ;;
     8)
-      section "Fast-Forward Lab 8 (Self-Hosted GKE Agent Sandbox Reference Overlay)"
-      copy_solution_file "gke_reference/gke_agent_example.py"
-      copy_solution_file "gke_reference/rbac.yaml"
-      copy_solution_file "gke_reference/sandbox_template.yaml"
-      copy_solution_file "gke_reference/sandbox_warmpool.yaml"
+      section "Module 8 (Read-Only Architecture Information Guide — GKE Reference Manifests)"
+      info "Module 8 is a read-only Architecture Information Guide (no coding lab, no live cluster)."
+      info "The GKE reference manifests in starter/gke_reference/ are already complete out of the box."
+      info "Verifying and syncing starter/gke_reference/ idempotently from solution/gke_reference/..."
+      sync_reference_file_idempotent "gke_reference/gke_agent_example.py"
+      sync_reference_file_idempotent "gke_reference/rbac.yaml"
+      sync_reference_file_idempotent "gke_reference/sandbox_template.yaml"
+      sync_reference_file_idempotent "gke_reference/sandbox_warmpool.yaml"
       ;;
     *)
       fail "Unsupported lab target: ${lab}"
@@ -710,6 +744,9 @@ fast_forward_lab() {
 
 warn_unresolved_prereqs() {
   local target_lab="$1"
+  if [[ "${target_lab}" == "8" ]]; then
+    return 0
+  fi
   local missing_labs
   missing_labs="$(python3 - "${REPO_ROOT}/starter" "${target_lab}" <<'PYEOF'
 import sys
@@ -764,9 +801,9 @@ if [[ "${TARGET}" == "all" ]]; then
     fast_forward_lab "${core_lab}"
   done
   printf "\n"
-  info "Note: Optional Lab 7 (Enterprise Security & Governance Hardening) was left untouched."
-  info "      To also fast-forward Lab 8 (GKE Agent Sandbox overlay), run:"
-  info "        ./scripts/fast_forward_lab.sh 8   (or: make fast-forward LAB=8)"
+  info "Note: Optional Lab 7 (Enterprise Security & Governance Hardening) has no starter stubs."
+  info "      Module 8 (Architecture Information Guide) starter/gke_reference/ manifests are"
+  info "      already complete and read-only (verify anytime with: make verify-lab LAB=8)."
 elif [[ "${WITH_PREREQS}" -eq 1 ]]; then
   if [[ "${TARGET}" == "8" ]]; then
     for prereq_lab in 1 2 3 4 5 6 8; do
@@ -788,6 +825,6 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
   printf "Re-run without --dry-run to apply changes to starter/.\n"
 else
   printf "Fast-forward complete (target=%s).\n" "${TARGET}"
-  printf "Next step: ./scripts/verify_lab.sh %s --track starter\n" "${TARGET}"
+  printf "Next step: make verify-lab LAB=%s  (or: ./scripts/verify_lab.sh %s --track starter)\n" "${TARGET}" "${TARGET}"
 fi
 printf "=============================================================================\n"

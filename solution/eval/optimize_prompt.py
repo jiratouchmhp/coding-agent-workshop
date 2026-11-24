@@ -646,14 +646,24 @@ def _build_reference_commands(
     agent_registry_skills_location: str = "global",
     runtime_name: str,
     skill_id: str,
+    skill_dir: Path | str | None = None,
 ) -> dict[str, Any]:
     proj = project_id or "PROJECT_ID"
     target_engine = (
         runtime_name
         or f"projects/{proj}/locations/{location}/reasoningEngines/ENGINE_ID"
     )
+    raw_create_id = skill_id.removeprefix("private-")
     private_skill_id = skill_id if skill_id.startswith("private-") else f"private-{skill_id}"
     skills_loc_expr = f"${{AGENT_REGISTRY_SKILLS_LOCATION:-{agent_registry_skills_location}}}"
+    if skill_dir is not None:
+        resolved_dir = Path(skill_dir).resolve()
+        try:
+            skill_dir_display = resolved_dir.relative_to(TRACK_ROOT.resolve()).as_posix()
+        except ValueError:
+            skill_dir_display = str(skill_dir)
+    else:
+        skill_dir_display = f"skills_to_register/{raw_create_id}"
     return {
         "working_directory": f"{track_name}/",
         "adk_optimize_cli": (
@@ -669,7 +679,7 @@ def _build_reference_commands(
         ),
         "gepa_skills_optimize_cmd": (
             f"uv run python eval/optimize_prompt.py --optimizer gepa-skills "
-            f"--skill-dir skills_to_register/{skill_id} --iterations 2 --batch-size 4"
+            f"--skill-dir {skill_dir_display} --iterations 2 --batch-size 4"
         ),
         "agents_cli_eval_optimize": (
             "agents-cli eval optimize --dataset eval/datasets/coding_agent_single_turn.json "
@@ -693,11 +703,11 @@ def _build_reference_commands(
         ),
         "skill_registry_package_zip": (
             f"python3 ../scripts/package_registry_skill.py "
-            f"skills_to_register/{skill_id} --output ../dist/{skill_id}.zip"
+            f"{skill_dir_display} --output ../dist/{skill_id}.zip"
         ),
         "skill_registry_hot_update_cli": (
             f"uv run python eval/optimize_prompt.py --publish-skill "
-            f"--skill-dir skills_to_register/{skill_id} --skill-id {skill_id} "
+            f"--skill-dir {skill_dir_display} --skill-id {skill_id} "
             f"--skill-location {skill_location}"
         ),
         "skill_registry_update_rest": (
@@ -708,9 +718,9 @@ def _build_reference_commands(
             f'"https://{skill_location}-aiplatform.googleapis.com/v1beta1/projects/{proj}/locations/{skill_location}/skills/{skill_id}?updateMask=displayName,description,zippedFilesystem"'
         ),
         "agent_registry_skill_create": (
-            f"gcloud alpha agent-registry skills create {skill_id} "
+            f"gcloud alpha agent-registry skills create {raw_create_id} "
             f'--project={proj} --location="{skills_loc_expr}" '
-            "--target-state=active --scanning-policy=enabled-nonblocking"
+            "--scanning-policy=enabled-nonblocking"
         ),
         "agent_registry_revision_create_rev1": (
             f"gcloud alpha agent-registry skills revisions create rev-1 "
@@ -906,6 +916,7 @@ def main(argv: list[str] | None = None) -> int:
         agent_registry_skills_location=agent_registry_skills_location,
         runtime_name=runtime_name,
         skill_id=args.skill_id,
+        skill_dir=skill_dir,
     )
 
     if args.publish_skill:

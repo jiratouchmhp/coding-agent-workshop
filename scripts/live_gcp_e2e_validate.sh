@@ -45,7 +45,7 @@ AGENT_REG_SKILLS_LOC="${AGENT_REGISTRY_SKILLS_LOCATION:-global}"
 AGENT_PLATFORM_LOC="asia-southeast1"
 SKILL_REG_LOC="us-central1"
 EVAL_LOC="global"
-AR_REPO="coding-agent-repo"
+AR_REPO="${AR_REPO:-${AR_REPOSITORY:-coding-agent-repo}}"
 TRACK="solution"
 
 usage() {

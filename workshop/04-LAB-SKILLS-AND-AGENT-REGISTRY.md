@@ -17,7 +17,7 @@ In this lab, you'll validate and publish the `secure-code-review` skill to Googl
 
 **Already built for you (no edits needed):** The ready-made skill package in [`starter/skills_to_register/secure-code-review/`](../starter/skills_to_register/secure-code-review/SKILL.md) (including [`references/owasp-checklist.md`](../starter/skills_to_register/secure-code-review/references/owasp-checklist.md)), plus `GoogleApiAuth`, `OidcIdTokenAuth`, `make_google_auth_header_provider`, `discover_agent_registry_catalog`, and `SkillRegistryPublisher`'s `list_skills`, `update_skill`, `search_skills`, and revision helpers in `registry_loader.py`.
 
-**Stuck or catching up?** Ask your IDE agent with [`.agents/skills/agent-platform-governance-and-registries/SKILL.md`](../.agents/skills/agent-platform-governance-and-registries/SKILL.md), or run `make fast-forward LAB=4` to sync only Lab 4 without spoiling Labs 5-8.
+**Stuck or catching up?** Ask your IDE agent with [`.agents/skills/agent-platform-governance-and-registries/SKILL.md`](../.agents/skills/agent-platform-governance-and-registries/SKILL.md), or run `make fast-forward LAB=4` to sync only Lab 4 without spoiling Labs 5-6.
 
 ---
 
@@ -57,81 +57,111 @@ You'll edit three functions here: publishing a skill directory to Vertex AI Skil
 <summary>Stuck? Peek at the code</summary>
 
 ```python
-# Replace # TODO(lab-4) in SkillRegistryPublisher.create_skill():
-try:
-    return self.client.skills.create(
-        skill_id=skill_id,
-        display_name=display_name,
-        description=description,
-        config={"local_path": str(resolved)},
-    )
-except TypeError:
-    return self.client.skills.create(
-        display_name=display_name,
-        description=description,
-        config={"skill_id": skill_id, "local_path": str(resolved)},
+# Replace # TODO(lab-4) in SkillRegistryPublisher.create_skill() (indent 8 spaces):
+        try:
+            return self.client.skills.create(
+                skill_id=skill_id,
+                display_name=display_name,
+                description=description,
+                config={"local_path": str(resolved)},
+            )
+        except TypeError:
+            return self.client.skills.create(
+                display_name=display_name,
+                description=description,
+                config={"skill_id": skill_id, "local_path": str(resolved)},
+            )
+```
+
+```python
+# Replace # TODO(lab-4) in build_skill_registry_toolset() (indent 4 spaces):
+    from google.adk.skills import load_skill_from_dir
+    from google.adk.tools.skill_toolset import (
+        SkillDiscoveryMode,
+        SkillLifecycleConfig,
+        SkillLifecycleMode,
+        SkillToolset,
     )
 
-# Replace # TODO(lab-4) in build_skill_registry_toolset():
-from google.adk.skills import load_skill_from_dir
-from google.adk.tools.skill_toolset import (
-    SkillDiscoveryMode, SkillLifecycleConfig, SkillLifecycleMode, SkillToolset,
-)
+    local_skills = [load_skill_from_dir(Path(d)) for d in (local_skill_dirs or []) if Path(d).exists()]
+    registry: Any | None = None
+    if enable_remote_registry and project_id and location:
+        try:
+            from google.adk.integrations.skill_registry import GCPSkillRegistry
 
-local_skills = [load_skill_from_dir(Path(d)) for d in (local_skill_dirs or []) if Path(d).exists()]
-registry: Any | None = None
-if enable_remote_registry and project_id and location:
+            registry = GCPSkillRegistry(project_id=project_id, location=location)
+        except Exception as exc:
+            logger.warning(
+                "GCPSkillRegistry unavailable (%s); falling back to %d local skill(s).",
+                exc,
+                len(local_skills),
+            )
+
+    toolset_kwargs: dict[str, Any] = {
+        "skills": local_skills,
+        "registry": registry,
+        "discovery_mode": discovery_mode if discovery_mode is not None else SkillDiscoveryMode.LAZY,
+        "lifecycle_config": SkillLifecycleConfig(
+            default_mode=SkillLifecycleMode.BOUNDED,
+            max_active_skills=max_active_skills,
+        ),
+    }
+    if environment is not None:
+        toolset_kwargs["environment"] = environment
+    elif code_executor is not None:
+        toolset_kwargs["code_executor"] = code_executor
+    return SkillToolset(**toolset_kwargs)
+```
+
+```python
+# Replace # TODO(lab-4) in build_agent_registry_integrations() (indent 4 spaces):
     try:
-        from google.adk.integrations.skill_registry import GCPSkillRegistry
-        registry = GCPSkillRegistry(project_id=project_id, location=location)
-    except Exception as exc:
-        logger.warning("GCPSkillRegistry unavailable (%s); falling back to %d local skill(s).", exc, len(local_skills))
+        from google.adk.integrations.agent_registry import AgentRegistry
+    except ImportError as exc:
+        raise ImportError(
+            'Install ADK extras: pip install --upgrade "google-adk[a2a,agent-identity,mcp]>=2.0.0"'
+        ) from exc
 
-toolset_kwargs: dict[str, Any] = {
-    "skills": local_skills,
-    "registry": registry,
-    "discovery_mode": discovery_mode if discovery_mode is not None else SkillDiscoveryMode.LAZY,
-    "lifecycle_config": SkillLifecycleConfig(
-        default_mode=SkillLifecycleMode.BOUNDED, max_active_skills=max_active_skills,
-    ),
-}
-if environment is not None:
-    toolset_kwargs["environment"] = environment
-elif code_executor is not None:
-    toolset_kwargs["code_executor"] = code_executor
-return SkillToolset(**toolset_kwargs)
+    if register_auth_provider:
+        from google.adk.auth.credential_manager import CredentialManager
+        from google.adk.integrations.agent_identity import GcpAuthProvider
 
-# Replace # TODO(lab-4) in build_agent_registry_integrations():
-try:
-    from google.adk.integrations.agent_registry import AgentRegistry
-except ImportError as exc:
-    raise ImportError(
-        'Install ADK extras: pip install --upgrade "google-adk[a2a,agent-identity,mcp]>=2.0.0"'
-    ) from exc
+        CredentialManager.register_auth_provider(GcpAuthProvider())
 
-if register_auth_provider:
-    from google.adk.auth.credential_manager import CredentialManager
-    from google.adk.integrations.agent_identity import GcpAuthProvider
-    CredentialManager.register_auth_provider(GcpAuthProvider())
-
-registry = AgentRegistry(project_id=project_id, location=location, header_provider=header_provider)
-result: dict[str, Any] = {
-    "registry": registry, "mcp_toolset": None, "remote_agent": None, "agents": [], "mcp_servers": [],
-}
-if discover_catalog:
-    catalog = discover_agent_registry_catalog(registry)
-    result["agents"], result["mcp_servers"] = catalog["agents"], catalog["mcp_servers"]
-if mcp_server_name:
-    mcp_kwargs = {"continue_uri": continue_uri} if continue_uri is not None else {}
-    result["mcp_toolset"] = registry.get_mcp_toolset(mcp_server_name, **mcp_kwargs)
-if remote_a2a_agent_name:
-    auth_handler: httpx.Auth = OidcIdTokenAuth(a2a_audience) if a2a_audience else GoogleApiAuth(project_id)
-    httpx_client = httpx.AsyncClient(auth=auth_handler, timeout=httpx.Timeout(httpx_timeout_seconds))
-    a2a_kwargs: dict[str, Any] = {"httpx_client": httpx_client}
-    if continue_uri is not None:
-        a2a_kwargs["continue_uri"] = continue_uri
-    result["remote_agent"] = registry.get_remote_a2a_agent(remote_a2a_agent_name, **a2a_kwargs)
-return result
+    registry = AgentRegistry(
+        project_id=project_id,
+        location=location,
+        header_provider=header_provider,
+    )
+    result: dict[str, Any] = {
+        "registry": registry,
+        "mcp_toolset": None,
+        "remote_agent": None,
+        "agents": [],
+        "mcp_servers": [],
+    }
+    if discover_catalog:
+        catalog = discover_agent_registry_catalog(registry)
+        result["agents"], result["mcp_servers"] = catalog["agents"], catalog["mcp_servers"]
+    if mcp_server_name:
+        mcp_kwargs = {"continue_uri": continue_uri} if continue_uri is not None else {}
+        result["mcp_toolset"] = registry.get_mcp_toolset(mcp_server_name, **mcp_kwargs)
+    if remote_a2a_agent_name:
+        auth_handler: httpx.Auth = (
+            OidcIdTokenAuth(a2a_audience) if a2a_audience else GoogleApiAuth(project_id)
+        )
+        httpx_client = httpx.AsyncClient(
+            auth=auth_handler,
+            timeout=httpx.Timeout(httpx_timeout_seconds),
+        )
+        a2a_kwargs: dict[str, Any] = {"httpx_client": httpx_client}
+        if continue_uri is not None:
+            a2a_kwargs["continue_uri"] = continue_uri
+        result["remote_agent"] = registry.get_remote_a2a_agent(
+            remote_a2a_agent_name,
+            **a2a_kwargs,
+        )
+    return result
 ```
 
 </details>
@@ -156,7 +186,7 @@ Vertex AI Skill Registry preview runs in `us-central1` (alongside `europe-west4`
 > 2. **Don't delete and immediately recreate the same `SKILL_ID`.** Deleted IDs are locked out for at least 24 hours (and Create docs warn permanently). Pick a fresh suffix like `secure-code-review-v2` if you need to re-test creation.
 
 ```bash
-source .env
+set -a && source .env && set +a
 export SKILL_REGISTRY_LOCATION="${SKILL_REGISTRY_LOCATION:-us-central1}"
 
 (cd starter && uv run python -m coding_agent.tools.registry_loader publish-skill \
@@ -178,7 +208,7 @@ Expected output: `publish-skill` prints `created_skill`, `list-skills --warmup` 
 
 ADK's live `GCPSkillRegistry` queries Agent Registry standalone skills in `global` (`AGENT_REGISTRY_SKILLS_LOCATION=global`), not Vertex AI Skill Registry in `us-central1`. Run these three `gcloud alpha` commands if you want your live agent to download `private-secure-code-review` remotely from Agent Registry (otherwise your local fallback copy handles it offline).
 
-Watch three CLI quirks: create the bare skill shell first without `--payload` (passing `--payload` on `skills create` fails with `400 source is required`), use `--scanning-policy=enabled-nonblocking` so you don't block on async scanning during the workshop, and pass `--target-state=active` when promoting `rev-1` (leaving a skill in `DRAFT` makes `GCPSkillRegistry.get_skill()` return HTTP 400).
+Watch three CLI quirks: create the bare skill shell first without `--payload` (passing `--payload` on `skills create` fails with `400 source is required`), use `--scanning-policy=enabled-nonblocking` so you don't block on async scanning during the workshop, and pass `--target-state=active` when promoting `rev-1` (leaving a skill in `DRAFT` makes `GCPSkillRegistry.get_skill()` return HTTP 400). (If you also run Optional Lab 7 Step 1 later, use a fresh skill ID such as `secure-code-review-blocking` there to avoid `ALREADY_EXISTS`.)
 
 ```bash
 export AGENT_REGISTRY_SKILLS_LOCATION="${AGENT_REGISTRY_SKILLS_LOCATION:-global}"
@@ -222,18 +252,18 @@ Connect `build_skill_registry_toolset()` inside `agent.py` so enabling `ENABLE_S
 <summary>Stuck? Peek at the code</summary>
 
 ```python
-# Replace # TODO(lab-4) in _build_optional_skill_toolset():
-from coding_agent.tools.registry_loader import build_skill_registry_toolset
+# Replace # TODO(lab-4) in _build_optional_skill_toolset() (indent 4 spaces):
+    from coding_agent.tools.registry_loader import build_skill_registry_toolset
 
-local_skill_dir = Path(__file__).resolve().parents[1] / "skills_to_register" / "secure-code-review"
-local_dirs = [local_skill_dir] if local_skill_dir.exists() else []
-return build_skill_registry_toolset(
-    project_id=settings.google_cloud_project or None,
-    location=settings.agent_registry_skills_location or "global",
-    local_skill_dirs=local_dirs,
-    environment=environment,
-    enable_remote_registry=bool(settings.google_cloud_project),
-)
+    local_skill_dir = Path(__file__).resolve().parents[1] / "skills_to_register" / "secure-code-review"
+    local_dirs = [local_skill_dir] if local_skill_dir.exists() else []
+    return build_skill_registry_toolset(
+        project_id=settings.google_cloud_project or None,
+        location=settings.agent_registry_skills_location or "global",
+        local_skill_dirs=local_dirs,
+        environment=environment,
+        enable_remote_registry=bool(settings.google_cloud_project),
+    )
 ```
 
 </details>

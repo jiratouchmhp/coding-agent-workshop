@@ -1,4 +1,11 @@
-"""Self-Hosted GKE Agent Sandbox ADK Integration Example (Solution Track).
+"""Module 8 Architecture Guide — Read-Only GKE Agent Sandbox ADK Reference Example (Solution Track).
+
+Ready-to-inspect complete reference implementation for the Module 8 Architecture
+Guide (``workshop/08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md``), matching
+``starter/gke_reference/gke_agent_example.py``. No coding exercises and no live
+GKE cluster are required during this workshop — run
+``python gke_reference/gke_agent_example.py --mode inspect`` to inspect the
+resolved configuration offline.
 
 Demonstrates swapping Gemini Enterprise Agent Platform's managed
 ``AgentEngineSandboxCodeExecutor`` (Lab 2) for ADK's ``GkeCodeExecutor`` in
@@ -227,15 +234,18 @@ def run_warmpool_sdk_smoke_test(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry point for inspecting or exercising the GKE reference overlay."""
+    """CLI entry point for inspecting the Module 8 GKE reference overlay offline."""
     parser = argparse.ArgumentParser(
-        description="GKE Agent Sandbox ADK integration example (Lab 8 comparison track)."
+        description=(
+            "GKE Agent Sandbox ADK integration example "
+            "(Module 8 Architecture Guide — read-only reference)."
+        )
     )
     parser.add_argument(
         "--mode",
         choices=("inspect", "adk-agent", "direct-exec", "warmpool-sdk"),
         default="inspect",
-        help="Execution mode (default: inspect config without connecting to a GKE cluster).",
+        help="Execution mode (default: inspect config offline without a live GKE cluster).",
     )
     parser.add_argument(
         "--code",

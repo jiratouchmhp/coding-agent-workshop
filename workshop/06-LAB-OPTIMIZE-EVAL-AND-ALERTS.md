@@ -2,7 +2,7 @@
 
 Your coding agent is live on Agent Runtime and emitting OpenTelemetry traces. In this lab you'll grade it with split offline datasets and simulated users, validate telemetry for Online Evaluation Monitors, build Cloud Monitoring quality alerts, and close the loop with automated prompt and skill updates.
 
-**Duration:** 40 min (Full-Day) | 15 min (Fast-Track Instructor Demo) | **Previous:** [Lab 5: Deploy on Agent Runtime](./05-LAB-DEPLOY-RUNTIME-TERRAFORM.md) | **Next:** [Lab 7 (Optional): Security & Governance](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md) or [Lab 8: Agent Runtime vs. GKE](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md)
+**Duration:** 40 min (Full-Day) | 15 min (Fast-Track Instructor Demo) | **Previous:** [Lab 5: Deploy on Agent Runtime](./05-LAB-DEPLOY-RUNTIME-TERRAFORM.md) | **Next:** [Lab 7 (Optional): Security & Governance](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md) or [Architecture Guide: Agent Runtime vs. GKE](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md)
 
 ## Files You Will Edit
 
@@ -16,7 +16,7 @@ Your coding agent is live on Agent Runtime and emitting OpenTelemetry traces. In
 
 **Already built for you (no edits needed):** [starter/eval/eval_config.yaml](../starter/eval/eval_config.yaml), [starter/eval/sampler_config.json](../starter/eval/sampler_config.json), [starter/coding_agent/train_eval_set.evalset.json](../starter/coding_agent/train_eval_set.evalset.json), datasets in [starter/eval/datasets/](../starter/eval/datasets/) (`coding_agent_single_turn.json`, `coding_agent_multi_turn.json`, `coding_agent_eval.jsonl`), plus `expand_agent_toolsets()`, `build_eval_client()`, `register_custom_coding_metrics()`, `grade_simulated_traces()`, `cluster_simulation_failures()`, `build_online_monitor_spec()`, `verify_deployed_runtime()`, `create_alert_policy()`, `fetch_negative_feedback()`, and `build_adk_sampler_and_optimizer()`.
 
-**Need a hand or fell behind?** Ask Antigravity to use [`.agents/skills/agent-platform-optimize-and-eval`](../.agents/skills/agent-platform-optimize-and-eval/SKILL.md), or run `make fast-forward LAB=6` to sync Lab 6 from `solution/` without touching Lab 8.
+**Need a hand or fell behind?** Ask Antigravity to use [`.agents/skills/agent-platform-optimize-and-eval`](../.agents/skills/agent-platform-optimize-and-eval/SKILL.md), or run `make fast-forward LAB=6` to sync Lab 6 from `solution/`.
 
 ---
 
@@ -74,6 +74,7 @@ def evaluate_split_datasets(
         )
     return results
 
+
 def run_loss_clustering(project_id: str, eval_result: Any, metric_name: str = "multi_turn_task_success") -> Any:
     types = get_eval_types()
     metric_map = {
@@ -118,6 +119,7 @@ agents-cli eval grade --traces eval/datasets/coding_agent_multi_turn.json \
 Static tests miss bugs that show up when a developer pastes a traceback on turn 2 or embeds prompt injection in a PR comment. Here you'll synthesize personas from your agent's instructions and tools, then let the User Simulator LLM run multi-turn sessions capped at `max_turn`. Downstream grading (`grade_simulated_traces()`) and clustering (`cluster_simulation_failures()`) are pre-filled.
 
 - **Toolset quirk:** `types.evals.AgentInfo.load_from_agent()` crashes with `TypeError` on raw ADK `BaseToolset` objects (`EnvironmentToolset`, `SkillToolset`). Call the pre-filled `expand_agent_toolsets(agent)` before passing the agent to `load_from_agent()` and `run_inference()`.
+- **ADK 2.15 trailing `end_of_agent` event quirk:** ADK 2.15 emits a final `end_of_agent` event with `content=None`, which `agentplatform==2.10.0` appends into `turns[*].events` and Vertex AI Evaluation Service rejects with HTTP 400 (`Required field is not set` on `events[*].content`). Pre-filled `grade_simulated_traces()` strips empty-content events before calling `client.evals.evaluate()`. Always check `summary_metrics` for `num_cases_valid > 0` and `num_cases_error == 0`.
 - **`generate_scenarios()`:** Load `agent_info = types.evals.AgentInfo.load_from_agent(agent=prepared_agent)` and call `client.evals.generate_conversation_scenarios(...)`.
 - **`run_user_simulation()`:** Call `client.evals.run_inference(agent=prepared_agent, src=scenario_dataset, config={"user_simulator_config": {"max_turn": max_turns}})`.
 
@@ -136,6 +138,7 @@ def generate_scenarios(
         agent_info=agent_info,
         config={"count": count, "generation_instruction": generation_instruction, "environment_context": environment_context},
     )
+
 
 def run_user_simulation(client: Any, agent: Any, scenario_dataset: Any, *, max_turns: int = 5) -> Any:
     return client.evals.run_inference(
@@ -156,7 +159,7 @@ Full reference file: [`solution/eval/run_simulated_eval.py`](../solution/eval/ru
 make eval-simulated
 ```
 
-Expected output: `--dry-run` prints `count: 5` and `max_turn: 5` in `global`; `make eval-simulated` prints multi-turn `summary_metrics` and `loss_clusters`.
+Expected output: `--dry-run` prints `count: 5` and `max_turn: 5` in `global`; `make eval-simulated` prints multi-turn `summary_metrics` (verify `num_cases_valid > 0` and `num_cases_error == 0`) and `loss_clusters`.
 
 ---
 
@@ -221,7 +224,7 @@ Full reference file: [`solution/eval/setup_online_monitor.py`](../solution/eval/
 **Check it works:**
 
 ```bash
-source .env
+set -a && source .env && set +a
 (cd starter && uv run python eval/setup_online_monitor.py --verify-runtime --strict-env)
 ```
 
@@ -321,6 +324,7 @@ async def run_prompt_optimization(
     iterations: int = 2, batch_size: int = 4, optimizer_model: str = "gemini-4-hydrogen", skill_dir: Path | None = None,
 ) -> dict[str, Any]:
     from coding_agent.agent import root_agent
+
     orig_inst = _extract_root_instruction(root_agent, agent_architecture=get_settings().agent_architecture)
     target = _attach_local_skill_for_gepa(root_agent, skill_dir) if optimizer_choice == "gepa-skills" else root_agent
     sampler, optimizer = build_adk_sampler_and_optimizer(
@@ -367,11 +371,13 @@ async def run_prompt_optimization(
         "optimized_skills": opt_skills,
     }
 
+
 def publish_updated_skill(
     *, project_id: str, skill_location: str, skill_id: str, skill_dir: Path,
     display_name: str | None = None, description: str | None = None, zip_output_path: Path | None = None, dry_run: bool = False,
 ) -> dict[str, Any]:
     import subprocess
+
     resolved = skill_dir.resolve()
     if not resolved.is_dir() or not (resolved / "SKILL.md").is_file():
         raise ValueError(f"local_path must be a skill directory containing SKILL.md: {resolved}")
@@ -396,6 +402,7 @@ def publish_updated_skill(
         }
     os.environ["GOOGLE_GENAI_USE_ENTERPRISE"] = "TRUE"
     import agentplatform
+
     client = agentplatform.Client(project=project_id, location=skill_location)
     updated = client.skills.update(
         name=res_name,
@@ -426,7 +433,7 @@ Full reference file: [`solution/eval/optimize_prompt.py`](../solution/eval/optim
 (cd starter && GOOGLE_CLOUD_LOCATION="${MODEL_LOCATION:-global}" uv run python eval/optimize_prompt.py --iterations 2 --batch-size 4)
 ```
 
-To push an approved skill edit with zero container rebuild, run `--publish-skill` (Vertex AI Skill Registry in `us-central1`) or promote `rev-2` in Agent Registry (`global`):
+To push an approved skill edit with zero container rebuild, run `--publish-skill` (Vertex AI Skill Registry in `us-central1`; pass both `--skill-dir` and `--skill-id` if you used a custom Lab 4 skill ID) or promote `rev-2` in Agent Registry (`global`; omit `--target-state=active` on initial `skills create` and set it on `skills update --default-revision=...`):
 
 ```bash
 # Option A: Vertex AI Skill Registry hot-update (us-central1)
@@ -456,7 +463,7 @@ make verify-lab LAB=6
 This checks all 5 scripts in `starter/eval/` for zero `# TODO(lab-6)` markers, dataset separation, `SAFETY(version="v1")`, `global` loss clustering, `ALIGN_PERCENTILE_50`, and all 6 `--dry-run` / `--strict-env` smoke passes.
 
 - **Security & Governance track:** Continue to [Lab 7 (Optional): Enterprise Security & Governance Hardening](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md).
-- **Fast-Track / Architecture track:** Skip Lab 7 cleanly and jump to [Lab 8: Agent Runtime vs. Self-Hosted GKE](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md).
+- **Fast-Track / Architecture track:** Skip Lab 7 cleanly and read [Architecture Guide: Agent Runtime vs. Self-Hosted GKE](./08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) (read-only briefing, no coding lab, no live cluster).
 - **Finished with the workshop?** Run `make cleanup` from the repo root to delete sandboxes, alert policies, and Agent Runtime instances.
 
 ---

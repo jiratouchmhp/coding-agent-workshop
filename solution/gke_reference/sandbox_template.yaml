@@ -1,4 +1,8 @@
-# GKE Agent Sandbox Reference Overlay — SandboxTemplate (Solution Track)
+# Module 8 Architecture Guide — Read-Only GKE Agent Sandbox Reference Manifest (SandboxTemplate — Solution Track)
+#
+# Ready-to-inspect complete, hardened reference manifest for the Module 8 Architecture Guide
+# (`workshop/08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md`), matching `starter/gke_reference/sandbox_template.yaml`.
+# No coding exercises and no live GKE cluster are required during this workshop.
 #
 # Install Kubernetes SIG Apps `agent-sandbox` v1.0.6 first (CRDs + controller + router):
 #   export AGENT_SANDBOX_VERSION="v1.0.6"

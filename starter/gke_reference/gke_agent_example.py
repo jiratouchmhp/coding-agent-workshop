@@ -1,4 +1,10 @@
-"""Self-Hosted GKE Agent Sandbox ADK Integration Example (Starter Track).
+"""Module 8 Architecture Guide — Read-Only GKE Agent Sandbox ADK Reference Example.
+
+Ready-to-inspect complete reference implementation for the Module 8 Architecture
+Guide (``workshop/08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md``). No coding exercises
+and no live GKE cluster are required during this workshop — run
+``python gke_reference/gke_agent_example.py --mode inspect`` to inspect the
+resolved configuration offline.
 
 Demonstrates swapping Gemini Enterprise Agent Platform's managed
 ``AgentEngineSandboxCodeExecutor`` (Lab 2) for ADK's ``GkeCodeExecutor`` in
@@ -21,15 +27,17 @@ the standalone ``k8s-agent-sandbox==1.0.6`` warm-pool SDK in separate virtual en
 until ADK migrates to ``k8s-agent-sandbox`` v1.x.
 
 Production namespace note:
-The workshop defaults to ``agent-sandbox-system`` for single-namespace convenience, but
-``secure-sandbox-policy`` ValidatingAdmissionPolicy excludes controller namespaces by
-default. For production clusters, deploy templates/warm pools/RBAC into a dedicated
-non-system workload namespace (e.g., ``GKE_SANDBOX_NAMESPACE=coding-sandboxes``).
+The workshop reference defaults to ``agent-sandbox-system`` for single-namespace
+convenience, but ``secure-sandbox-policy`` ValidatingAdmissionPolicy excludes
+controller namespaces by default. For production clusters, deploy templates/warm
+pools/RBAC into a dedicated non-system workload namespace (e.g.,
+``GKE_SANDBOX_NAMESPACE=coding-sandboxes``).
 """
 
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 from dataclasses import asdict, dataclass
@@ -44,7 +52,7 @@ GKE_SYSTEM_INSTRUCTION = (
 
 @dataclass(frozen=True)
 class GkeSandboxSettings:
-    """Configuration matching ``starter/gke_reference/*.yaml`` manifests."""
+    """Configuration matching ``starter/gke_reference/*.yaml`` reference manifests."""
 
     namespace: str = "agent-sandbox-system"
     sandbox_template: str = "coding-sandbox-template"
@@ -82,7 +90,7 @@ class GkeSandboxSettings:
 def build_gke_code_executor(settings: GkeSandboxSettings) -> Any:
     """Instantiate ADK ``GkeCodeExecutor`` in Sandbox Mode.
 
-    Prerequisites:
+    Prerequisites (only if later running against your own live GKE cluster):
     - ``pip install "google-adk[extensions]"`` (ADK Python 2.0+; do NOT co-install
       ``k8s-agent-sandbox==1.0.6`` in the same venv — ADK 2.15.0's
       ``GkeCodeExecutor._execute_in_sandbox()`` expects the pre-1.0 context-manager API).
@@ -90,42 +98,72 @@ def build_gke_code_executor(settings: GkeSandboxSettings) -> Any:
       applied in ``settings.namespace`` (use a dedicated non-system workload namespace
       such as ``coding-sandboxes`` in production for full VAP enforcement).
     """
-    # TODO(lab-8): Import ``GkeCodeExecutor`` from ``google.adk.code_executors``
-    # and instantiate it with:
-    #   - ``namespace=settings.namespace``
-    #   - ``executor_type="sandbox"``
-    #   - ``sandbox_template=settings.sandbox_template``
-    #   - Optional ``sandbox_gateway_name=settings.sandbox_gateway_name`` (when set)
-    #   - Optional ``kubeconfig_path`` / ``kubeconfig_context`` (when set)
-    # Compare with ``solution/gke_reference/gke_agent_example.py`` for the complete wiring.
-    raise NotImplementedError(
-        "Complete TODO(lab-8) in starter/gke_reference/gke_agent_example.py: "
-        "build_gke_code_executor()."
-    )
+    try:
+        from google.adk.code_executors import GkeCodeExecutor
+    except ImportError as exc:
+        raise ImportError(
+            "ADK GKE Code Executor requires `pip install \"google-adk[extensions]\"`."
+        ) from exc
+
+    kwargs: dict[str, Any] = {
+        "namespace": settings.namespace,
+        "executor_type": "sandbox",
+        "sandbox_template": settings.sandbox_template,
+    }
+    if settings.sandbox_gateway_name:
+        kwargs["sandbox_gateway_name"] = settings.sandbox_gateway_name
+    if settings.kubeconfig_path:
+        kwargs["kubeconfig_path"] = settings.kubeconfig_path
+    if settings.kubeconfig_context:
+        kwargs["kubeconfig_context"] = settings.kubeconfig_context
+
+    return GkeCodeExecutor(**kwargs)
 
 
 def build_gke_coding_agent(settings: GkeSandboxSettings) -> Any:
     """Construct an ADK ``LlmAgent`` wired with Frontier Gemini 4 and ``GkeCodeExecutor``."""
-    # TODO(lab-8): Import ``inspect``, ``genai`` from ``google``, ``LlmAgent`` from
-    # ``google.adk.agents``, and ``Gemini`` from ``google.adk.models``:
-    # 1. Inspect ``inspect.signature(genai.Client.__init__).parameters`` to select
-    #    ``auth_key = "enterprise"`` when supported (else ``"vertexai"``).
-    # 2. Construct ``client_kwargs = {auth_key: True, "location": settings.model_location}``
-    #    (adding ``"project"`` from ``settings.google_cloud_project`` / ``GOOGLE_CLOUD_PROJECT``
-    #    when set) and build ``gemini_model = Gemini(model=settings.model_name,
-    #    client_kwargs=client_kwargs)`` so Frontier Gemini 4 models route to ``global``
-    #    (or ``gemini-4-argon`` on ``asia-southeast1`` for strict regional residency).
-    # 3. Build ``executor = build_gke_code_executor(settings)`` and return:
-    #      LlmAgent(
-    #          name="gke_sandbox_coding_agent",
-    #          model=gemini_model,
-    #          instruction=GKE_SYSTEM_INSTRUCTION,
-    #          code_executor=executor,
-    #      )
-    # Compare with ``solution/gke_reference/gke_agent_example.py`` for the complete wiring.
-    raise NotImplementedError(
-        "Complete TODO(lab-8) in starter/gke_reference/gke_agent_example.py: "
-        "build_gke_coding_agent()."
+    try:
+        from google import genai
+        from google.adk.agents import LlmAgent
+        from google.adk.models import Gemini
+    except ImportError as exc:
+        raise ImportError(
+            "ADK LlmAgent requires `pip install \"google-adk[extensions]\"`."
+        ) from exc
+
+    # Route Frontier Gemini 4 models (e.g., gemini-4-hydrogen on global, or
+    # gemini-4-argon on asia-southeast1 for strict regional residency) cleanly
+    # across google-genai versions without overriding ADK's api_client property.
+    try:
+        params = inspect.signature(genai.Client.__init__).parameters
+    except (TypeError, ValueError):
+        params = {}
+    auth_key = "enterprise" if "enterprise" in params else "vertexai"
+
+    client_kwargs: dict[str, Any] = {
+        auth_key: True,
+        "location": settings.model_location,
+    }
+    project = (
+        settings.google_cloud_project
+        or os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
+        or None
+    )
+    if project:
+        client_kwargs["project"] = project
+
+    gemini_kwargs: dict[str, Any] = {"model": settings.model_name}
+    model_fields = getattr(Gemini, "model_fields", None)
+    if model_fields is None or "client_kwargs" in model_fields:
+        gemini_kwargs["client_kwargs"] = client_kwargs
+    gemini_model = Gemini(**gemini_kwargs)
+
+    executor = build_gke_code_executor(settings)
+    return LlmAgent(
+        name="gke_sandbox_coding_agent",
+        model=gemini_model,
+        instruction=GKE_SYSTEM_INSTRUCTION,
+        code_executor=executor,
     )
 
 
@@ -183,27 +221,31 @@ def run_warmpool_sdk_smoke_test(
             "Standalone GKE Sandbox client requires `pip install k8s-agent-sandbox==1.0.6`."
         ) from exc
 
-    # TODO(lab-8): Instantiate ``SandboxClient`` with
-    # ``connection_config=SandboxLocalTunnelConnectionConfig()`` and ``cleanup=True``,
-    # call ``client.create_sandbox(warmpool=settings.warmpool, namespace=settings.namespace)``,
-    # execute ``sandbox.commands.run(command)``, and return ``result.stdout``.
-    _ = (SandboxClient, SandboxLocalTunnelConnectionConfig, settings, command)
-    raise NotImplementedError(
-        "Complete TODO(lab-8) in starter/gke_reference/gke_agent_example.py: "
-        "run_warmpool_sdk_smoke_test()."
+    client = SandboxClient(
+        connection_config=SandboxLocalTunnelConnectionConfig(),
+        cleanup=True,
     )
+    sandbox = client.create_sandbox(
+        warmpool=settings.warmpool,
+        namespace=settings.namespace,
+    )
+    result = sandbox.commands.run(command)
+    return str(result.stdout)
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry point for inspecting or exercising the GKE reference overlay."""
+    """CLI entry point for inspecting the Module 8 GKE reference overlay offline."""
     parser = argparse.ArgumentParser(
-        description="GKE Agent Sandbox ADK integration example (Lab 8 comparison track)."
+        description=(
+            "GKE Agent Sandbox ADK integration example "
+            "(Module 8 Architecture Guide — read-only reference)."
+        )
     )
     parser.add_argument(
         "--mode",
         choices=("inspect", "adk-agent", "direct-exec", "warmpool-sdk"),
         default="inspect",
-        help="Execution mode (default: inspect config without connecting to a GKE cluster).",
+        help="Execution mode (default: inspect config offline without a live GKE cluster).",
     )
     parser.add_argument(
         "--code",
