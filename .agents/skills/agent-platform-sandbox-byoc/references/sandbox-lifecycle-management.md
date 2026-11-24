@@ -18,7 +18,7 @@ Official Scale Sandbox documentation is transitioning from `vertexai.Client` (`g
 | **Snapshot CRUD** | `client.sandboxes.snapshots.{create, get, list, delete}` | Not documented on `vertexai.Client` |
 | **Shell Exec** | `client.sandboxes.execute_bash(...)` | Mixed in docs (`shell-sandbox-quickstart` calls `client.sandboxes.execute_bash`) |
 | **Code Exec** | `client.sandboxes.execute_code(...)` | Legacy/alt `send_command()` mentioned alongside `execute_code()` |
-| **Computer Use CDP** | Not shown on `client.sandboxes` in current docs | `client.agent_engines.sandboxes.generate_browser_ws_headers(...)` |
+| **Computer Use CDP** | `client.sandboxes.generate_browser_ws_headers(...)` *(exposed directly on `google-cloud-agentplatform >= 2.10.0`)* | `client.agent_engines.sandboxes.generate_browser_ws_headers(...)` *(use on older SDKs)* |
 
 ### Verified Upstream Documentation Bugs to Avoid
 
@@ -79,9 +79,9 @@ Verified from `reference/rest/v1/projects.locations.reasoningEngines.sandboxEnvi
 |---|---|---|---|
 | **Create** | `client.sandboxes.templates.create(name=..., display_name=..., config=...)` | `CreateSandboxEnvironmentTemplate` (`ADMIN_WRITE`) | Triggers pre-warmed pool creation. **Reuse templates**: omitting `sandbox_environment_template` on `sandboxes.create()` leaks a new default template every time, and deleting a sandbox does **not** delete its template. |
 | **Get** | `client.sandboxes.templates.get(name=template_name)` | `GetSandboxEnvironmentTemplate` (`ADMIN_READ`) | Also readable from a sandbox via `sandbox.sandbox_environment_template`. |
-| **List** | `client.sandboxes.templates.list(name=instance_name)` | `ListSandboxEnvironmentTemplates` (`ADMIN_READ`) | Iterate `.sandbox_environment_templates`. |
+| **List** | `client.sandboxes.templates.list(name=instance_name)` | `ListSandboxEnvironmentTemplates` (`ADMIN_READ`) | Returns a plain `Iterator[SandboxEnvironmentTemplate]` directly in `google-cloud-agentplatform >= 2.10.0` (do **not** assume `.sandbox_environment_templates` — raises `AttributeError`; use `getattr(resp, "sandbox_environment_templates", resp)`). |
 | **Update** | **Delete + recreate** *(no SDK update method documented)* | `UpdateSandboxEnvironmentTemplate` exists in audit table, not exposed in SDK docs | Delete existing template and create a new one with updated image/resources/egress. |
-| **Delete** | `client.sandboxes.templates.delete(name=template_name)` | `DeleteSandboxEnvironmentTemplate` (`ADMIN_WRITE`) | **Fails** if a warm pool is actively being created or sandboxes are currently being created from it. |
+| **Delete** | `client.sandboxes.templates.delete(name=template_name)` | `DeleteSandboxEnvironmentTemplate` (`ADMIN_WRITE`) | Returns an **async LRO**; `DeleteSandboxEnvironmentTemplateConfig` accepts **only** `http_options` (passing `config={"wait_for_completion": True}` raises `pydantic.ValidationError`). **Fails** with `FAILED_PRECONDITION` while sandboxes or warm pools are still active — delete sandboxes & snapshots first and retry transient errors. |
 
 ```python
 import agentplatform
@@ -109,13 +109,14 @@ shell_tpl_op = client.sandboxes.templates.create(
 )
 template_name = shell_tpl_op.response.name
 
-# List & Get templates
-for tpl in client.sandboxes.templates.list(name=instance_name).sandbox_environment_templates:
+# List & Get templates (google-cloud-agentplatform >= 2.10.0 returns an Iterator directly!)
+tpl_resp = client.sandboxes.templates.list(name=instance_name)
+for tpl in getattr(tpl_resp, "sandbox_environment_templates", tpl_resp):
     print(tpl.name)
 details = client.sandboxes.templates.get(name=template_name)
 
-# Update = Delete + Recreate
-client.sandboxes.templates.delete(name=template_name)
+# Update = Delete + Recreate (delete returns async LRO; NEVER pass config={"wait_for_completion": True})
+del_tpl_op = client.sandboxes.templates.delete(name=template_name)
 ```
 
 ---
@@ -132,7 +133,7 @@ To change a sandbox's spec/template configuration, you must **delete and recreat
 | **Pause** | `client.sandboxes.pause(name=sandbox_name, config={"wait_for_completion": True})` | `PauseSandboxEnvironment` (`ADMIN_WRITE`) | Releases compute (significantly lower cost); retains sandbox ID, PSC endpoint, connection metadata, and filesystem state. Transitions to `STATE_PAUSED`; data-plane requests error until resumed. |
 | **Resume** | `client.sandboxes.resume(name=sandbox_name, config={"wait_for_completion": True})` | `ResumeSandboxEnvironment` (`ADMIN_WRITE`) | Restores compute in seconds with identical ID, PSC attachment, and disk state (`STATE_RUNNING`). **Only valid in `STATE_PAUSED`** — calling on a running sandbox returns `FAILED_PRECONDITION`. |
 | **Snapshot** | `client.sandboxes.snapshots.create(source_sandbox_environment_name=..., config=...)` | `SnapshotSandboxEnvironment` (`ADMIN_WRITE`) | Checkpoints libraries, disk, and memory state to managed GCS bucket (inherits parent CMEK). **Not supported on Code Execution sandboxes.** |
-| **Delete** | `client.sandboxes.delete(name=sandbox_name)` | `DeleteSandboxEnvironment` (`ADMIN_WRITE`) | Stops billing immediately; does **not** delete backing template. |
+| **Delete** | `client.sandboxes.delete(name=sandbox_name)` | `DeleteSandboxEnvironment` (`ADMIN_WRITE`) | Returns an **async LRO** (`DeleteRuntimeSandboxConfig` accepts **only** `http_options` — passing `config={"wait_for_completion": True}` raises `pydantic.ValidationError`). Stops billing immediately; does **not** delete backing template. |
 
 ### Verified Python Snippets for All Creation Modes & Lifecycle Calls
 
@@ -151,9 +152,10 @@ code_op = client.sandboxes.create(
 code_sandbox_name = code_op.response.name
 
 # 1b. Create Shell Sandbox (reusing template; typically reaches STATE_RUNNING in ~20s)
+# RULE: Omit inline `spec={"shell_environment": {}}` whenever `sandbox_environment_template` is provided!
+# Only pass `spec={"shell_environment": {}}` when creating a sandbox WITHOUT a template (`template_name is None`).
 shell_op = client.sandboxes.create(
     name=instance_name,
-    spec={"shell_environment": {}},
     config={
         "display_name": "shell-sandbox",
         "sandbox_environment_template": template_name,
@@ -175,8 +177,8 @@ assert str(pause_op.response.state).endswith("STATE_PAUSED")
 resume_op = client.sandboxes.resume(name=sandbox_name, config={"wait_for_completion": True})
 assert str(resume_op.response.state).endswith("STATE_RUNNING")
 
-# 4. Delete
-client.sandboxes.delete(name=sandbox_name)
+# 4. Delete (async LRO — NEVER pass config={"wait_for_completion": True}!)
+del_sb_op = client.sandboxes.delete(name=sandbox_name)
 ```
 
 ### When to Pause vs. Snapshot vs. Delete
@@ -201,15 +203,24 @@ Restoring a snapshot into a new sandbox **fails** if any of the following differ
 
 ```python
 # 1. Create snapshot (persists installed packages, disk changes & memory state for ttl)
+snap_display_name = "pre-refactor-checkpoint"
 snap_op = client.sandboxes.snapshots.create(
     source_sandbox_environment_name=sandbox_name,
-    config={"display_name": "pre-refactor-checkpoint", "ttl": "3600s"},
+    config={"display_name": snap_display_name, "ttl": "3600s"},
 )
 print("Snapshot operation:", snap_op.name)
 
-# 2. List & capture canonical snapshot_name dynamically (never hardcode sandbox path)
-snaps = client.sandboxes.snapshots.list(name=instance_name).sandbox_environment_snapshots
-snapshot_name = snaps[0].name
+# 2. Capture canonical snapshot_name safely:
+#    Check snap_op.response.name first (snap_op.name is an /operations/... path when response is None!),
+#    then fall back to iterating snapshots.list() directly and matching display_name.
+resp_name = getattr(getattr(snap_op, "response", None), "name", None)
+if resp_name and "/sandboxEnvironmentSnapshots/" in resp_name:
+    snapshot_name = resp_name
+else:
+    snaps_resp = client.sandboxes.snapshots.list(name=instance_name)
+    snaps = list(getattr(snaps_resp, "sandbox_environment_snapshots", snaps_resp))
+    matched = [s for s in snaps if getattr(s, "display_name", None) == snap_display_name]
+    snapshot_name = (matched[-1] if matched else snaps[-1]).name
 
 # 3. Get snapshot metadata
 snap_details = client.sandboxes.snapshots.get(name=snapshot_name)
@@ -226,8 +237,35 @@ branch_op = client.sandboxes.create(
 )
 branched_sandbox = branch_op.response
 
-# 5. Delete snapshot before TTL expiration
-client.sandboxes.snapshots.delete(name=snapshot_name)
+# 5. Delete snapshot before TTL expiration (async LRO — NEVER pass config={"wait_for_completion": True}!)
+del_snap_op = client.sandboxes.snapshots.delete(name=snapshot_name)
+```
+
+### Sequential Async Delete Teardown Pattern (`sandboxes -> snapshots -> templates`)
+
+In `google-cloud-agentplatform >= 2.10.0`, `sandboxes.delete()`, `snapshots.delete()`, and `templates.delete()` return asynchronous LROs whose Pydantic config classes (`DeleteRuntimeSandboxConfig`, `DeleteSandboxEnvironmentSnapshotConfig`, `DeleteSandboxEnvironmentTemplateConfig`) accept **only** `http_options` and raise `pydantic.ValidationError` if given `config={"wait_for_completion": True}`. Always tear down resources in dependency order and poll/retry transient `FAILED_PRECONDITION` errors:
+
+```python
+import time
+
+def wait_for_delete_and_retry(delete_fn, resource_name: str, *, poll_fn=None, max_attempts: int = 8) -> None:
+    """Invoke a sandbox/snapshot/template delete LRO with transient FAILED_PRECONDITION retries."""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            op = delete_fn(name=resource_name)  # Do NOT pass config={"wait_for_completion": True}!
+        except Exception as exc:
+            if "FAILED_PRECONDITION" in str(exc) and attempt < max_attempts:
+                time.sleep(min(2 * attempt, 10))
+                continue
+            raise
+        if poll_fn is not None:
+            for _ in range(30):
+                if getattr(op, "done", False):
+                    break
+                time.sleep(2)
+                op = poll_fn(op)
+        return
+# Order: 1) sandboxes.delete() -> 2) snapshots.delete() -> 3) templates.delete()
 ```
 
 ---

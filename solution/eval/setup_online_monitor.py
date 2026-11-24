@@ -247,11 +247,26 @@ def verify_deployed_runtime(project_id: str, location: str, reasoning_engine_nam
 
     api_resource = getattr(deployed, "api_resource", deployed)
     spec = getattr(api_resource, "spec", None)
+    deployment_spec = getattr(spec, "deployment_spec", None)
+    raw_env_vars = getattr(deployment_spec, "env", None) or []
+    deployment_env: dict[str, str] = {}
+    for item in raw_env_vars:
+        if isinstance(item, dict):
+            key = str(item.get("name") or "").strip()
+            val = "" if item.get("value") is None else str(item.get("value"))
+        else:
+            key = str(getattr(item, "name", "") or "").strip()
+            raw_val = getattr(item, "value", "")
+            val = "" if raw_val is None else str(raw_val)
+        if key:
+            deployment_env[key] = val
+
     return {
         "sdk_used": sdk_used,
         "name": getattr(api_resource, "name", reasoning_engine_name),
         "display_name": getattr(api_resource, "display_name", ""),
         "effective_identity": getattr(spec, "effective_identity", ""),
+        "deployment_env": deployment_env,
     }
 
 
@@ -302,7 +317,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--strict-env",
         action="store_true",
-        help="Exit non-zero if local shell env lacks the mandatory OTel env vars.",
+        help=(
+            "Exit non-zero if mandatory OTel env vars fail validation "
+            "(checks deployed ReasoningEngine deployment_spec.env when --verify-runtime is set, else local shell env)."
+        ),
     )
     return parser
 
@@ -322,7 +340,28 @@ def main(argv: list[str] | None = None) -> int:
     runtime_name = args.agent_resource_name or settings.reasoning_engine_name
     metrics = [m.strip() for m in args.metrics.split(",") if m.strip()]
 
-    otel_check = validate_otel_prerequisites()
+    runtime_verification: dict[str, Any] | None = None
+    if args.verify_runtime:
+        if not project_id or not runtime_name:
+            raise ValueError("--verify-runtime requires GOOGLE_CLOUD_PROJECT and REASONING_ENGINE_NAME.")
+        runtime_verification = verify_deployed_runtime(
+            project_id, runtime_location, runtime_name
+        )
+
+    deployed_env = (
+        runtime_verification.get("deployment_env")
+        if isinstance(runtime_verification, dict)
+        else None
+    )
+    if isinstance(deployed_env, dict) and deployed_env:
+        check_env = dict(deployed_env)
+        otel_env_source = "deployed_runtime_deployment_spec"
+    else:
+        check_env = dict(os.environ)
+        otel_env_source = "local_shell_env"
+    check_env["EVAL_LOCATION"] = eval_location
+
+    otel_check = validate_otel_prerequisites(env=check_env)
     monitor_spec = build_online_monitor_spec(
         project_id=project_id,
         location=eval_location,
@@ -335,16 +374,12 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     output: dict[str, Any] = {
+        "otel_env_source": otel_env_source,
         "otel_prerequisite_check": asdict(otel_check),
         "online_monitor_spec": monitor_spec,
     }
-
-    if args.verify_runtime:
-        if not project_id or not runtime_name:
-            raise ValueError("--verify-runtime requires GOOGLE_CLOUD_PROJECT and REASONING_ENGINE_NAME.")
-        output["runtime_verification"] = verify_deployed_runtime(
-            project_id, runtime_location, runtime_name
-        )
+    if runtime_verification is not None:
+        output["runtime_verification"] = runtime_verification
 
     print(json.dumps(output, indent=2))
     if args.strict_env and not otel_check.passed:

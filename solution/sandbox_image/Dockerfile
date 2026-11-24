@@ -38,12 +38,16 @@ RUN apt-get update \
 
 # Opt-in native Go Antigravity (`agy`) headless CLI binary baked into /usr/local/bin
 # (built remotely via Cloud Build `make push-sandbox` — zero local Docker required).
+# Remove any duplicate root-only copy under /root/.local/bin/agy when /usr/local/bin/agy
+# is a regular binary so the image stays lean and appuser runs /usr/local/bin/agy cleanly.
 ARG INSTALL_AGY_CLI=true
 RUN if [ "$INSTALL_AGY_CLI" = "true" ]; then \
       curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy_install.sh \
       && bash /tmp/agy_install.sh --dir /usr/local/bin \
       && rm -f /tmp/agy_install.sh \
-      && chmod 0755 /usr/local/bin/agy; \
+      && if [ -f /usr/local/bin/agy ] && [ ! -L /usr/local/bin/agy ]; then rm -f /root/.local/bin/agy; fi \
+      && chmod 0755 /usr/local/bin/agy \
+      && /usr/local/bin/agy --version; \
     fi
 
 # Install Python coding, testing, linting, and SAST tools.

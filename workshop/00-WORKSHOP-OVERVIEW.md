@@ -45,8 +45,8 @@ flowchart LR
     end
 
     subgraph REG["3. EXTEND WITH REGISTRIES (Lab 4)"]
-        SKREG["Skill Registry (v1beta1)<br/>16-Check Validated ZIP Packages"]
-        AGREG["Agent Registry Discovery<br/>GCPSkillRegistry + AgentRegistry ADK Clients"]
+        SKREG["Vertex AI Skill Registry (v1beta1, us-central1)<br/>16-Check Validated Skill Packages"]
+        AGREG["Agent Registry Discovery<br/>GCPSkillRegistry (global Standalone Skills) +<br/>AgentRegistry A2A/MCP (Bangkok asia-southeast3)"]
         SKREG --> ADK
         AGREG --> ADK
     end
@@ -54,14 +54,14 @@ flowchart LR
     subgraph DEPLOY["4. DEPLOY ONCE TO RUNTIME (Lab 5)"]
         AR_IMG["Artifact Registry<br/>Complete Agent Image + BYOC Sandbox Image"]
         TF["Terraform IaC / agents-cli deploy<br/>google_vertex_ai_reasoning_engine + Custom SA"]
-        RT["Agent Runtime (ReasoningEngine)<br/>Trusted Plane + /usr/local/bin/agy (AGY_ADC_AUTH=true)"]
+        RT["Agent Runtime (ReasoningEngine)<br/>Trusted Plane + /usr/local/bin/agy (AGY_ADC_AUTH=true + AGY_PROJECT_ID)"]
 
         ADK -->|"Build & Push ONCE"| AR_IMG
         TF --> RT
         AR_IMG -- "gcp-sa-aiplatform-re" --> RT
         AR_IMG -- "gcp-sa-vertex-sandbox" --> SBX
         RT -- "execute_bash / /exec / CodeExec" --> SBX
-        RT <-->|"Decoupled REASONING_ENGINE_NAME"| SESS
+        RT <-->|"Unified or Decoupled State"| SESS
         RT <-->|"roles/aiplatform.memoryUser"| MEM
         RT --> FB
     end
@@ -158,11 +158,11 @@ Complete these four quick steps before starting Lab 1 so downloads and CLI compo
 - [ ] **Authenticate GCP + ADC** against a **Standard billing-enabled GCP project** (`gcloud auth login && gcloud auth application-default login && gcloud config set project YOUR_PROJECT_ID`).
 - [ ] **Install `gcloud alpha` component:** Run `gcloud components install alpha --quiet` *(required for `gcloud alpha agent-registry skills` in Labs 4, 6 & 7)*.
 - [ ] **Pre-sync Python dependencies (`make install`):** Run `cp .env.example .env`, set `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_PROJECT_NUMBER`, then run **`make install`** (`uv sync --dev` across `starter/` and `solution/`, installing `google-adk>=2.0.0` and `google-genai>=2.34.0` for Gemini 4 automatic long decodes).
-- [ ] **Optional `google/agents-cli` & `agy` Headless CLI:** Run `uvx google-agents-cli setup` for playground/deploy/eval shortcuts, and optionally install the static Go `agy` CLI (`curl -fsSL https://antigravity.google/cli/install.sh | bash`) for live local runs of Lab 1 Part B `agy_harness`. *(All labs run cleanly via `uv`, `gcloud`, and Terraform even without either CLI installed locally; `make test-agy-harness` validates the `agy` harness via `--dry-run`, and Cloud Build bakes `/usr/local/bin/agy` into Lab 2 & Lab 5 containers automatically!)*
+- [ ] **Optional `google/agents-cli` & `agy` Headless CLI:** Run `uvx google-agents-cli setup` for playground/deploy/eval shortcuts, and optionally install the static Go `agy` CLI (`curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy_install.sh && bash /tmp/agy_install.sh && rm -f /tmp/agy_install.sh`) for live local runs of Lab 1 Part B `agy_harness`. *(All labs run cleanly via `uv`, `gcloud`, and Terraform even without either CLI installed locally; `make test-agy-harness` validates the `agy` harness via `--dry-run`, and Cloud Build bakes `/usr/local/bin/agy` into Lab 2 & Lab 5 containers automatically!)*
 
 > [!TIP]
 > **No Local Docker Required!** Every lab in this workshop is designed for **100% zero-Docker attendee execution** (`docker` CLI is strictly optional):
-> - **Standalone `uv` without `python3-venv` or Docker:** Install `uv` with `curl -LsSf https://astral.sh/uv/install.sh | sh` — works out of the box even on fresh Debian/Linux workstations or cloud dev environments without `python3-venv` or `docker`.
+> - **Standalone `uv` without `python3-venv` or Docker:** Download and run the official standalone `uv` installer (`curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv_install.sh && sh /tmp/uv_install.sh && rm -f /tmp/uv_install.sh`) — works out of the box even on fresh Debian/Linux workstations or cloud dev environments without `python3-venv` or `docker`.
 > - **Lab 2 (Sandboxes):** Verify your BYOC runner locally via pure Python (`make test-sandbox-local`), build and push remotely via Cloud Build in Bangkok (`make push-sandbox` → `gcloud builds submit --region=asia-southeast3`), or use the zero-build `SANDBOX_MODE=shell` fast-track.
 > - **Lab 5 (Agent Runtime):** Smoke-test `main.py` locally via pure Python (`make test-agent-local`), then deploy via (1) `make push-agent` (Cloud Build `--region=asia-southeast3`) + Terraform `container_spec`, (2) `make pack-agent-source` + Terraform `source_code_spec` + empty `image_spec {}` (zero Docker AND zero Artifact Registry push!), or (3) `agents-cli deploy`.
 
@@ -328,7 +328,8 @@ Before running a live workshop (especially if multiple attendees share one GCP p
 Quick pre-flight command to verify authentication, enabled services, regional overrides, and local toolchain (zero Docker required!):
 
 ```bash
-# Recommended automated pre-flight check (runs scripts/preflight_check.sh)
+# Recommended automated pre-flight check (runs scripts/preflight_check.sh;
+# pass --offline or --skip-gcp directly to scripts/preflight_check.sh for offline checks)
 make preflight
 
 # Or inspect individual components manually:

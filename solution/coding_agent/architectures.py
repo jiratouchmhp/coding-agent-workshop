@@ -586,6 +586,7 @@ def build_graph_coding_workflow(
       ``Event(message=..., output=..., state={"fix_attempts": 0, "latest_findings": ""})``
       (single terminal output rule + per-turn state reset for multi-turn sessions).
     """
+    sandbox_env = _extract_sandbox_environment(tools)
     coder_kwargs: dict[str, Any] = {
         "name": "coder_agent",
         "model": _build_gemini_model(settings, role="coding"),
@@ -600,6 +601,7 @@ def build_graph_coding_workflow(
             "pytest or ruff failures from a previous attempt, fix every reported failure."
         ),
         "tools": list(tools),
+        "output_key": "latest_code_summary",
         "generate_content_config": _build_generate_config(settings),
     }
     if code_executor is not None:
@@ -625,13 +627,16 @@ def build_graph_coding_workflow(
     )
     async def run_pytest_node(ctx: Context, node_input: Any = None) -> CheckOutcome:
         """Deterministic pytest verification node with automatic transient retries."""
-        del ctx, node_input
+        del node_input
         return await _run_workspace_check(
             settings,
             check_name="pytest",
             command=_pytest_command(),
             allow_exit_codes=frozenset({0, 5}),
             empty_exit_code_message="No pytest tests collected in workspace.",
+            sandbox_env=sandbox_env,
+            remote_command="python3 -m pytest -q",
+            ctx=ctx,
         )
 
     @node(
@@ -641,13 +646,16 @@ def build_graph_coding_workflow(
     )
     async def run_ruff_node(ctx: Context, node_input: Any = None) -> CheckOutcome:
         """Deterministic ruff lint verification node with automatic transient retries."""
-        del ctx, node_input
+        del node_input
         return await _run_workspace_check(
             settings,
             check_name="ruff",
             command=_ruff_command(),
             allow_exit_codes=frozenset({0}),
             empty_exit_code_message="ruff check passed with zero violations.",
+            sandbox_env=sandbox_env,
+            remote_command="ruff check .",
+            ctx=ctx,
         )
 
     verify_join = JoinNode(name="verify_join")
@@ -718,12 +726,13 @@ def build_graph_coding_workflow(
         node_input: Any,
         fix_attempts: int = 0,
         latest_findings: str = "",
+        latest_code_summary: str = "",
     ) -> Any:
         """Single terminal node emitting strictly ONE Event and resetting turn state."""
         approval_note = _format_approval_note(node_input) if settings.enable_hitl_approval else ""
 
         report = _build_final_report(
-            code_summary="",
+            code_summary=str(latest_code_summary or "").strip(),
             findings=latest_findings,
             fix_attempts=fix_attempts,
             approval_note=approval_note,
@@ -737,6 +746,7 @@ def build_graph_coding_workflow(
             state={
                 "fix_attempts": 0,
                 "latest_findings": "",
+                "latest_code_summary": "",
             },
         )
 
@@ -785,6 +795,7 @@ def build_dynamic_coding_workflow(
        relying on ADK 2.0 automatic checkpointing to skip already-completed child
        runs upon resume.
     """
+    sandbox_env = _extract_sandbox_environment(tools)
     coder_kwargs: dict[str, Any] = {
         "name": "coder_agent",
         "model": _build_gemini_model(settings, role="coding"),
@@ -843,13 +854,16 @@ def build_dynamic_coding_workflow(
     )
     async def run_pytest_node(ctx: Context, node_input: Any = None) -> CheckOutcome:
         """Run pytest inside the active workspace."""
-        del ctx, node_input
+        del node_input
         return await _run_workspace_check(
             settings,
             check_name="pytest",
             command=_pytest_command(),
             allow_exit_codes=frozenset({0, 5}),
             empty_exit_code_message="No pytest tests collected in workspace.",
+            sandbox_env=sandbox_env,
+            remote_command="python3 -m pytest -q",
+            ctx=ctx,
         )
 
     @node(
@@ -859,13 +873,16 @@ def build_dynamic_coding_workflow(
     )
     async def run_ruff_node(ctx: Context, node_input: Any = None) -> CheckOutcome:
         """Run ruff check inside the active workspace."""
-        del ctx, node_input
+        del node_input
         return await _run_workspace_check(
             settings,
             check_name="ruff",
             command=_ruff_command(),
             allow_exit_codes=frozenset({0}),
             empty_exit_code_message="ruff check passed with zero violations.",
+            sandbox_env=sandbox_env,
+            remote_command="ruff check .",
+            ctx=ctx,
         )
 
     @node(name="request_human_approval", rerun_on_resume=False)

@@ -259,6 +259,15 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
         value = "true"
       }
 
+      # Non-reserved string project ID for Antigravity (`agy`) headless CLI:
+      # Agent Runtime auto-injects the numeric project number into GOOGLE_CLOUD_PROJECT /
+      # GOOGLE_CLOUD_QUOTA_PROJECT (and its GCE metadata server returns the tenant project),
+      # whereas `agy` rejects numeric project IDs with exit code 3 (`invalid project ID`).
+      env {
+        name  = "AGY_PROJECT_ID"
+        value = var.project_id
+      }
+
       # Optional ADK 2.0 architecture overrides (Lab 1 Part B / Lab 5 portability).
       # Defaults to `AGENT_ARCHITECTURE=simple` (Labs 2-8 compatible) when omitted;
       # uncomment to switch the deployed Agent Runtime to `collaborative`, `graph`,

@@ -104,10 +104,15 @@ def build_skill_registry_toolset(
     # 1. Load existing directories in ``local_skill_dirs`` with ``load_skill_from_dir(Path(d))``.
     # 2. If ``enable_remote_registry and project_id and location``, try instantiating
     #    ``GCPSkillRegistry(project_id=project_id, location=location)`` from
-    #    ``google.adk.integrations.skill_registry`` (keyword-only args!). Catch ``Exception``
-    #    and log a warning so air-gapped sandboxes without egress fall back to local skills.
+    #    ``google.adk.integrations.skill_registry`` (keyword-only args! Always pass ``location=``
+    #    explicitly — e.g. ``AGENT_REGISTRY_SKILLS_LOCATION="global"`` — so it does not fall back
+    #    to regional ``GOOGLE_CLOUD_LOCATION``). Catch ``Exception`` and log a warning (note: in
+    #    ADK 2.15+, ``GCPSkillRegistry.__init__`` is lazy and makes no network call; runtime egress
+    #    failures in air-gapped sandboxes surface inside ``SearchSkillsTool`` as ``REGISTRY_ERROR``
+    #    while local skills remain usable; remote standalone skills must also be in ``ACTIVE`` state
+    #    via ``--target-state=active`` for ``get_skill`` downloads to succeed).
     # 3. Return ``SkillToolset(skills=local_skills, registry=registry, environment=environment,
-    #    discovery_mode=SkillDiscoveryMode.LAZY, lifecycle_config=SkillLifecycleConfig(
+    #    discovery_mode=discovery_mode or SkillDiscoveryMode.LAZY, lifecycle_config=SkillLifecycleConfig(
     #    default_mode=SkillLifecycleMode.BOUNDED, max_active_skills=max_active_skills))``
     #    (passing ``code_executor`` instead of ``environment`` when ``code_executor`` is set).
     _ = (

@@ -136,7 +136,7 @@ def _normalize_command_response(raw: Any, elapsed_ms: int) -> CommandExecutionOu
         body = getattr(raw, "body", None)
         if body is None:
             body = getattr(raw, "text", None)
-        if isinstance(body, (bytes, bytearray)):
+        if isinstance(body, bytes | bytearray):
             body_text = body.decode("utf-8", errors="replace")
         elif isinstance(body, str):
             body_text = body
@@ -297,7 +297,9 @@ def execute_byoc_command(
     #    ``Authorization: Bearer <token>`` when ``access_token`` or ``use_iam_bearer``
     #    is provided, raise_for_status(), and return ``_normalize_command_response(resp.json(), elapsed_ms)``.
     # 3. Otherwise require ``client`` and ``sandbox_name``: fetch ``sandbox_env = sandboxes_ns.get(name=sandbox_name)``,
-    #    mint ``token = access_token or generate_sandbox_access_token(client, service_account_email)``,
+    #    resolve ``token`` from ``access_token``, else ``generate_sandbox_access_token(client, service_account_email)``
+    #    when ``service_account_email`` is set, else ``fetch_iam_bearer_token()`` when ``use_iam_bearer`` is True
+    #    (matching ``check_byoc_health()`` when ``SANDBOX_SERVICE_ACCOUNT_EMAIL`` is unset),
     #    invoke ``sandboxes_ns.send_command(http_method="POST", path="exec", access_token=token,
     #    request_dict=payload, sandbox_environment=sandbox_env)``, and normalize into ``CommandExecutionOutput``.
     _ = (
@@ -352,7 +354,7 @@ def execute_code_snippet(
         if mime_type == "application/json":
             decoded = (
                 raw_data.decode("utf-8", errors="replace")
-                if isinstance(raw_data, (bytes, bytearray))
+                if isinstance(raw_data, bytes | bytearray)
                 else str(raw_data)
             )
             status = json.loads(decoded)
@@ -368,7 +370,7 @@ def execute_code_snippet(
                     "mime_type": mime_type,
                     "content": (
                         bytes(raw_data)
-                        if isinstance(raw_data, (bytes, bytearray))
+                        if isinstance(raw_data, bytes | bytearray)
                         else str(raw_data).encode("utf-8")
                     ),
                 }
@@ -565,7 +567,9 @@ class AgentPlatformSandboxEnvironment(BaseEnvironment):
         """Execute a shell command inside the session's Managed Sandbox."""
         # TODO(lab-2): Ensure initialized, resolve active sandbox name, dispatch via
         # ``await asyncio.to_thread(...)`` to ``execute_shell_command`` (when mode == "shell")
-        # or ``execute_byoc_command`` (when mode == "byoc"), and return
+        # or ``execute_byoc_command`` (when mode == "byoc" or ``self._runner_base_url`` is set,
+        # passing ``use_iam_bearer=(not bool(self._runner_base_url) and not bool(self._service_account_email))``
+        # so managed BYOC falls back cleanly to ADC IAM bearer when no signing SA is set), and return
         # ``ExecutionResult(exit_code=out.returncode, stdout=out.stdout,
         # stderr=out.stderr, timed_out=out.timed_out)``.
         _ = (command, timeout, ctx)
@@ -604,6 +608,9 @@ class AgentPlatformSandboxEnvironment(BaseEnvironment):
             sandbox_name=sandbox_name,
             service_account_email=self._service_account_email,
             runner_base_url=self._runner_base_url,
+            use_iam_bearer=(
+                not bool(self._runner_base_url) and not bool(self._service_account_email)
+            ),
         )
         return ExecutionResult(
             exit_code=out.returncode,
@@ -656,7 +663,7 @@ class AgentPlatformSandboxEnvironment(BaseEnvironment):
                 sandbox_environment=sandbox_env,
             )
             body = getattr(raw, "body", raw)
-            if isinstance(body, (bytes, bytearray)):
+            if isinstance(body, bytes | bytearray):
                 return json.loads(body.decode("utf-8"))
             if isinstance(body, str):
                 return json.loads(body)

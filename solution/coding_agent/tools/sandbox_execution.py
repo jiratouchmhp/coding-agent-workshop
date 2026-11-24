@@ -127,7 +127,7 @@ def _normalize_command_response(raw: Any, elapsed_ms: int) -> CommandExecutionOu
         body = getattr(raw, "body", None)
         if body is None:
             body = getattr(raw, "text", None)
-        if isinstance(body, (bytes, bytearray)):
+        if isinstance(body, bytes | bytearray):
             body_text = body.decode("utf-8", errors="replace")
         elif isinstance(body, str):
             body_text = body
@@ -370,7 +370,7 @@ def execute_code_snippet(
         mime_type = str(getattr(chunk, "mime_type", "") or "")
         raw_data = getattr(chunk, "data", b"") or b""
         if mime_type == "application/json":
-            decoded = raw_data.decode("utf-8", errors="replace") if isinstance(raw_data, (bytes, bytearray)) else str(raw_data)
+            decoded = raw_data.decode("utf-8", errors="replace") if isinstance(raw_data, bytes | bytearray) else str(raw_data)
             status = json.loads(decoded)
             if status.get("msg_out"):
                 stdout_parts.append(str(status["msg_out"]))
@@ -382,7 +382,7 @@ def execute_code_snippet(
                 {
                     "name": attrs.get("file_name", ""),
                     "mime_type": mime_type,
-                    "content": bytes(raw_data) if isinstance(raw_data, (bytes, bytearray)) else str(raw_data).encode("utf-8"),
+                    "content": bytes(raw_data) if isinstance(raw_data, bytes | bytearray) else str(raw_data).encode("utf-8"),
                 }
             )
 
@@ -586,6 +586,9 @@ class AgentPlatformSandboxEnvironment(BaseEnvironment):
                 sandbox_name=sandbox_name,
                 service_account_email=self._service_account_email,
                 runner_base_url=self._runner_base_url,
+                use_iam_bearer=(
+                    not bool(self._runner_base_url) and not bool(self._service_account_email)
+                ),
             )
         else:
             sandbox_name = self._get_active_sandbox_name(ctx)
@@ -644,6 +647,9 @@ class AgentPlatformSandboxEnvironment(BaseEnvironment):
             sandbox_name=sandbox_name,
             service_account_email=self._service_account_email,
             runner_base_url=self._runner_base_url,
+            use_iam_bearer=(
+                not bool(self._runner_base_url) and not bool(self._service_account_email)
+            ),
         )
         return ExecutionResult(
             exit_code=out.returncode,
@@ -693,7 +699,7 @@ class AgentPlatformSandboxEnvironment(BaseEnvironment):
                 sandbox_environment=sandbox_env,
             )
             body = getattr(raw, "body", raw)
-            if isinstance(body, (bytes, bytearray)):
+            if isinstance(body, bytes | bytearray):
                 return json.loads(body.decode("utf-8"))
             if isinstance(body, str):
                 return json.loads(body)

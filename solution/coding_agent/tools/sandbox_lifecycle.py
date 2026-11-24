@@ -878,7 +878,6 @@ class SandboxLifecycleManager:
                 sandbox = self.create_sandbox(
                     display_name="workshop-shell-demo-sandbox",
                     template_name=template.name,
-                    spec={"shell_environment": {}},
                     ttl=ttl,
                 )
             else:

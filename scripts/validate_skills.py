@@ -216,7 +216,14 @@ def validate_skill_dir(
         report.errors.append("Missing required SKILL.md file.")
         return report
 
-    text = skill_md.read_text(encoding="utf-8")
+    try:
+        text = skill_md.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError) as exc:
+        report.errors.append(f"Unable to read SKILL.md as UTF-8: {exc}")
+        return report
+
+    decoded_texts: dict[Path, str] = {skill_md.resolve(): text}
+    unreadable_paths: set[Path] = set()
     lines = text.splitlines()
     report.line_count = len(lines)
 
@@ -322,7 +329,13 @@ def validate_skill_dir(
                     f"Orphan reference file {rel_display!r} is not linked from SKILL.md."
                 )
 
-            ref_text = ref_file.read_text(encoding="utf-8")
+            try:
+                ref_text = ref_file.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError) as exc:
+                unreadable_paths.add(ref_resolved)
+                report.errors.append(f"Unable to read {rel_display!r} as UTF-8: {exc}")
+                continue
+            decoded_texts[ref_resolved] = ref_text
             for nested_target in extract_relative_links(ref_text):
                 nested_resolved = (ref_file.parent / nested_target).resolve()
                 try:
@@ -352,8 +365,18 @@ def validate_skill_dir(
     if references_root.is_dir():
         md_files_to_scan.extend(sorted(references_root.rglob("*.md")))
     for md_file in md_files_to_scan:
-        rel_md = md_file.resolve().relative_to(skill_root_resolved).as_posix()
-        for line_no, line in enumerate(md_file.read_text(encoding="utf-8").splitlines(), start=1):
+        md_resolved = md_file.resolve()
+        if md_resolved in unreadable_paths:
+            continue
+        rel_md = md_resolved.relative_to(skill_root_resolved).as_posix()
+        md_text = decoded_texts.get(md_resolved)
+        if md_text is None:
+            try:
+                md_text = md_file.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError) as exc:
+                report.errors.append(f"Unable to read {rel_md!r} as UTF-8: {exc}")
+                continue
+        for line_no, line in enumerate(md_text.splitlines(), start=1):
             match = WORKSTATION_PATH_REGEX.search(line)
             if match:
                 report.errors.append(

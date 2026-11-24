@@ -206,8 +206,11 @@ async def _run_workspace_check(
     command: list[str],
     allow_exit_codes: frozenset[int] = frozenset({0}),
     empty_exit_code_message: str = "",
+    sandbox_env: Any | None = None,
+    remote_command: str | None = None,
+    ctx: Context | None = None,
 ) -> CheckOutcome:
-    """Run a deterministic verification CLI inside the local workspace.
+    """Run a deterministic verification CLI inside the local or remote Managed Sandbox workspace.
 
     IMPORTANT (ADK 2.0 Retry & HITL semantics):
     - Never swallow ``Exception`` or ``BaseException``. The ``except BaseException``
@@ -218,6 +221,33 @@ async def _run_workspace_check(
       ADK's retry/HITL runtime.
     """
     if settings.sandbox_mode != "local":
+        if sandbox_env is not None and callable(getattr(sandbox_env, "execute", None)):
+            cmd_str = remote_command or " ".join(command)
+            exec_res = await sandbox_env.execute(cmd_str, timeout=30.0, ctx=ctx)
+            exit_code = int(getattr(exec_res, "exit_code", 1))
+            combined = (
+                f"{getattr(exec_res, 'stdout', '') or ''}\n"
+                f"{getattr(exec_res, 'stderr', '') or ''}"
+            ).strip()
+            max_chars = min(settings.max_output_chars, 4_000)
+            if len(combined) > max_chars:
+                combined = combined[:max_chars] + "\n...[truncated]..."
+            if exit_code in allow_exit_codes:
+                summary = combined or empty_exit_code_message or f"{check_name} passed."
+                if exit_code != 0 and empty_exit_code_message:
+                    summary = f"{empty_exit_code_message}\n{combined}".strip()
+                return CheckOutcome(
+                    check_name=check_name,
+                    passed=True,
+                    exit_code=0,
+                    summary=summary,
+                )
+            return CheckOutcome(
+                check_name=check_name,
+                passed=False,
+                exit_code=exit_code,
+                summary=combined or f"{check_name} failed in sandbox with exit code {exit_code}.",
+            )
         return CheckOutcome(
             check_name=check_name,
             passed=True,
@@ -452,11 +482,18 @@ def build_graph_coding_workflow(
       across intermediate HITL pauses.
     """
     del settings, tools, callbacks, code_executor
-    # TODO(lab-1): Define `coder_agent`, parallel `run_pytest_node` / `run_ruff_node`
-    # (using `_run_workspace_check` + `@node(retry_config=..., timeout=30.0)`),
-    # `JoinNode(name="verify_join")`, bounded `verdict_router`,
+    # TODO(lab-1): Define `coder_agent` (with `output_key="latest_code_summary"`),
+    # parallel `run_pytest_node` / `run_ruff_node` (using `_run_workspace_check(...,
+    # allow_exit_codes=frozenset({0, 5}))` for pytest so exit code 5 [no tests collected]
+    # succeeds, forwarding `sandbox_env=_extract_sandbox_environment(tools)` + `ctx=ctx`,
+    # and `@node(retry_config=..., timeout=30.0)`), `JoinNode(name="verify_join")`, bounded
+    # `verdict_router` (note: include `{"checks_passed", "findings"}` in the non-HITL
+    # summary payload so `_format_approval_note()` distinguishes it from human replies),
     # `@node(rerun_on_resume=False)` `request_human_approval`, and `finalize_report`,
     # then return `Workflow(name="coding_agent", edges=[...])`.
+    # Note: keep the top-level `from google.adk.workflow import JoinNode, NodeTimeoutError,
+    # RetryConfig, node` import line intact (import `DEFAULT_ROUTE` locally inside this
+    # function if using a partial route map).
     # Compare against `solution/coding_agent/architectures.py`.
     raise NotImplementedError(
         "Complete TODO(lab-1) in starter/coding_agent/architectures.py: "
@@ -503,6 +540,61 @@ def build_dynamic_coding_workflow(
     )
 
 
+def _format_spec_brief(spec_output: Any, fallback_prompt: str) -> str:
+    """Render a ``SpecPlan`` (or raw string/mapping) into a concrete implementation brief."""
+    if isinstance(spec_output, SpecPlan):
+        targets = "\n".join(f"- {f}" for f in spec_output.target_files) or "- (inspect workspace)"
+        criteria = (
+            "\n".join(f"- {c}" for c in spec_output.acceptance_criteria)
+            or "- All pytest and ruff checks pass"
+        )
+        return (
+            f"Implementation Brief:\n{spec_output.implementation_prompt}\n\n"
+            f"Summary:\n{spec_output.summary}\n\n"
+            f"Target Files:\n{targets}\n\n"
+            f"Acceptance Criteria:\n{criteria}"
+        )
+    if isinstance(spec_output, Mapping):
+        impl_prompt = str(spec_output.get("implementation_prompt") or fallback_prompt).strip()
+        summary = str(spec_output.get("summary") or "").strip()
+        target_files = spec_output.get("target_files") or []
+        acceptance = spec_output.get("acceptance_criteria") or []
+        targets = "\n".join(f"- {f}" for f in target_files) or "- (inspect workspace)"
+        criteria = (
+            "\n".join(f"- {c}" for c in acceptance) or "- All pytest and ruff checks pass"
+        )
+        return (
+            f"Implementation Brief:\n{impl_prompt}\n\n"
+            f"Summary:\n{summary}\n\n"
+            f"Target Files:\n{targets}\n\n"
+            f"Acceptance Criteria:\n{criteria}"
+        )
+    text = str(spec_output or "").strip()
+    return text or fallback_prompt
+
+
+def _format_review_section(review_output: Any) -> str:
+    """Format an independent ``CodeReviewReport`` into a markdown report section."""
+    if isinstance(review_output, CodeReviewReport):
+        verdict = "APPROVED" if review_output.approved else "CHANGES REQUESTED"
+        issues = "\n".join(f"- {item}" for item in review_output.issues)
+        body = f"- Verdict: **{verdict}**\n- Summary: {review_output.summary}"
+        if issues:
+            body += f"\n- Issues:\n{issues}"
+        return body
+    if isinstance(review_output, Mapping):
+        verdict = (
+            "APPROVED" if _coerce_bool(review_output.get("approved", False)) else "CHANGES REQUESTED"
+        )
+        summary = str(review_output.get("summary", "")).strip()
+        issues_list = review_output.get("issues") or []
+        body = f"- Verdict: **{verdict}**\n- Summary: {summary}"
+        if issues_list:
+            body += "\n- Issues:\n" + "\n".join(f"- {item}" for item in issues_list)
+        return body
+    return str(review_output or "").strip()
+
+
 def build_agy_harness_workflow(
     settings: Settings,
     tools: Sequence[Any],
@@ -513,22 +605,27 @@ def build_agy_harness_workflow(
 
     Target 5-stage design (``AGENT_ARCHITECTURE=agy_harness``):
     1. ``spec_planner`` (``_build_gemini_model(settings, role="reasoning")`` -> ``gemini-4-neon``,
-       ``output_schema=SpecPlan``) produces concrete file targets & acceptance criteria.
+       ``output_schema=SpecPlan``) produces concrete file targets & acceptance criteria,
+       formatted via ``_format_spec_brief(...)``.
     2. ``run_agy_harness_node`` delegates edits to ``AgyHeadlessHarness`` (auto-selecting BYOC
        sandbox vs local/Agent Runtime ``agy`` vs native ADK fallback, capturing ``conversation_id``).
     3. Independent deterministic ``run_pytest_node`` + ``run_ruff_node`` via
-       ``asyncio.gather(..., use_sub_branch=True)``.
+       ``asyncio.gather(..., use_sub_branch=True)`` (forwarding ``sandbox_env`` + ``ctx``
+       into ``_run_workspace_check(...)``).
     4. Bounded fix loop (``settings.max_fix_rounds``) feeding failures back via
        ``--conversation <conversation_id>`` (with exit-code-3 retry/fallback,
        fail-fast on non-zero exit codes 1/2 without re-invoking ``agy``, and
        surfacing any non-zero harness exit code in ``findings`` so the report
        never claims ``PASSED`` on harness failure).
-    5. Independent ``code_reviewer`` (``gemini-4-neon``, ``output_schema=CodeReviewReport``)
-       + optional ``RequestInput`` HITL approval gate + single terminal ``Event``.
+    5. Independent ``code_reviewer`` (``gemini-4-neon``, ``output_schema=CodeReviewReport``,
+       formatted via ``_format_review_section(...)``) + optional ``RequestInput`` HITL
+       approval gate + single terminal ``Event``.
     """
     del settings, tools, callbacks, code_executor
     # TODO(lab-1): Implement the 5-stage Antigravity (`agy`) headless coding harness
-    # workflow described above. Compare against `solution/coding_agent/architectures.py`.
+    # workflow described above using `_extract_sandbox_environment`, `_format_spec_brief`,
+    # `_run_workspace_check`, and `_format_review_section`. Compare against
+    # `solution/coding_agent/architectures.py`.
     raise NotImplementedError(
         "Complete TODO(lab-1) in starter/coding_agent/architectures.py: "
         "build_agy_harness_workflow()."

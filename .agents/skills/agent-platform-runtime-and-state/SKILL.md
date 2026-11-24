@@ -61,8 +61,8 @@ export BUILD_LOCATION="${PRIMARY_REGION}"      # Bangkok remote Cloud Build (zer
    - *Why:* One upstream doc example prints `location = var.location` (wrong schema attr); omitting `deletion_policy = "FORCE"` makes `terraform destroy` fail with HTTP 400 once child sessions/memories exist; cached `5.x` providers reject `spec.container_spec`; and Terraform's `element(split(...), -1)` from `agent-identity` docs crashes because `element()` forbids negative indices. Also `.id` is the full path while `.name` is the short numeric ID.
 3. **Pack `Dockerfile` at level 0 (root) of `source_archive` (`<= 8 MB`) — never nest it in a subdirectory.**
    - *Why:* `source_code_spec` with empty `image_spec {}` unpacks the `.tar.gz` directly into Cloud Build's workspace root and fails immediately if `./Dockerfile` is missing (`cd app && tar -czvf ../src.tar.gz Dockerfile main.py requirements.txt`).
-4. **Never set reserved env vars in `deployment_spec` (`GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `PORT`, `K_SERVICE`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_AGENT_ENGINE*`).**
-   - *Why:* Agent Runtime auto-injects `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, and `GOOGLE_CLOUD_AGENT_ENGINE_ID`; overriding reserved names fails validation or breaks runtime wiring.
+4. **Never set reserved env vars in `deployment_spec` (`GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `PORT`, `K_SERVICE`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_AGENT_ENGINE*` — except documented platform flags like `GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY`).**
+   - *Why:* Agent Runtime auto-injects `GOOGLE_CLOUD_PROJECT` (as the **numeric project number**), `GOOGLE_CLOUD_QUOTA_PROJECT`, `GOOGLE_CLOUD_LOCATION`, and `GOOGLE_CLOUD_AGENT_ENGINE_ID`; overriding reserved names fails validation or breaks runtime wiring. For subprocess tools like `agy 1.5.15` that reject numeric project IDs, inject a non-reserved `AGY_PROJECT_ID = var.project_id` string env var instead.
 5. **Pass `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT="EVENT_ONLY"` — never `"true"` in ADK Python.**
    - *Why:* ADK Python only accepts `NO_CONTENT`, `EVENT_ONLY`, `SPAN_ONLY`, or `SPAN_AND_EVENT`; `"true"` silently falls back to `NO_CONTENT`, dropping prompts, responses, and `user.id` (note: `user.id` requires ADK `>= 2.1` effective May 22, 2026).
 6. **Switch traffic to `traffic_split_always_latest` BEFORE changing `agent_gateway_config` — never patch while a manual split is active.**
@@ -73,8 +73,8 @@ export BUILD_LOCATION="${PRIMARY_REGION}"      # Bangkok remote Cloud Build (zer
    - *Why:* Those three RPCs do not support IAM Conditions (max 1,500 principals per policy). Built-in PII exclusion is not infallible—pair Memory Bank with Model Armor, red-teaming, and sandboxed execution + human review.
 9. **Set Feedback `event_id` to the OTel span UUID `gcp.vertex.agent.event_id` (or `raw_event.id`) — and note `feedback_contexts.update` vs `.get` path asymmetry.**
    - *Why:* Arbitrary event IDs won't appear in the Console Traces UI; duplicate `(session_id, event_id)` shows only the last entry; and `feedback_contexts.update` takes `name=entry_name` while `.get` takes `name=f"{entry_name}/feedbackContext"`.
-10. **Emit structured logs from the parent Agent Runtime — never expect Cloud Logging on child resources.**
-    - *Why:* Cloud Logging attaches only to `aiplatform.googleapis.com/ReasoningEngine`, NOT child Sessions, Memory Bank, Sandboxes, Code Execution, or Example Store. User-defined Monitoring metrics (`custom.googleapis.com/*`) must use `generic_node`, not `ReasoningEngine`.
+10. **Emit structured logs from the parent Agent Runtime — never expect Cloud Logging on child resources, and never call `.pop()` on ADK 2.0 `ToolContext.state`.**
+    - *Why:* Cloud Logging attaches only to `aiplatform.googleapis.com/ReasoningEngine`, NOT child Sessions, Memory Bank, Sandboxes, Code Execution, or Example Store; user-defined Monitoring metrics (`custom.googleapis.com/*`) must use `generic_node`. In ADK 2.0 tool callbacks, `ToolContext.state` (`google.adk.sessions.state.State`) supports `.get()`/`.setdefault()` but lacks `.pop()` (`AttributeError`) — clear per-call timing keys with `state[key] = None`.
 
 ---
 
@@ -112,10 +112,12 @@ resource "google_vertex_ai_reasoning_engine" "agent" {
       env { name = "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY"; value = "true" }
       env { name = "OTEL_SEMCONV_STABILITY_OPT_IN"; value = "gen_ai_latest_experimental" }
       env { name = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"; value = "EVENT_ONLY" }
-      env { name = "MODEL_NAME"; value = var.model_name }          # Default "gemini-4-hydrogen" (reasoning: gemini-4-neon)
-      env { name = "MODEL_LOCATION"; value = var.model_location }  # Default "global" (decoupled from SG Runtime!)
-      env { name = "THINKING_LEVEL"; value = var.thinking_level }  # Strictly LOW|MEDIUM|HIGH|XHIGH
-      env { name = "AGY_ADC_AUTH"; value = "true" }                # Uses Custom SA ADC for /usr/local/bin/agy (never personal OAuth!)
+      env { name = "MODEL_NAME"; value = var.model_name }                # Default "gemini-4-hydrogen" (reasoning: gemini-4-neon)
+      env { name = "MODEL_LOCATION"; value = var.model_location }        # Default "global" (decoupled from SG Runtime!)
+      env { name = "THINKING_LEVEL"; value = upper(var.thinking_level) } # Strictly LOW|MEDIUM|HIGH|XHIGH
+      env { name = "AGY_PROJECT_ID"; value = var.project_id }            # Non-reserved string project ID (agy 1.5.15 rejects numeric GOOGLE_CLOUD_PROJECT)
+      env { name = "AGY_EXECUTION_MODE"; value = "local" }               # Run agy in trusted Runtime via Custom SA ADC (keep air-gapped BYOC for pytest/ruff)
+      env { name = "AGY_ADC_AUTH"; value = "true" }                      # Uses Custom SA ADC for /usr/local/bin/agy (never personal OAuth!)
       secret_env {
         name = "API_KEY"
         secret_ref { secret = google_secret_manager_secret.api_key.secret_id; version = "latest" }

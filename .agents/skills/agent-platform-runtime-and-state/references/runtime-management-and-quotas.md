@@ -196,6 +196,7 @@ Custom containers MUST bind **`0.0.0.0:8080`** (default `PORT=8080`) and answer 
 
 ```python
 import inspect, json, os, uvicorn
+from collections.abc import AsyncIterable, Iterable
 from fastapi import FastAPI, Request, encoders, responses
 from pydantic import BaseModel, ValidationError
 
@@ -205,24 +206,60 @@ class QueryRequest(BaseModel):
     input: dict | None = None
     class_method: str
 
-class AgentServer:
-    has_active_background_tasks: bool = False
+_adk_app_instance = None
 
-    def query(self, message: str) -> str:
-        return f"Echo: {message}"
+def _get_adk_app():
+    """Lazy ADK AdkApp factory for BYOC Agent Runtime containers."""
+    global _adk_app_instance
+    if _adk_app_instance is not None:
+        return _adk_app_instance
 
-    async def stream_query(self, message: str):
-        for token in message.split():
-            yield {"output": token + " "}
+    # 1. Import agent module FIRST (it may call load_dotenv() and inject empty vars from .env!)
+    from coding_agent.agent import app as adk_app, root_agent
 
-agent = AgentServer()
+    # 2. CRITICAL TRAP: Pop empty/whitespace GOOGLE_CLOUD_AGENT_ENGINE_ID AFTER importing
+    #    coding_agent.agent and BEFORE instantiating AdkApp — otherwise AdkApp.set_up() raises:
+    #    `ValueError: agent_engine_id is required for VertexAiMemoryBankService.`
+    if not os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID", "").strip():
+        os.environ.pop("GOOGLE_CLOUD_AGENT_ENGINE_ID", None)
+
+    # 3. Prefer agentplatform.frameworks.AdkApp with vertexai.agent_engines fallback
+    try:
+        from agentplatform.frameworks import AdkApp
+    except ImportError:
+        from vertexai.agent_engines import AdkApp
+
+    # 4. Inspect AdkApp.__init__ signature to pick `app=` (preserves App plugins/resumability) vs `agent=`
+    init_params = inspect.signature(AdkApp.__init__).parameters
+    if "app" in init_params:
+        instance = AdkApp(app=adk_app)
+    else:
+        instance = AdkApp(agent=root_agent, plugins=getattr(adk_app, "plugins", None))
+    if hasattr(instance, "set_up"):
+        instance.set_up()
+    _adk_app_instance = instance
+    return _adk_app_instance
+
+def _resolve_public_method(target, method_name: str):
+    """Block private/dunder names and non-callables on HTTP method dispatch."""
+    if not method_name or method_name.startswith("_"):
+        return None
+    fn = getattr(target, method_name, None)
+    return fn if callable(fn) else None
 
 async def _invoke(fn, payload):
     return await fn(**payload) if inspect.iscoroutinefunction(fn) else fn(**payload)
 
 async def _ndjson(stream):
-    async for chunk in stream:
-        yield json.dumps(encoders.jsonable_encoder(chunk)) + "\n"
+    """Support async iterables (__aiter__), sync generators (__iter__, e.g. stream_query), and scalar outputs."""
+    if isinstance(stream, AsyncIterable):
+        async for chunk in stream:
+            yield json.dumps(encoders.jsonable_encoder(chunk)) + "\n"
+    elif isinstance(stream, Iterable) and not isinstance(stream, (str, bytes, dict)):
+        for chunk in stream:
+            yield json.dumps(encoders.jsonable_encoder(chunk)) + "\n"
+    else:
+        yield json.dumps(encoders.jsonable_encoder({"output": stream})) + "\n"
 
 async def _parse_query_request(raw_req: Request) -> QueryRequest:
     body = await raw_req.body()
@@ -237,7 +274,7 @@ def health():
 
 @app.get("/is_busy")
 def keep_alive():
-    if agent.has_active_background_tasks:
+    if getattr(_adk_app_instance, "has_active_background_tasks", False):
         return responses.JSONResponse(status_code=200, content={"status": "busy"})
     return responses.JSONResponse(status_code=412, content={"status": "idle"})
 
@@ -247,7 +284,7 @@ async def unary(raw_req: Request):
         req = await _parse_query_request(raw_req)
     except (json.JSONDecodeError, ValidationError) as exc:
         return responses.JSONResponse(status_code=400, content={"error": f"Invalid payload: {exc}"})
-    fn = getattr(agent, req.class_method, None)
+    fn = _resolve_public_method(_get_adk_app(), req.class_method)
     if fn is None:
         return responses.JSONResponse(status_code=400, content={"error": f"Unknown method {req.class_method}"})
     return responses.JSONResponse(content=encoders.jsonable_encoder({"output": await _invoke(fn, req.input or {})}))
@@ -258,7 +295,7 @@ async def stream(raw_req: Request):
         req = await _parse_query_request(raw_req)
     except (json.JSONDecodeError, ValidationError) as exc:
         return responses.StreamingResponse(iter([json.dumps({"error": f"Invalid payload: {exc}"}) + "\n"]), status_code=400, media_type="application/json")
-    fn = getattr(agent, req.class_method, None)
+    fn = _resolve_public_method(_get_adk_app(), req.class_method)
     if fn is None:
         return responses.StreamingResponse(iter([json.dumps({"error": f"Unknown method {req.class_method}"}) + "\n"]), status_code=400, media_type="application/json")
     return responses.StreamingResponse(_ndjson(await _invoke(fn, req.input or {})), media_type="application/json")
@@ -283,8 +320,8 @@ if __name__ == "__main__":
 | `max_instances` | `100` (`10` in `agents-cli`) | `[1, 1000]` (**capped at `[1, 100]`** if VPC-SC or PSC-I is enabled). |
 | `resource_limits` | `{"cpu": "4", "memory": "4Gi"}` | `cpu`: `1, 2, 4, 6, 8`; `memory`: `1Gi`..`32Gi`. |
 | `container_concurrency` | `9` (`8` in `agents-cli`) | Recommended `2 * cpu + 1` for sync. For **async I/O-bound ADK agents**, each container runs 9 processes (`concurrency / 9` per process): start at a **multiple of 9 (e.g., `36`)** to drop tail queueing spikes (e.g., 60s -> ~7s under 300 concurrent reqs); avoid setting too high to prevent OOM. |
-| **Forbidden env vars** | — | `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_QUOTA_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `PORT`, `K_SERVICE`, `K_REVISION`, `K_CONFIGURATION`, `GOOGLE_APPLICATION_CREDENTIALS`; avoid `GOOGLE_CLOUD_AGENT_ENGINE*`. |
-| **Auto-injected env vars** | — | `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GOOGLE_CLOUD_AGENT_ENGINE_ID`. |
+| **Forbidden env vars** | — | `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_QUOTA_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `PORT`, `K_SERVICE`, `K_REVISION`, `K_CONFIGURATION`, `GOOGLE_APPLICATION_CREDENTIALS`; avoid `GOOGLE_CLOUD_AGENT_ENGINE*` *(except documented platform flags like `GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY`)*. |
+| **Auto-injected env vars** | — | `GOOGLE_CLOUD_PROJECT` *(injected as the **numeric project number** — pass non-reserved `AGY_PROJECT_ID = var.project_id` for CLI tools like `agy 1.5.15` requiring a string project ID)*, `GOOGLE_CLOUD_QUOTA_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GOOGLE_CLOUD_AGENT_ENGINE_ID`. |
 
 ---
 

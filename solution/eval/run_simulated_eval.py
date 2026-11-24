@@ -32,6 +32,7 @@ from coding_agent.config import get_settings  # noqa: E402
 from eval.run_offline_eval import (  # noqa: E402
     SUPPORTED_EVAL_LOCATIONS,
     build_eval_client,
+    expand_agent_toolsets,
     get_eval_types,
     validate_eval_location,
 )
@@ -54,10 +55,10 @@ DEFAULT_ENVIRONMENT_CONTEXT = (
 
 
 def load_local_coding_agent() -> Any:
-    """Import the workshop ADK ``root_agent`` lazily."""
+    """Import the workshop ADK ``root_agent`` lazily with ``BaseToolset`` entries expanded."""
     from coding_agent.agent import root_agent
 
-    return root_agent
+    return expand_agent_toolsets(root_agent)
 
 
 def generate_scenarios(
@@ -70,8 +71,9 @@ def generate_scenarios(
 ) -> Any:
     """Step 1: Extract ``AgentInfo`` and synthesize multi-turn user scenarios."""
     types = get_eval_types()
+    prepared_agent = expand_agent_toolsets(agent)
 
-    agent_info = types.evals.AgentInfo.load_from_agent(agent=agent)
+    agent_info = types.evals.AgentInfo.load_from_agent(agent=prepared_agent)
     return client.evals.generate_conversation_scenarios(
         agent_info=agent_info,
         config={
@@ -90,8 +92,9 @@ def run_user_simulation(
     max_turns: int = 5,
 ) -> Any:
     """Step 2: Execute multi-turn simulated conversations capped at ``max_turn``."""
+    prepared_agent = expand_agent_toolsets(agent)
     return client.evals.run_inference(
-        agent=agent,
+        agent=prepared_agent,
         src=scenario_dataset,
         config={
             "user_simulator_config": {

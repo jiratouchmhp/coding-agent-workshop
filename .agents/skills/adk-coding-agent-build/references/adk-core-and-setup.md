@@ -161,7 +161,7 @@ async for event in adk_app.async_stream_query(
     print(event)
 ```
 - Locally, `AdkApp` defaults to `InMemorySessionService` and `InMemoryMemoryService`; on Agent Runtime it binds managed Sessions and Memory Bank automatically (`:streamQuery` dispatches to `streaming_agent_run_with_events`).
-- Other async methods: `async_list_sessions(user_id=...)`, `async_get_session(user_id=..., session_id=...)`, `async_add_session_to_memory(session=...)`, `async_search_memory(user_id=..., query=...)`.
+- Other async methods: `async_list_sessions(user_id=...)`, `async_get_session(user_id=..., session_id=...)`, `async_add_session_to_memory(session=...)`, `async_search_memory(user_id=..., query=...)` (**Note:** `async_search_memory` accepts `(user_id, query)` only — passing `app_name=` raises `TypeError`).
 
 ---
 
@@ -261,6 +261,10 @@ async def after_tool_callback(
 | `temp:` | Current invocation only (discarded after turn) | `state["temp:raw_diff"] = diff_str` |
 
 - **Session Rewind (Undo / Debug):** `await runner.rewind_async(user_id=uid, session_id=sid, rewind_before_invocation_id=inv_id)` restores session-scoped state and artifacts to before `inv_id`; `user:` and `app:` state are unaffected.
+- **ADK 2.0 `State` API Contract (`google.adk.sessions.state.State`):** `callback_context.state`, `tool_context.state`, and `ctx.state` are `State` instances (MRO: `[State, object]`), **not** plain Python `dict`s.
+  - **Supported:** `get()`, `setdefault()`, `update()`, `to_dict()`, `has_delta()`, `key in state`, `state[key]`, `state[key] = val`, `iter(state)`.
+  - **NOT supported (raises `AttributeError` / `TypeError`):** `pop()`, `keys()`, `items()`, `values()`, `del state[key]`, `len(state)`.
+  - **Clearing a key:** Never call `state.pop(key, None)`. Instead write `state[key] = None` (or `yield Event(state={key: ""})` in workflow nodes) and inspect snapshots via `state.to_dict()`.
 
 ### Artifacts (Binary / Large File Storage)
 
@@ -381,18 +385,23 @@ Follow these positive architectural invariants across all ADK Python 2.0+ agents
 | `Session not found` in eval or runtime | `App(name=...)` does not match agent directory name, OR `google-cloud-aiplatform <= 1.128.0` after Gemini publish | Set `App(name="<folder_basename>", root_agent=root_agent)` and upgrade `google-cloud-aiplatform`. |
 | `404 Model not found` (`asia-southeast1`) / `501` (`asia-southeast3`) / `400` on thinking config | Calling `gemini-4-hydrogen`/`gemini-4-neon` on regional endpoints, using retired `gemini-2.5-flash` (Oct 20, 2026), or passing `THINKING_LEVEL=MINIMAL` / `thinking_budget` | Pass `client_kwargs={auth_key: True, "project": ..., "location": "global"}` to `Gemini(model="gemini-4-hydrogen"\|"gemini-4-neon")` (or use `gemini-4-argon` on `asia-southeast1` for strict regional residency) and set `THINKING_LEVEL` in `LOW\|MEDIUM\|HIGH\|XHIGH`. |
 | `KeyError: 'var_name'` on first turn | `{var_name}` in `instruction` is missing from `session.state` | Initialize all template variables in `before_agent_callback` with `callback_context.state.setdefault(...)`. |
+| `AttributeError: 'State' object has no attribute 'pop'` | Treated ADK 2.0 `ctx.state` / `tool_context.state` as a plain Python `dict` | `State` supports `get()`/`setdefault()`/`update()`/`to_dict()` but NOT `pop()`/`keys()`/`items()`/`values()`/`__delitem__`. Clear keys with `state[key] = None` or `Event(state={key: ""})`. |
 | Unreliable tool calls or malformed JSON after adding `output_schema` | Model falls back to injected `set_model_response` tool when combining `output_schema` + `tools` (non-Gemini-on-GCP / unsupported `LiteLlm` providers) | Use Gemini on Google Cloud (supports both in one request) or separate tool execution (`LlmAgent` without `output_schema`) from structured formatting (`LlmAgent` with `output_schema` in a sub-agent or downstream `Workflow` node). |
 | `ValidationError: Input should be a valid dictionary or instance of BaseAgent` | Passed sub-agent factory function reference instead of calling it | Call factory: `sub_agents=[create_sub_agent()]`. |
 | `adk web` shows no agents | Launched `adk web` from *inside* `my_agent/` instead of its parent folder | `cd ..` to parent directory and run `adk web --port 8000` (dev only; never production). |
 
 ### Local Verification Steps
-1. **Verify model availability in your target region:**
+1. **Verify model availability in your target location (`global` for `gemini-4-hydrogen`/`gemini-4-neon`, or `asia-southeast1` for regional `gemini-4-argon`):**
    ```bash
-   uv run --with google-genai python -c "
+   uv run --with "google-genai>=2.34.0" python - << 'EOF'
+   import inspect, os
    from google import genai
-   client = genai.Client(vertexai=True, location='asia-southeast1')
-   print([m.name for m in client.models.list() if 'gemini' in m.name][:10])
-   "
+
+   auth_key = "enterprise" if "enterprise" in inspect.signature(genai.Client.__init__).parameters else "vertexai"
+   location = os.environ.get("MODEL_LOCATION", "global")  # Use "asia-southeast1" to check gemini-4-argon
+   client = genai.Client(**{auth_key: True, "project": os.environ["GOOGLE_CLOUD_PROJECT"], "location": location})
+   print([m.name for m in client.models.list() if "gemini" in m.name][:10])
+   EOF
    ```
 2. **Programmatic smoke test (`InMemoryRunner` — tests wiring, not LLM prose):**
    ```python

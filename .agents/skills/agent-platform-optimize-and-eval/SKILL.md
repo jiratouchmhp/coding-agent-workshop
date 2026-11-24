@@ -57,9 +57,9 @@ export SKILL_REGISTRY_LOCATION="us-central1"    # Vertex AI Skill Registry Previ
 ## Critical Gotchas (Do This, Not That)
 
 1. **Check `safety_v3` vs. `safety_v1` score polarity before gating CI or setting Quality Alerts — never assume `1.0` means safe on `safety_v3`.**
-   - *Why:* Verified in `rubric-metric-details`: **`safety_v3`** (latest default, 31× Gemini 3.5 Flash calls) returns **`1` = UNSAFE** (policy violated) and **`0` = SAFE**, the **exact opposite** of `safety_v1` (`1` = safe, `0` = unsafe). Alert on `safety_v3` with `COMPARISON_GT`, or pin `types.RubricMetric.SAFETY(version="v1")`.
-2. **Pass `dataset=` to `client.evals.evaluate(...)` — never copy the `traces=` typo from high-level overview snippets.**
-   - *Why:* The authoritative `vertexai._genai.evals.Evals` (`v1.153.1`) signature requires `dataset=` (a `DataFrame`, `EvaluationDataset`, or list); `traces=` raises `TypeError`. Also note `from vertexai import Client` (uppercase `C`).
+   - *Why:* Verified in `rubric-metric-details`: **`safety_v3`** (modern Gemini 3.5 Flash default, 31× calls) returns **`1` = UNSAFE** (policy violated) and **`0` = SAFE**, the **exact opposite** of legacy `safety_v1` (`1` = safe, `0` = unsafe). Standardize on `types.RubricMetric.SAFETY(version="v3")` with inverted checks (`COMPARISON_GT`, e.g., `> 0.05` in alerts), or explicitly pin `version=` so polarity never shifts silently.
+2. **Pass `dataset=` to `client.evals.evaluate(...)`, typed `EvaluationDataset` to `run_inference(src=...)`, and expand `BaseToolset`s before `AgentInfo.load_from_agent(...)`.**
+   - *Why:* `client.evals.evaluate()` requires `dataset=` (`traces=` raises `TypeError`); `run_inference(src=...)` rejects raw Python `dict`s (use `types.EvaluationDataset.model_validate(...)`, DataFrame, or file path); and in `google-cloud-agentplatform==2.10.0`, `types.evals.AgentInfo.load_from_agent(agent=...)` crashes with `TypeError: Expected a callable object, got EnvironmentToolset` on ADK `BaseToolset` instances (`EnvironmentToolset`, `SkillToolset`) unless you expand `await toolset.get_tools()` onto a clone first.
 3. **Run `generate_loss_clusters` and `agents-cli eval analyze` against `location="global"` — regional clients fail.**
    - *Why:* Automatic Loss Analysis (`GenerateLossClusters` LRO) is **`global`-only**. For multi-metric or multi-candidate runs, pass `metric=` and `candidate=` explicitly (`eval_result.metadata.candidate_names`).
 4. **Use ONLY the 3 `multi_turn_*` metrics on multi-turn traces — never mix single-turn and multi-turn cases in one dataset.**
@@ -72,8 +72,8 @@ export SKILL_REGISTRY_LOCATION="us-central1"    # Vertex AI Skill Registry Previ
    - *Why:* UAP and IAM denies are eventually consistent (**2–7+ min** globally; `principalSet` takes **minutes to hours**) and do **not** kill already-open streaming sessions. Also query recent audit logs with `--freshness=1d` (`--freshness=6h` can miss freshly indexed entries).
 8. **Match ADK `App(name=...)` to the containing directory name and initialize template state keys in `before_agent_callback`.**
    - *Why:* Mismatched `App(name=...)` causes `"Session not found"` during `eval generate` and `adk optimize`; uninitialized `{state_key}` placeholders crash turn 0 with `KeyError`.
-9. **Exhaust manual prompt/tool fixes, load local `SkillToolset.skills` for `GEPARootAgentOptimizer`, and keep a holdout slice BEFORE running GEPA — never auto-loop GEPA.**
-   - *Why:* GEPA makes many LLM calls (minutes to hours) and optimizes **only root instructions** (or root + local in-memory `SkillToolset.skills` loaded via `load_skill_from_dir` when using `GEPARootAgentOptimizer` — NOT lazy remote `GCPSkillRegistry` handles, tools, or sub-agents). Preserve YAML frontmatter on optimized `SKILL.md` files, validate on holdout with `agents-cli eval compare`, then hot-update skills via `client.skills.update` or Agent Registry `revisions create` + `--default-revision` with zero agent container rebuild.
+9. **Override ADK optimizer `model_configuration` + `GOOGLE_CLOUD_LOCATION=global`, load local `SkillToolset.skills` for `GEPARootAgentOptimizer`, and keep a holdout slice BEFORE running GEPA — never auto-loop GEPA.**
+   - *Why:* In `google-adk==2.15.0`, `SimplePromptOptimizerConfig` and `GEPARootAgentPromptOptimizerConfig` default to retired `gemini-2.5-flash` AND `ThinkingConfig(thinking_budget=10240)` (**HTTP 400 on Gemini 4**), and their default `Gemini(model=...)` omits `location="global"` (**HTTP 404** when `GOOGLE_CLOUD_LOCATION=asia-southeast1`). Always set `optimizer_model="gemini-4-hydrogen"`, pass `ThinkingConfig(thinking_level="MEDIUM", include_thoughts=True)` (no `thinking_budget`), and export `GOOGLE_CLOUD_LOCATION=global` (or use `gemini-4-argon` regionally). GEPA optimizes **only root instructions** (plus local in-memory `SkillToolset.skills` in `GEPARootAgentOptimizer`, NOT lazy remote `GCPSkillRegistry` handles). Preserve YAML frontmatter on optimized `SKILL.md` files, validate on holdout, then hot-update skills via `client.skills.update` or Agent Registry `revisions create` + `skills update --default-revision=... --target-state=active`.
 10. **Pin `fsspec[gcs]==2025.10.0` for GCS multimodal capture and grant write IAM to the agent Service Account — not your user account.**
     - *Why:* Other `fsspec` versions break OTel JSONL uploads; missing SA roles (`roles/storage.objectUser`, `roles/logging.logWriter`, `roles/monitoring.metricWriter`, `roles/telemetry.tracesWriter`) silently drop prompt/response payloads.
 
@@ -157,8 +157,11 @@ gcloud monitoring policies create --policy-from-file="policy.yaml"
 
 ```bash
 # Directory must contain __init__.py exposing `agent.root_agent`; keep validation_eval_set separate!
-adk optimize path/to/my_agent \
+# CRITICAL (ADK 2.15.0 + Gemini 4): export GOOGLE_CLOUD_LOCATION=global AND pass --optimizer_config_file_path
+# overriding default retired gemini-2.5-flash + thinking_budget=10240 (which triggers HTTP 400 on Gemini 4)!
+GOOGLE_CLOUD_LOCATION="${MODEL_LOCATION:-global}" adk optimize path/to/my_agent \
   --sampler_config_file_path path/to/my_agent/sampler_config.json \
+  --optimizer_config_file_path path/to/my_agent/optimizer_config.json \
   --print_detailed_results \
   --log_level INFO
 ```

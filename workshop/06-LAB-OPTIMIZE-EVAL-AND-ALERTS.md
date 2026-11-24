@@ -15,7 +15,7 @@ By the end of this lab, you will close the production quality flywheel for your 
 1. **Instrument & Inspect GenAI Observability** using OpenTelemetry GenAI Semantic Conventions (`v1.37.0+`), navigate the Observability Dashboard & Trace/Session views, and verify multimodal GCS payload offloading.
 2. **Run Offline Evaluations** over traces, sessions, and canonical split single-turn and multi-turn JSON test suites (`starter/eval/run_offline_eval.py` and `agents-cli eval`), contrasting **trace vs. session** grading and applying predefined adaptive rubrics, multi-turn trajectory/tool metrics, and custom Python/LLM metrics.
 3. **Run 2-Step Simulated User Evaluations** (`starter/eval/run_simulated_eval.py` and `agents-cli eval dataset synthesize`) to stress-test multi-turn debugging, tool errors, and prompt-injection refusal personas before touching production traffic.
-4. **Diagnose Failure Clusters** using **Automatic Loss Analysis** in the Cloud Console (`view-results`), `vertexai.evals` (`client.evals.generate_loss_clusters`), and `agents-cli eval analyze` across the official 13-pattern Task Success and Tool Use taxonomies.
+4. **Diagnose Failure Clusters** using **Automatic Loss Analysis** in the Cloud Console (`view-results`), `agentplatform.Client.evals` (`client.evals.generate_loss_clusters`), and `agents-cli eval analyze` across the official 13-pattern Task Success and Tool Use taxonomies.
 5. **Configure Online Evaluation Monitors & Quality Alerts** (`starter/eval/setup_online_monitor.py` and `starter/eval/setup_quality_alerts.py` via `google.cloud.monitoring_v3` and `gcloud monitoring policies create`) to catch production quality drift automatically.
 6. **Close the Dual-Track Optimization Flywheel** (`starter/eval/optimize_prompt.py`, `adk optimize`, `agents-cli eval optimize`, and Example Store): promote **root prompt fixes** with a **canary traffic split** (`v1beta1` `trafficSplitManual`), and close the **domain skill loop** with **zero agent container rebuild** by hot-updating Vertex AI Skill Registry (`client.skills.update` with a skill directory path) or promoting an immutable **Agent Registry `rev-2` skill revision** (`gcloud alpha agent-registry skills update ... --default-revision` in `global`, with 1-command rollback to `rev-1`).
 
@@ -228,7 +228,7 @@ The Agent Platform Trace Details UI automatically stitches trace spans with `gen
 
 #### Predefined Agent Metrics Reference
 
-| Metric | Category | Python SDK (`vertexai.types.RubricMetric`) | `agents-cli` Metric Name | What It Grades |
+| Metric | Category | Python SDK (`agentplatform.types.RubricMetric`) | `agents-cli` Metric Name | What It Grades |
 |---|---|---|---|---|
 | **Agent Final Response Quality** | Adaptive rubric *(recommended)* | `FINAL_RESPONSE_QUALITY` | `final_response_quality` | Dynamically generates pass/fail unit-test rubrics from instructions, tools & prompt. |
 | **Agent Tool Use Quality** | Adaptive rubric | `TOOL_USE_QUALITY` | `tool_use_quality` | Tool selection, argument accuracy, and invocation order. |
@@ -253,7 +253,7 @@ Open [`starter/eval/run_offline_eval.py`](../starter/eval/run_offline_eval.py). 
 1. *(Pre-filled helper reference — `build_eval_client()` & `register_custom_coding_metrics()`)* **Initialize `agentplatform.Client` (avoiding the `vertexai.Client` `FutureWarning`) and register custom LLM (`types.LLMMetric`) / Code (`types.CodeExecutionMetric`) metrics via `client.evals.create_evaluation_metric(...)`:**
    ```python
    import agentplatform
-   from vertexai import types
+   from agentplatform import types  # Verified on google-cloud-agentplatform==2.10.0 (fallback: vertexai.types)
 
    client = agentplatform.Client(project=project_id, location=location)
 
@@ -289,7 +289,7 @@ Open [`starter/eval/run_offline_eval.py`](../starter/eval/run_offline_eval.py). 
    ```
 2. **Implement `# TODO(lab-6)` in `evaluate_split_datasets()` and `run_loss_clustering()`:** Run `client.evals.evaluate(...)` separately for single-turn and multi-turn datasets:
    - **Live trace inference (`--run-inference` or trace-populated cases):** Use the 4 predefined agent metrics (`FINAL_RESPONSE_QUALITY`, `TOOL_USE_QUALITY`, `HALLUCINATION`, `SAFETY(version="v1")`).
-   - **Static prompt/response single-turn datasets (default offline check):** Use the clean static metric set **`GENERAL_QUALITY`**, **`FINAL_RESPONSE_MATCH`**, and **`SAFETY(version="v1")`** — avoid running `FINAL_RESPONSE_REFERENCE_FREE` on static cases lacking pre-generated `rubric_groups` (such as `sandbox_command_execution`), where the evaluator can return `400 INVALID_ARGUMENT: Rubric results could not be reliably computed`.
+   - **Static prompt/response single-turn datasets (default offline check):** Because static JSON cases do not include live intermediate tool-call traces (needed by `FINAL_RESPONSE_QUALITY`, `TOOL_USE_QUALITY`, and `HALLUCINATION`), default to **`GENERAL_QUALITY`**, **`FINAL_RESPONSE_MATCH`**, and **`SAFETY(version="v1")`** (pinning `v1` so `1.0` = SAFE; `safety_v3` inverts polarity to `1.0` = VIOLATED). All 5 cases in `coding_agent_single_turn.json` and `coding_agent_eval.jsonl` include `rubric_groups.coding_quality` for live trace grading (`agents-cli eval generate` → `eval grade --traces --config eval/eval_config.yaml`), while omitting `FINAL_RESPONSE_REFERENCE_FREE` from the default static runner avoids `400 INVALID_ARGUMENT: Rubric results could not be reliably computed` if you add custom static cases without `rubric_groups`.
    - **Multi-turn session datasets:** Use strictly the 3 `multi_turn_*` metrics (`MULTI_TURN_TASK_SUCCESS`, `MULTI_TURN_TOOL_USE_QUALITY`, `MULTI_TURN_TRAJECTORY_QUALITY`), and wire `run_loss_clustering()` (`location="global"`) for failure clustering in Part 4:
    ```python
    eval_result = client.evals.evaluate(
@@ -383,15 +383,20 @@ The **2-Step User Simulation** workflow solves this:
 
 Open [`starter/eval/run_simulated_eval.py`](../starter/eval/run_simulated_eval.py) and complete the **2 `# TODO(lab-6)` functions** (`generate_scenarios()` and `run_user_simulation()`; downstream `grade_simulated_traces()` and `cluster_simulation_failures()` helpers are **pre-filled**):
 
+> [!WARNING]
+> **Verified `google-cloud-agentplatform==2.10.0` `BaseToolset` Trap on `AgentInfo.load_from_agent()`:**
+> In `agentplatform==2.10.0`, `types.evals.AgentInfo.load_from_agent(agent=root_agent)` does **not** recognize ADK `BaseToolset` instances (`EnvironmentToolset`, `SkillToolset`) and passes them straight to `FunctionTool(func=tool)`, crashing with **`TypeError: Expected a callable object, got EnvironmentToolset`**! Always expand `BaseToolset` instances asynchronously via `await toolset.get_tools()` onto a shallow-cloned agent (so `agent.tools` contains concrete `BaseTool` / `FunctionTool` declarations) before calling `AgentInfo.load_from_agent(...)` — `starter/eval/run_simulated_eval.py` handles this expansion cleanly via its toolset-expansion helper.
+
 ```python
 import agentplatform
-from vertexai import types
+from agentplatform import types  # Verified on google-cloud-agentplatform==2.10.0
 from coding_agent.agent import root_agent
 
 client = agentplatform.Client(project=project_id, location=location)
 
-# Step 1: Extract AgentInfo and synthesize multi-turn coding/adversarial personas
-agent_info = types.evals.AgentInfo.load_from_agent(agent=root_agent)
+# Step 1: Expand ADK BaseToolset instances (EnvironmentToolset, SkillToolset) via get_tools()
+# onto a cloned agent before calling AgentInfo.load_from_agent(), then synthesize personas
+agent_info = types.evals.AgentInfo.load_from_agent(agent=expanded_agent)
 scenario_dataset = client.evals.generate_conversation_scenarios(
     agent_info=agent_info,
     config={
@@ -481,7 +486,7 @@ In `starter/eval/run_offline_eval.py` (`# TODO(lab-6)` in `run_loss_clustering()
 
 ```python
 import agentplatform
-from vertexai import types
+from agentplatform import types  # Verified on google-cloud-agentplatform==2.10.0
 
 # Interactive summary table + expandable per-case rubric verdicts (Colab/Jupyter)
 sim_eval_result.show()
@@ -541,9 +546,12 @@ Complete `# TODO(lab-6)` in **`validate_otel_prerequisites()`** inside [`starter
 
 ```bash
 cd starter && uv run python eval/setup_online_monitor.py
-# Optional flags: add --strict-env (exit non-zero if OTel vars or EVAL_LOCATION=global are invalid)
-# and/or --verify-runtime (verifies your live ReasoningEngine in GOOGLE_CLOUD_LOCATION=asia-southeast1
-# while validating eval config against EVAL_LOCATION=global — zero region mismatch!)
+# Optional flags: add --strict-env (exit non-zero if local shell/.env OTel vars or EVAL_LOCATION=global
+# are invalid) and/or --verify-runtime (verifies your live ReasoningEngine in GOOGLE_CLOUD_LOCATION=asia-southeast1
+# while validating eval config against EVAL_LOCATION=global — zero region mismatch!).
+# NOTE: --strict-env checks your local shell/.env `os.environ` (not the deployed container's `deployment_spec.env`),
+# so also verify those three OTel variables inside Terraform / Cloud Console -> Deployments!
+# Always keep `--location global` (or `EVAL_LOCATION=global`), as `asia-southeast1` is unsupported by Evaluation Service.
 ```
 
 Then create the Online Monitor in the Console (**2 minutes**):
@@ -576,9 +584,10 @@ Online Monitors export two verified Cloud Monitoring metric descriptors under mo
 Open [`starter/eval/setup_quality_alerts.py`](../starter/eval/setup_quality_alerts.py) and complete `# TODO(lab-6)` in **`build_alert_policy_dict()`** using `google.cloud.monitoring_v3` (`create_alert_policy()` is **pre-filled**):
 
 > [!CAUTION]
-> **Two Verified Cloud Monitoring HTTP 400 Traps on `online_evaluator/scores`:**
+> **Three Verified Cloud Monitoring Traps on `online_evaluator/scores`:**
 > 1. **Mandatory `resource.type` Restriction:** Omitting `resource.type="aiplatform.googleapis.com/OnlineEvaluator"` from the filter fails with HTTP 400 (`must specify a restriction on "resource.type" in the filter`).
 > 2. **DELTA / DISTRIBUTION Rejects `ALIGN_MEAN`:** Because `aiplatform.googleapis.com/online_evaluator/scores` has metric kind `DELTA` and value type `DISTRIBUTION`, passing `ALIGN_MEAN` fails with HTTP 400 (`The aligner cannot be applied to metrics with kind DELTA and value type DISTRIBUTION`). Always use **`ALIGN_PERCENTILE_50`** (or `ALIGN_DELTA` + `REDUCE_PERCENTILE_50`)!
+> 3. **`safety_v3` Inverted Polarity (`COMPARISON_GT` vs. `COMPARISON_LT`):** Standard higher-is-better metrics (`task_success`, `tool_use_quality`, `safety_v1`) alert on **`COMPARISON_LT`** (e.g., `< 0.80`), whereas **`safety_v3`** (`1.0` = VIOLATED, `0.0` = SAFE) MUST alert on **`COMPARISON_GT`** (e.g., `> 0.05`)!
 
 ```python
 from google.cloud import monitoring_v3
@@ -667,10 +676,16 @@ Now feed your **Failure Clusters** (Part 4) and **Feedback Service** negative en
 
 | Strategy / Class | Scope Optimized | Algorithm & Config | Best For |
 |---|---|---|---|
-| **`GEPARootAgentPromptOptimizer`** *(default for `adk optimize`)* | Root agent `instruction` ONLY | GEPA Pareto-frontier evolutionary reflection (default 10K thinking budget, `max_metric_calls=100`, `reflection_minibatch_size=3`) | Prompt-only failures with clear rubric criteria |
-| **`GEPARootAgentOptimizer`** | Root agent `instruction` **AND** `SkillToolset` skill instructions | GEPA Pareto-frontier reflection (`ThinkingLevel.HIGH`) | Coding agents whose failures span root instructions + loaded skills |
-| **`SimplePromptOptimizer`** | Root agent `instruction` ONLY (non-mutating) | 4-stage async loop: **Execute → Evaluate → Critique → Rewrite** (`optimizer_model="gemini-4-hydrogen"` or `"gemini-4-neon"` on `MODEL_LOCATION=global` with `ThinkingLevel` — replacing ADK's legacy `gemini-2.5-flash` default retired Oct 20, 2026; `num_iterations`, `batch_size`) | Fast, predictable workshop/CI iteration |
+| **`GEPARootAgentPromptOptimizer`** *(default for `adk optimize`)* | Root agent `instruction` ONLY | GEPA Pareto-frontier evolutionary reflection (`max_metric_calls=100`, `reflection_minibatch_size=3`; **MUST override** ADK 2.15.0's legacy `gemini-2.5-flash` + `thinking_budget=10240` defaults for Gemini 4!) | Prompt-only failures with clear rubric criteria |
+| **`GEPARootAgentOptimizer`** | Root agent `instruction` **AND** `SkillToolset` skill instructions | GEPA Pareto-frontier reflection (`ThinkingConfig(thinking_level="HIGH", include_thoughts=True)` — no `thinking_budget`) | Coding agents whose failures span root instructions + loaded skills |
+| **`SimplePromptOptimizer`** | Root agent `instruction` ONLY (non-mutating; returns `OptimizerResult` without `.gepa_result`) | 4-stage async loop: **Execute → Evaluate → Critique → Rewrite** (`optimizer_model="gemini-4-hydrogen"` or `"gemini-4-neon"` on `GOOGLE_CLOUD_LOCATION=global` with `ThinkingConfig(thinking_level="MEDIUM", include_thoughts=True)` — NO `thinking_budget`!; `num_iterations`, `batch_size`) | Fast, predictable workshop/CI iteration |
 | **Example Store** *(Preview)* | Dynamic few-shot examples (no weights or code redeploy) | Cosine similarity retrieval (optional tool-name filter); max **50** stores/region/project | Rapidly fixing recurring tool-call formatting errors without redeploying |
+
+> [!CAUTION]
+> **Verified `google-adk==2.15.0` Gemini 4 Optimizer Config Trap (HTTP 400 + HTTP 404):**
+> In `google-adk==2.15.0`, both `SimplePromptOptimizerConfig` and `GEPARootAgentPromptOptimizerConfig` default to `optimizer_model="gemini-2.5-flash"` (retired Oct 20, 2026) **AND** `model_configuration=GenerateContentConfig(thinking_config=ThinkingConfig(include_thoughts=True, thinking_budget=10240))`!
+> 1. **HTTP 400 (`thinking_budget`):** Setting `optimizer_model="gemini-4-hydrogen"` without overriding `model_configuration` leaves `thinking_budget=10240` active, which Gemini 4 rejects with **HTTP 400**! Always pass `model_configuration=types.GenerateContentConfig(thinking_config=types.ThinkingConfig(thinking_level="MEDIUM", include_thoughts=True))` (zero `thinking_budget`).
+> 2. **HTTP 404 (`asia-southeast1`):** ADK's optimizers instantiate default `Gemini(model=optimizer_model)` without `client_kwargs={"location": "global"}`. When running with `GOOGLE_CLOUD_LOCATION=asia-southeast1`, prefix `GOOGLE_CLOUD_LOCATION=global` on your `optimize_prompt.py` / `adk optimize` command (or pass `--optimizer-model gemini-4-argon` for Singapore regional inference), and ALWAYS pass **`--optimizer_config_file_path`** to `adk optimize` so it never falls back to retired `gemini-2.5-flash` + `thinking_budget=10240`!
 
 ### 6.2 Implement & Run `starter/eval/optimize_prompt.py` + `agents-cli eval optimize`
 
@@ -684,11 +699,12 @@ Open [`starter/eval/optimize_prompt.py`](../starter/eval/optimize_prompt.py). Se
 > 2. **Preserve YAML Frontmatter (`R12–R15`):** `GEPARootAgentOptimizer` optimizes only `skill.instructions` (the Markdown body below `--- ... ---`). Always re-attach the original YAML frontmatter (`name`, `description`, `license`) before saving `SKILL.md`, otherwise `scripts/package_registry_skill.py` will reject the bundle.
 
 ```bash
-# Track A — Fast root-prompt optimization pass (small iteration count to save tokens/time)
-cd starter && uv run python eval/optimize_prompt.py --iterations 2 --batch-size 4
+# Track A — Fast root-prompt optimization pass (small iteration count to save tokens/time;
+# prefix GOOGLE_CLOUD_LOCATION=global for Gemini 4 Hydrogen/Neon optimizer LLM calls!)
+cd starter && GOOGLE_CLOUD_LOCATION="${MODEL_LOCATION:-global}" uv run python eval/optimize_prompt.py --iterations 2 --batch-size 4
 
 # Track B — Co-optimize root prompt + local secure-code-review SKILL.md via GEPARootAgentOptimizer
-cd starter && uv run python eval/optimize_prompt.py \
+cd starter && GOOGLE_CLOUD_LOCATION="${MODEL_LOCATION:-global}" uv run python eval/optimize_prompt.py \
   --optimizer gepa-skills \
   --skill-dir skills_to_register/secure-code-review \
   --iterations 2 --batch-size 4
@@ -714,9 +730,27 @@ You can also invoke ADK's native CLI (`adk optimize`, backed by [`starter/coding
 cd starter
 
 # Option A: ADK CLI (`AGENT_MODULE_FILE_PATH` must be a directory exposing `agent.root_agent`
-# and containing `train_eval_set.evalset.json`)
-adk optimize coding_agent \
+# and containing `train_eval_set.evalset.json`).
+# CRITICAL: Pass `--optimizer_config_file_path` overriding ADK 2.15.0's legacy gemini-2.5-flash +
+# thinking_budget=10240 defaults with Gemini 4 `thinking_level`, AND export GOOGLE_CLOUD_LOCATION=global!
+mkdir -p artifacts
+cat > artifacts/optimizer_config.json <<'EOF'
+{
+  "optimizer_model": "gemini-4-hydrogen",
+  "model_configuration": {
+    "thinking_config": {
+      "include_thoughts": true,
+      "thinking_level": "MEDIUM"
+    }
+  },
+  "max_metric_calls": 20,
+  "reflection_minibatch_size": 3
+}
+EOF
+
+GOOGLE_CLOUD_LOCATION="${MODEL_LOCATION:-global}" uv run adk optimize coding_agent \
   --sampler_config_file_path eval/sampler_config.json \
+  --optimizer_config_file_path artifacts/optimizer_config.json \
   --print_detailed_results \
   --log_level INFO
 
@@ -834,20 +868,25 @@ When Failure Clusters or `THUMBS_DOWN` feedback point to a **domain skill gap** 
      --project="${GOOGLE_CLOUD_PROJECT}" \
      --location="${AGENT_REGISTRY_SKILLS_LOCATION}"
 
-   # 3. Promote rev-2 as the default serving revision (zero agent container rebuild!)
+   # 3. Promote rev-2 as the default serving revision AND ensure ACTIVE state (zero agent container rebuild!)
+   #    CRITICAL: `--target-state=active` is required so GCPSkillRegistry.get_skill() (`?alt=media`)
+   #    succeeds instead of returning HTTP 400 FAILED_PRECONDITION on a STATE_DRAFT container!
    gcloud alpha agent-registry skills update private-secure-code-review \
      --project="${GOOGLE_CLOUD_PROJECT}" \
      --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
-     --default-revision="projects/${GOOGLE_CLOUD_PROJECT}/locations/${AGENT_REGISTRY_SKILLS_LOCATION}/skills/private-secure-code-review/revisions/rev-2"
+     --default-revision="projects/${GOOGLE_CLOUD_PROJECT}/locations/${AGENT_REGISTRY_SKILLS_LOCATION}/skills/private-secure-code-review/revisions/rev-2" \
+     --target-state=active
 
    # 4. Watch Online Monitor scores (`aiplatform.googleapis.com/online_evaluator/scores`);
    #    if Quality Alerts fire after promotion, roll back to rev-1 in one command:
    # gcloud alpha agent-registry skills update private-secure-code-review \
    #   --project="${GOOGLE_CLOUD_PROJECT}" \
    #   --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
-   #   --default-revision="projects/${GOOGLE_CLOUD_PROJECT}/locations/${AGENT_REGISTRY_SKILLS_LOCATION}/skills/private-secure-code-review/revisions/rev-1"
+   #   --default-revision="projects/${GOOGLE_CLOUD_PROJECT}/locations/${AGENT_REGISTRY_SKILLS_LOCATION}/skills/private-secure-code-review/revisions/rev-1" \
+   #   --target-state=active
    #
-   # 5. Teardown rule: delete child revisions (`revisions delete rev-2`, `rev-1`) BEFORE `skills delete`!
+   # 5. Teardown rule: clear `--default-revision` FIRST (`skills update ... --clear-default-revision --target-state=disabled`),
+   #    then delete child revisions (`revisions delete rev-2`, `rev-1`) BEFORE `skills delete`!
    ```
 
 ---

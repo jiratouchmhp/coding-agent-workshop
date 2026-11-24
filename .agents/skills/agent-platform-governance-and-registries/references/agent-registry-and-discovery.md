@@ -147,8 +147,8 @@ Standalone skills do **NOT** use `Service` resources — they are top-level `Ski
 > 1. **Alpha-Only CLI:** Only **`gcloud alpha agent-registry skills`** exists (`gcloud agent-registry skills` returns `Invalid choice`). Run `gcloud components install alpha`.
 > 2. **Bangkok A2A/MCP vs. `global` Standalone Skills:** Keep A2A/MCP discovery (`gcloud agent-registry agents list`, ADK `AgentRegistry`) in **Bangkok (`asia-southeast3`)** first, and run standalone skills in **`--location=global`** (`AGENT_REGISTRY_SKILLS_LOCATION=global`, because `--location=asia-southeast3` currently times out for `skills list`/`skills create`).
 > 3. **2-Step Create (Omit `--payload` on `skills create`):** In `gcloud 588.0.0 alpha`, `skills create --payload=...` drops `--payload` from the JSON request (`400 source is required`), and 2-char revision IDs (`v1`, `v2`) fail format validation. Create the bare skill shell first, then upload `rev-1` / `rev-2` (or `v1-0-0`) via `revisions create --payload=...`.
-> 4. **Wait for Async Scan Under `ENABLED_BLOCKING` Before `--default-revision`:** Immediately calling `skills update --default-revision=...` right after `revisions create` returns **`FAILED_PRECONDITION: cannot set default revision to a revision with pending scan results when scanning policy is ENABLED_BLOCKING`**. Poll `revisions describe <rev>` until `scanResult.scanState: SUCCEEDED` with 0 findings before promoting — or pass `--scanning-policy=enabled-nonblocking` on `skills create` for rapid workshop demos.
-> 5. **Revision-Before-Skill Deletion:** `gcloud alpha agent-registry skills delete` has no `--force` flag and returns `FAILED_PRECONDITION` (`cannot_delete_skill_with_revisions`) until all child revisions are deleted via `revisions delete`.
+> 4. **Wait for Async Scan Under `ENABLED_BLOCKING` & Always Set `--target-state=active`:** Immediately calling `skills update --default-revision=...` right after `revisions create` returns **`FAILED_PRECONDITION: cannot set default revision to a revision with pending scan results when scanning policy is ENABLED_BLOCKING`**. Poll `revisions describe <rev>` until `scanResult.scanState: SUCCEEDED` with 0 findings before promoting — or pass `--scanning-policy=enabled-nonblocking` on `skills create` for rapid workshop/CI demos. In addition, `skills create` defaults to `STATE_DRAFT`; while `search_skills` finds `DRAFT` skills, `GCPSkillRegistry.get_skill()` (`?alt=media`) fails with HTTP 400 `FAILED_PRECONDITION: skill container must be in ACTIVE or DEPRECATED state to download content` unless `--target-state=active` is set!
+> 5. **Clear Default Revision -> Delete Revisions -> Delete Skill:** Before deleting revisions, clear the active default revision (`gcloud alpha agent-registry skills update private-SKILL_ID --clear-default-revision --target-state=disabled --location=global`) — deleting an active default revision can fail with `FAILED_PRECONDITION`, cascading into `cannot_delete_skill_with_revisions` when calling `skills delete` (no `--force` flag in CLI).
 
 ```bash
 export AGENT_REGISTRY_SKILLS_LOCATION="${AGENT_REGISTRY_SKILLS_LOCATION:-global}"
@@ -186,10 +186,11 @@ gcloud alpha agent-registry skills revisions describe rev-2 \
   --skill=private-workspace-docs-skill \
   --project=PROJECT_ID --location="${AGENT_REGISTRY_SKILLS_LOCATION}"
 
+# ALWAYS include --target-state=active so GCPSkillRegistry.get_skill() (?alt=media) succeeds (STATE_DRAFT returns 400 FAILED_PRECONDITION)
 gcloud alpha agent-registry skills update private-workspace-docs-skill \
   --project=PROJECT_ID --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
   --default-revision="projects/PROJECT_ID/locations/${AGENT_REGISTRY_SKILLS_LOCATION}/skills/private-workspace-docs-skill/revisions/rev-2" \
-  --target-state=ACTIVE
+  --target-state=active
 
 # Download & extract revision locally (gcloud auto-extracts & deletes temp zip)
 gcloud alpha agent-registry skills revisions download rev-2 \
@@ -203,7 +204,10 @@ gcloud alpha agent-registry skills add-iam-policy-binding private-workspace-docs
   --member="serviceAccount:agent-sa@PROJECT_ID.iam.gserviceaccount.com" \
   --role="roles/agentregistry.viewer"
 
-# Teardown: MUST delete every child revision BEFORE deleting the parent skill (no --force in CLI!)
+# Teardown: 1) clear active default revision -> 2) delete every child revision -> 3) delete parent skill (no --force in CLI!)
+gcloud alpha agent-registry skills update private-workspace-docs-skill \
+  --clear-default-revision --target-state=disabled \
+  --project=PROJECT_ID --location="${AGENT_REGISTRY_SKILLS_LOCATION}"
 gcloud alpha agent-registry skills revisions delete rev-2 \
   --skill=private-workspace-docs-skill \
   --project=PROJECT_ID --location="${AGENT_REGISTRY_SKILLS_LOCATION}" --quiet

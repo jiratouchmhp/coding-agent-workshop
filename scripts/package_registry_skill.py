@@ -285,10 +285,13 @@ def validate_zip_payload(
         )
 
         # Rule 03: <= 10,000 items
+        items_ok = len(infos) <= MAX_ZIP_ITEMS
         add_check(
             "R03_max_items_10000",
-            len(infos) <= MAX_ZIP_ITEMS,
-            f"Item count {len(infos)} <= {MAX_ZIP_ITEMS:,}.",
+            items_ok,
+            f"Item count {len(infos):,} <= {MAX_ZIP_ITEMS:,}."
+            if items_ok
+            else f"Item count {len(infos):,} exceeds limit of {MAX_ZIP_ITEMS:,} items.",
         )
 
         # Rule 04: Safe relative paths (no `..` anywhere in entry name, no leading `/` or `\`)
@@ -366,6 +369,9 @@ def validate_zip_payload(
             detail_r07 = (
                 f"Total uncompressed size {total_uncompressed:,} bytes <= "
                 f"{MAX_UNCOMPRESSED_BYTES:,} bytes (500 MB)."
+                if uncompressed_ok
+                else f"Total uncompressed size {total_uncompressed:,} bytes exceeds limit of "
+                f"{MAX_UNCOMPRESSED_BYTES:,} bytes (500 MB)."
             )
             if (
                 total_uncompressed > AGENT_REGISTRY_MAX_UNCOMPRESSED_BYTES
@@ -421,17 +427,27 @@ def validate_zip_payload(
             for info in infos
             if not info.is_dir() and PurePosixPath(info.filename.replace("\\", "/")).name == "SKILL.md"
         ]
-        has_root_skill_md = "SKILL.md" in skill_md_candidates
+        root_skill_md_candidates = [
+            name
+            for name in skill_md_candidates
+            if PurePosixPath(name.replace("\\", "/")).as_posix() == "SKILL.md"
+        ]
+        has_root_skill_md = bool(root_skill_md_candidates)
         skill_md_ok = has_root_skill_md if agent_registry_mode else bool(skill_md_candidates)
         if skill_md_candidates and not has_root_skill_md:
             report.warnings.append(
                 f"SKILL.md found at {skill_md_candidates[0]!r} rather than ZIP root "
                 "(Agent Registry requires SKILL.md directly at archive root)."
             )
+        selected_skill_md = (
+            root_skill_md_candidates[0]
+            if has_root_skill_md
+            else (skill_md_candidates[0] if skill_md_candidates else "")
+        )
         add_check(
             "R10_contains_skill_md",
             skill_md_ok,
-            f"Found SKILL.md ({skill_md_candidates[0]})."
+            f"Found SKILL.md ({selected_skill_md})."
             if skill_md_ok
             else "Archive does not contain required root-level SKILL.md."
             if agent_registry_mode
@@ -450,7 +466,10 @@ def validate_zip_payload(
         add_check(
             "R11_max_zip_size",
             zip_size_ok,
-            f"Compressed ZIP size {len(zip_bytes):,} bytes <= {zip_size_limit:,} bytes ({zip_size_label}).",
+            f"Compressed ZIP size {len(zip_bytes):,} bytes <= {zip_size_limit:,} bytes ({zip_size_label})."
+            if zip_size_ok
+            else f"Compressed ZIP size {len(zip_bytes):,} bytes exceeds limit of "
+            f"{zip_size_limit:,} bytes ({zip_size_label}).",
         )
 
         # Rules 12-16: SKILL.md content & frontmatter validation
@@ -465,7 +484,7 @@ def validate_zip_payload(
                 add_check(rid, False, "Skipped because SKILL.md is missing.")
             return report
 
-        target_skill_md = "SKILL.md" if has_root_skill_md else skill_md_candidates[0]
+        target_skill_md = selected_skill_md
         try:
             skill_md_text = zf.read(target_skill_md).decode("utf-8")
             frontmatter, body = _parse_skill_md(skill_md_text)
@@ -557,7 +576,10 @@ def validate_zip_payload(
         add_check(
             "R16_instructions_max_500k",
             body_ok,
-            f"Markdown instructions length {body_len:,} chars <= {MAX_INSTRUCTIONS_CHARS:,} chars.",
+            f"Markdown instructions length {body_len:,} chars <= {MAX_INSTRUCTIONS_CHARS:,} chars."
+            if body_ok
+            else f"Markdown instructions length {body_len:,} chars exceeds limit of "
+            f"{MAX_INSTRUCTIONS_CHARS:,} chars.",
         )
 
     return report
@@ -618,13 +640,15 @@ def main(argv: list[str] | None = None) -> int:
         if not source.is_dir():
             print(f"ERROR: Skill directory not found: {source}", file=sys.stderr)
             return 1
-        source_symlinks = _scan_source_symlinks(source)
-        zip_bytes = build_zip_bytes(source)
-        output_path = args.output or (Path("dist") / f"{source.name}.zip")
+        resolved_source = source.resolve()
+        source_dir_name = resolved_source.name or "skill"
+        source_symlinks = _scan_source_symlinks(resolved_source)
+        zip_bytes = build_zip_bytes(resolved_source)
+        output_path = args.output or (Path("dist") / f"{source_dir_name}.zip")
         report = validate_zip_payload(
             zip_bytes,
             source_label=str(source),
-            expected_dir_name=source.name,
+            expected_dir_name=resolved_source.name or None,
             source_symlinks=source_symlinks,
             output_zip=None if args.dry_run else str(output_path),
             dry_run=args.dry_run,

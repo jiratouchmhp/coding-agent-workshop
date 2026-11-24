@@ -25,7 +25,8 @@ SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
 TRACK ?= starter
-LAB ?= all
+# `verify-lab` defaults to `all` when LAB is omitted; `fast-forward` requires an explicit LAB=<1..6|8|all>.
+LAB ?=
 SANDBOX_DEMO_MODE ?= shell
 SKILL_DIR ?= $(TRACK)/skills_to_register/secure-code-review
 SKILL_ZIP_OUT ?= dist/secure-code-review.zip
@@ -482,7 +483,7 @@ preflight: ## Lab 0: Run environment, toolchain, region, and GCP pre-flight chec
 install: ## Sync Python 3.11+ dependencies via uv for starter/ and solution/
 	@if ! command -v uv >/dev/null 2>&1; then \
 		echo "ERROR: 'uv' not found on PATH." >&2; \
-		echo "Install standalone uv (zero sudo): curl -LsSf https://astral.sh/uv/install.sh | sh" >&2; \
+		echo "Install standalone uv (zero sudo): curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv_install.sh && sh /tmp/uv_install.sh" >&2; \
 		echo "Or use pure venv + pip fallback:   make install-pip" >&2; \
 		exit 1; \
 	fi
@@ -502,7 +503,7 @@ install-pip: ## Pure python3 -m venv + pip dependency install fallback (zero uv 
 			echo "" >&2; \
 			echo "ERROR: '$(PYTHON) -m venv $${dir}/.venv' failed (common on Debian/Ubuntu when python3-venv is not installed)." >&2; \
 			echo "Recommended zero-sudo fix — install standalone uv instead:" >&2; \
-			echo "  curl -LsSf https://astral.sh/uv/install.sh | sh" >&2; \
+			echo "  curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv_install.sh && sh /tmp/uv_install.sh" >&2; \
 			echo "  export PATH=\"\$$HOME/.local/bin:\$$PATH\"" >&2; \
 			echo "  make install" >&2; \
 			echo "Or install Debian venv support: sudo apt-get install -y python3-venv" >&2; \
@@ -591,13 +592,14 @@ build-sandbox: ## Lab 2 (Optional — requires local Docker; use test-sandbox-lo
 
 push-sandbox: ## Lab 2 (Zero-Docker): Build and push BYOC sandbox image via Cloud Build
 	@$(LOAD_ENV); \
-	if [ -z "$${GOOGLE_CLOUD_PROJECT:-}" ]; then \
-		echo "ERROR: GOOGLE_CLOUD_PROJECT is not set. Copy .env.example to .env first." >&2; \
+	if [ -z "$${GOOGLE_CLOUD_PROJECT:-}" ] || [ "$${GOOGLE_CLOUD_PROJECT}" = "your-gcp-project-id" ]; then \
+		echo "ERROR: GOOGLE_CLOUD_PROJECT is unset or still template placeholder 'your-gcp-project-id'. Update .env first." >&2; \
 		exit 1; \
 	fi; \
 	BUILD_LOC="$${BUILD_LOCATION:-$${PRIMARY_REGION:-asia-southeast3}}"; \
 	AR_LOC="$${AR_LOCATION:-$${PRIMARY_REGION:-asia-southeast3}}"; \
-	URI="$${SANDBOX_IMAGE_URI:-$${AR_LOC}-docker.pkg.dev/$${GOOGLE_CLOUD_PROJECT}/coding-agent-repo/coding-sandbox:v1}"; \
+	AR_REPO="$${AR_REPOSITORY:-coding-agent-repo}"; \
+	URI="$${SANDBOX_IMAGE_URI:-$${AR_LOC}-docker.pkg.dev/$${GOOGLE_CLOUD_PROJECT}/$${AR_REPO}/coding-sandbox:v1}"; \
 	echo "==> Submitting $(TRACK)/sandbox_image to Cloud Build (region=$${BUILD_LOC}) -> $${URI}"; \
 	gcloud builds submit "$(TRACK)/sandbox_image" \
 		--region="$${BUILD_LOC}" \
@@ -608,12 +610,12 @@ sandbox-lifecycle-demo: ## Lab 2: Run Template -> Sandbox -> Pause -> Resume -> 
 	@$(LOAD_ENV); \
 	echo "==> Running sandbox lifecycle demo in $(TRACK)/ (mode=$(SANDBOX_DEMO_MODE))..."; \
 	cd $(TRACK) && \
-	if command -v uv >/dev/null 2>&1; then \
-		uv run python -m coding_agent.tools.sandbox_lifecycle demo --mode "$(SANDBOX_DEMO_MODE)" --ttl 1800s; \
-	elif [ -x .venv/bin/python ]; then \
-		.venv/bin/python -m coding_agent.tools.sandbox_lifecycle demo --mode "$(SANDBOX_DEMO_MODE)" --ttl 1800s; \
+	if [ -x .venv/bin/python ]; then \
+		env PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m coding_agent.tools.sandbox_lifecycle demo --mode "$(SANDBOX_DEMO_MODE)" --ttl 1800s; \
+	elif command -v uv >/dev/null 2>&1; then \
+		env PYTHONDONTWRITEBYTECODE=1 uv run python -m coding_agent.tools.sandbox_lifecycle demo --mode "$(SANDBOX_DEMO_MODE)" --ttl 1800s; \
 	else \
-		$(PYTHON) -m coding_agent.tools.sandbox_lifecycle demo --mode "$(SANDBOX_DEMO_MODE)" --ttl 1800s; \
+		env PYTHONDONTWRITEBYTECODE=1 $(PYTHON) -m coding_agent.tools.sandbox_lifecycle demo --mode "$(SANDBOX_DEMO_MODE)" --ttl 1800s; \
 	fi
 
 package-skill: ## Lab 4: Validate all 16 atomic Skill Registry rules and build skill .zip
@@ -630,12 +632,12 @@ test-agent-local: ## Lab 5 (Zero-Docker): Smoke-test FastAPI Agent Runtime (GET 
 			SANDBOX_MODE=local \
 			ENABLE_MEMORY_BANK=false \
 			ENABLE_SKILL_REGISTRY=false; \
-		if command -v uv >/dev/null 2>&1 && ( [ -d .venv ] || uv run python -c "import uvicorn, fastapi" >/dev/null 2>&1 ); then \
-			exec uv run uvicorn main:app --host 127.0.0.1 --port 18082; \
-		elif [ -x .venv/bin/uvicorn ]; then \
+		if [ -x .venv/bin/uvicorn ]; then \
 			exec .venv/bin/uvicorn main:app --host 127.0.0.1 --port 18082; \
 		elif [ -x .venv/bin/python ]; then \
 			exec .venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 18082; \
+		elif command -v uv >/dev/null 2>&1 && uv run python -c "import uvicorn, fastapi" >/dev/null 2>&1; then \
+			exec uv run uvicorn main:app --host 127.0.0.1 --port 18082; \
 		elif $(PYTHON) -c "import uvicorn, fastapi" >/dev/null 2>&1; then \
 			exec $(PYTHON) -m uvicorn main:app --host 127.0.0.1 --port 18082; \
 		else \
@@ -698,13 +700,14 @@ pack-agent-source: ## Lab 5 (Zero-Docker & Zero-AR): Build source_code_spec tarb
 
 push-agent: ## Lab 5 (Zero-Docker): Build and push Agent Runtime image via Cloud Build
 	@$(LOAD_ENV); \
-	if [ -z "$${GOOGLE_CLOUD_PROJECT:-}" ]; then \
-		echo "ERROR: GOOGLE_CLOUD_PROJECT is not set. Copy .env.example to .env first." >&2; \
+	if [ -z "$${GOOGLE_CLOUD_PROJECT:-}" ] || [ "$${GOOGLE_CLOUD_PROJECT}" = "your-gcp-project-id" ]; then \
+		echo "ERROR: GOOGLE_CLOUD_PROJECT is unset or still template placeholder 'your-gcp-project-id'. Update .env first." >&2; \
 		exit 1; \
 	fi; \
 	BUILD_LOC="$${BUILD_LOCATION:-$${PRIMARY_REGION:-asia-southeast3}}"; \
 	AR_LOC="$${AR_LOCATION:-$${PRIMARY_REGION:-asia-southeast3}}"; \
-	URI="$${AGENT_IMAGE_URI:-$${AR_LOC}-docker.pkg.dev/$${GOOGLE_CLOUD_PROJECT}/coding-agent-repo/coding-agent:v1}"; \
+	AR_REPO="$${AR_REPOSITORY:-coding-agent-repo}"; \
+	URI="$${AGENT_IMAGE_URI:-$${AR_LOC}-docker.pkg.dev/$${GOOGLE_CLOUD_PROJECT}/$${AR_REPO}/coding-agent:v1}"; \
 	echo "==> Submitting $(TRACK)/ Agent Runtime image to Cloud Build (region=$${BUILD_LOC}) -> $${URI}"; \
 	gcloud builds submit "$(TRACK)" \
 		--region="$${BUILD_LOC}" \
@@ -727,16 +730,16 @@ eval-offline: ## Lab 6: Run offline evaluation over split single-turn and multi-
 	@$(LOAD_ENV); \
 	echo "==> Running offline evaluation in $(TRACK)/..."; \
 	cd $(TRACK) && \
-	if command -v uv >/dev/null 2>&1; then \
-		uv run python eval/run_offline_eval.py \
+	if [ -x .venv/bin/python ]; then \
+		env PYTHONDONTWRITEBYTECODE=1 .venv/bin/python eval/run_offline_eval.py \
 			--single-turn-dataset eval/datasets/coding_agent_single_turn.json \
 			--multi-turn-dataset eval/datasets/coding_agent_multi_turn.json; \
-	elif [ -x .venv/bin/python ]; then \
-		.venv/bin/python eval/run_offline_eval.py \
+	elif command -v uv >/dev/null 2>&1; then \
+		env PYTHONDONTWRITEBYTECODE=1 uv run python eval/run_offline_eval.py \
 			--single-turn-dataset eval/datasets/coding_agent_single_turn.json \
 			--multi-turn-dataset eval/datasets/coding_agent_multi_turn.json; \
 	else \
-		$(PYTHON) eval/run_offline_eval.py \
+		env PYTHONDONTWRITEBYTECODE=1 $(PYTHON) eval/run_offline_eval.py \
 			--single-turn-dataset eval/datasets/coding_agent_single_turn.json \
 			--multi-turn-dataset eval/datasets/coding_agent_multi_turn.json; \
 	fi
@@ -745,25 +748,35 @@ eval-simulated: ## Lab 6: Run 2-step simulated user evaluation personas
 	@$(LOAD_ENV); \
 	echo "==> Running simulated user evaluation in $(TRACK)/..."; \
 	cd $(TRACK) && \
-	if command -v uv >/dev/null 2>&1; then \
-		uv run python eval/run_simulated_eval.py --count 5 --max-turns 5; \
-	elif [ -x .venv/bin/python ]; then \
-		.venv/bin/python eval/run_simulated_eval.py --count 5 --max-turns 5; \
+	if [ -x .venv/bin/python ]; then \
+		env PYTHONDONTWRITEBYTECODE=1 .venv/bin/python eval/run_simulated_eval.py --count 5 --max-turns 5; \
+	elif command -v uv >/dev/null 2>&1; then \
+		env PYTHONDONTWRITEBYTECODE=1 uv run python eval/run_simulated_eval.py --count 5 --max-turns 5; \
 	else \
-		$(PYTHON) eval/run_simulated_eval.py --count 5 --max-turns 5; \
+		env PYTHONDONTWRITEBYTECODE=1 $(PYTHON) eval/run_simulated_eval.py --count 5 --max-turns 5; \
 	fi
 
 validate-skills: ## Validate all Antigravity workshop skills under .agents/skills/
 	@echo "==> Validating .agents/skills/..."
 	$(PYTHON) scripts/validate_skills.py .agents/skills
 
-fast-forward: ## Catch up on a lab by syncing solution/ into starter/ without spoiling later labs (usage: make fast-forward LAB=1..6|8|all; supports FAST_FORWARD_ARGS=--dry-run)
+fast-forward: ## Catch up on a lab by syncing solution/ into starter/ without spoiling later labs (usage: make fast-forward LAB=1..6|8|all; supports FAST_FORWARD_ARGS=--dry-run|--with-prereqs|--force)
+	@if [ -z "$(strip $(LAB))" ]; then \
+		echo "ERROR: 'make fast-forward' requires an explicit LAB=<1|2|3|4|5|6|8|all> to avoid accidentally overwriting starter/." >&2; \
+		echo "Examples:" >&2; \
+		echo "  make fast-forward LAB=1" >&2; \
+		echo "  make fast-forward LAB=2 FAST_FORWARD_ARGS=--dry-run" >&2; \
+		echo "  make fast-forward LAB=5 FAST_FORWARD_ARGS=--with-prereqs" >&2; \
+		echo "  make fast-forward LAB=all" >&2; \
+		exit 2; \
+	fi
 	@echo "==> Fast-forwarding starter/ for LAB=$(LAB)..."
 	./scripts/fast_forward_lab.sh "$(LAB)" $(FAST_FORWARD_ARGS)
 
-verify-lab: ## Verify Labs 1-8 checkpoints locally (usage: make verify-lab LAB=1..8|all)
-	@echo "==> Running verify_lab.sh for LAB=$(LAB) (TRACK=$(TRACK))..."
-	./scripts/verify_lab.sh "$(LAB)" --track "$(TRACK)"
+verify-lab: ## Verify Labs 1-8 checkpoints locally (usage: make verify-lab [LAB=1..8|all])
+	@TARGET_LAB="$(if $(strip $(LAB)),$(LAB),all)"; \
+	echo "==> Running verify_lab.sh for LAB=$${TARGET_LAB} (TRACK=$(TRACK))..."; \
+	./scripts/verify_lab.sh "$${TARGET_LAB}" --track "$(TRACK)"
 
 cleanup: ## Teardown workshop GCP resources and local artifacts (supports CLEANUP_ARGS=--dry-run)
 	@./scripts/cleanup_workshop.sh $(CLEANUP_ARGS)

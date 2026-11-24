@@ -32,6 +32,13 @@ logger = logging.getLogger(__name__)
 ONLINE_EVAL_RESOURCE_TYPE = "aiplatform.googleapis.com/OnlineEvaluator"
 ONLINE_EVAL_SCORES_METRIC = "aiplatform.googleapis.com/online_evaluator/scores"
 
+VALID_COMPARISON_TYPES: dict[str, str] = {
+    "COMPARISON_LT": "<",
+    "COMPARISON_GT": ">",
+    "COMPARISON_LE": "<=",
+    "COMPARISON_GE": ">=",
+}
+
 
 def build_metric_filter(
     *,
@@ -58,6 +65,7 @@ def build_alert_policy_dict(
     display_name: str,
     metric_name: str = "task_success",
     threshold: float = 0.80,
+    comparison: str = "COMPARISON_LT",
     duration_seconds: int = 1800,
     alignment_period_seconds: int = 60,
     agent_resource_name: str | None = None,
@@ -65,7 +73,10 @@ def build_alert_policy_dict(
     notification_channels: list[str] | None = None,
 ) -> dict[str, Any]:
     """Construct a ``google.cloud.monitoring_v3`` alert policy dict."""
-    # TODO(lab-6): Build the AlertPolicy dictionary using `monitoring_v3.ComparisonType.COMPARISON_LT`,
+    # TODO(lab-6): Validate `comparison` against `VALID_COMPARISON_TYPES` (default
+    # `COMPARISON_LT`; use `COMPARISON_GT` for inverted-polarity metrics like `safety_v3`
+    # where `1.0 = VIOLATED` and `0.0 = SAFE`), then build the AlertPolicy dictionary using
+    # `getattr(monitoring_v3.ComparisonType, normalized_comparison)` (e.g., `COMPARISON_LT`),
     # `monitoring_v3.Aggregation.Aligner.ALIGN_PERCENTILE_50` (note: `online_evaluator/scores`
     # has kind=DELTA and value_type=DISTRIBUTION, so Cloud Monitoring rejects `ALIGN_MEAN` with
     # HTTP 400; an alternative is `ALIGN_DELTA` + `cross_series_reducer=REDUCE_PERCENTILE_50`),
@@ -76,9 +87,10 @@ def build_alert_policy_dict(
     # and include `notification_channels` only if non-empty.
     raise NotImplementedError(
         f"TODO(lab-6): Build monitoring_v3 AlertPolicy dict for display_name={display_name!r}, "
-        f"metric={metric_name!r}, threshold={threshold}, duration={duration_seconds}s, "
-        f"alignment={alignment_period_seconds}s, agent={agent_resource_name!r}, "
-        f"revision={runtime_revision_id!r}, channels={notification_channels!r}."
+        f"metric={metric_name!r}, comparison={comparison!r}, threshold={threshold}, "
+        f"duration={duration_seconds}s, alignment={alignment_period_seconds}s, "
+        f"agent={agent_resource_name!r}, revision={runtime_revision_id!r}, "
+        f"channels={notification_channels!r}."
     )
 
 
@@ -87,6 +99,7 @@ def render_gcloud_policy_yaml(
     display_name: str,
     metric_name: str = "task_success",
     threshold: float = 0.80,
+    comparison: str = "COMPARISON_LT",
     duration_seconds: int = 1800,
     alignment_period_seconds: int = 60,
     agent_resource_name: str | None = None,
@@ -94,6 +107,12 @@ def render_gcloud_policy_yaml(
     notification_channels: list[str] | None = None,
 ) -> str:
     """Render the equivalent ``gcloud monitoring policies create`` YAML file."""
+    normalized_comparison = comparison.strip().upper()
+    if normalized_comparison not in VALID_COMPARISON_TYPES:
+        raise ValueError(
+            f"Unsupported comparison {comparison!r}; expected one of {sorted(VALID_COMPARISON_TYPES)}."
+        )
+    op_symbol = VALID_COMPARISON_TYPES[normalized_comparison]
     metric_filter = build_metric_filter(
         metric_name=metric_name,
         agent_resource_name=agent_resource_name,
@@ -102,11 +121,11 @@ def render_gcloud_policy_yaml(
     lines = [
         f'displayName: "{display_name}"',
         "conditions:",
-        f'- displayName: "Online {metric_name} < {threshold:.2f}"',
+        f'- displayName: "Online {metric_name} {op_symbol} {threshold:.2f}"',
         "  conditionThreshold:",
         "    filter: >",
         f"      {metric_filter}",
-        "    comparison: COMPARISON_LT",
+        f"    comparison: {normalized_comparison}",
         f"    thresholdValue: {threshold}",
         f"    duration: {duration_seconds}s",
         "    aggregations:",
@@ -156,6 +175,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--display-name", default=None)
     parser.add_argument("--metric-name", default="task_success")
     parser.add_argument("--threshold", type=float, default=0.80)
+    parser.add_argument(
+        "--comparison",
+        choices=sorted(VALID_COMPARISON_TYPES),
+        default="COMPARISON_LT",
+        help=(
+            "Threshold comparison operator (default: COMPARISON_LT for higher-is-better scores; "
+            "use COMPARISON_GT with e.g. --threshold 0.05 for inverted-polarity safety_v3)."
+        ),
+    )
     parser.add_argument("--duration-seconds", type=int, default=1800)
     parser.add_argument("--alignment-period-seconds", type=int, default=60)
     parser.add_argument("--agent-resource-name", default=None)
@@ -183,6 +211,7 @@ def main(argv: list[str] | None = None) -> int:
         display_name=display_name,
         metric_name=args.metric_name,
         threshold=args.threshold,
+        comparison=args.comparison,
         duration_seconds=args.duration_seconds,
         alignment_period_seconds=args.alignment_period_seconds,
         agent_resource_name=agent_resource_name,
@@ -208,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
             display_name=display_name,
             metric_name=args.metric_name,
             threshold=args.threshold,
+            comparison=args.comparison,
             duration_seconds=args.duration_seconds,
             alignment_period_seconds=args.alignment_period_seconds,
             agent_resource_name=agent_resource_name,

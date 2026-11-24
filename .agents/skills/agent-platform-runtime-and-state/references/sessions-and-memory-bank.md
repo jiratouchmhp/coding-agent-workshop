@@ -102,13 +102,16 @@ runtime_name = "projects/PROJECT_ID/locations/asia-southeast1/reasoningEngines/A
 
 # Verified for google-cloud-agentplatform==2.10.0:
 # - `session_id` MUST be passed inside `config={}` (CreateRuntimeSessionConfig), NOT as a top-level kwarg.
-# - LRO return-shape guard: handle both session_op.response.name and session_op.name across SDK builds.
+# - `wait_for_completion=True` is the SDK default on CreateRuntimeSessionConfig.
+# - None-safe LRO guard: RuntimeSessionOperation is a Pydantic model where `hasattr(session_op, "response")`
+#   is ALWAYS True even when `response` is None — NEVER write `session_op.response.name if hasattr(...)`!
 session_op = client.sessions.create(
     name=runtime_name,
     user_id="user-123",
     config={"ttl": f"{10 * 86400}s", "session_id": "custom-session-1"},
 )
-session_name = session_op.response.name if hasattr(session_op, "response") else session_op.name
+resp = getattr(session_op, "response", None)
+session_name = resp.name if (resp is not None and getattr(resp, "name", None)) else session_op.name
 
 # List (default order: create_time desc; SDK lacks order_by -> use REST for custom sort)
 for s in client.sessions.list(name=runtime_name, config={"filter": "user_id=user-123"}):
@@ -134,7 +137,7 @@ events = list(client.sessions.events.list(name=session_name))
 client.sessions.delete(name=session_name)
 ```
 
-- **Deployed `AdkApp` methods:** `await adk_app.async_create_session(user_id=...)`, `async_list_sessions`, `async_get_session`, `async_stream_query(user_id=..., session_id=..., message=...)`, `async_delete_session`. *Gotcha:* Omitting `session_id` auto-creates a new session; passing a non-existent `session_id` returns an empty response.
+- **Deployed `AdkApp` methods:** `await adk_app.async_create_session(user_id=...)`, `async_list_sessions`, `async_get_session`, `async_stream_query(user_id=..., session_id=..., message=...)`, `async_delete_session`, `async_add_session_to_memory(session=...)`, `async_search_memory(user_id=..., query=...)`. *Gotchas:* Omitting `session_id` auto-creates a new session; passing a non-existent `session_id` returns an empty response; **`async_search_memory` accepts `(user_id, query)` only** (passing `app_name=` raises `TypeError`).
 - **Verified `v1beta1` REST endpoints** (`https://LOCATION-aiplatform.googleapis.com/v1beta1/projects/PROJECT_ID/locations/LOCATION/reasoningEngines/AGENT_ENGINE_ID/sessions`):
   - `GET .../sessions?filter=user_id="USER_ID"&orderBy=update_time%20desc` (`create_time`, `update_time`, `display_name`)
   - `POST .../sessions` (`{"userId": "USER_ID"}`, returns LRO) | `GET .../sessions/SESSION_ID` | `DELETE .../sessions/SESSION_ID` | `GET .../sessions/SESSION_ID/events`
@@ -244,8 +247,8 @@ client.runtimes.update(
 ## 4. ADK Integration (`VertexAiMemoryBankService`)
 
 - Automatically scopes memories to **`{"user_id": USER_ID, "app_name": APP_NAME}`**.
-- **Write callbacks:** Prefer incremental `callback_context.add_events_to_memory(events=...)` (backed by `IngestEvents`; pass `custom_metadata={"wait_for_completion": True}` in tests/demos) over full-session `add_session_to_memory()`.
-- **Read tools:** `PreloadMemoryTool()` (auto-injects every turn), `LoadMemoryTool()` (model-decided), or a custom `FunctionTool` calling `await tool_context.search_memory(query)`.
+- **Write callbacks:** Prefer incremental `callback_context.add_events_to_memory(events=...)` (backed by `IngestEvents`; pass `custom_metadata={"wait_for_completion": True}` in tests/demos) over full-session `add_session_to_memory()`. In the workshop package, import `persist_turn_to_memory_callback` from `coding_agent.memory.memory_bank_manager`.
+- **Read tools:** `from google.adk.tools.preload_memory_tool import PreloadMemoryTool` (`PreloadMemoryTool()`, auto-injects every turn), `from google.adk.tools.load_memory_tool import LoadMemoryTool` (model-decided), or a custom `FunctionTool` calling `await tool_context.search_memory(query)`.
 - **ADK Web CLI:** `adk web --memory_service_uri=agentengine://$MEMORY_BANK_ID memory_agent` (default user is `user`; override with `?userId=USER_ID`). Also supported on `adk deploy cloud_run` and `adk deploy gke`.
 - **Pairing a single-region (`asia-southeast1`) `AdkApp` with a regional or multi-regional (`us`) Memory Bank:**
 
@@ -279,7 +282,10 @@ import datetime, agentplatform
 client = agentplatform.Client(project="PROJECT_ID", location="asia-southeast1")  # Or multi-regional "us" / "eu" / "global"
 mb_name = "projects/PROJECT_ID/locations/asia-southeast1/reasoningEngines/MEMORY_BANK_ID"
 
-# 1. Generate from Managed Session (wait_for_completion=False recommended in prod; default True blocks!)
+# 1. Generate from Managed Session:
+#    - `wait_for_completion=True` is the SDK default across CreateRuntimeSessionConfig, GenerateMemoriesConfig,
+#      and CreateRuntimeFeedbackEntryConfig; pass `"wait_for_completion": False` in prod to avoid blocking!
+#    - `scope` is OPTIONAL when `vertex_session_source` is supplied (derived automatically from the session if omitted).
 op = client.memory_banks.memories.generate(
     name=mb_name,
     vertex_session_source={
@@ -287,7 +293,7 @@ op = client.memory_banks.memories.generate(
         "start_time": datetime.datetime.now(tz=datetime.timezone.utc) - datetime.timedelta(hours=1),
         "end_time": datetime.datetime.now(tz=datetime.timezone.utc),
     },
-    scope={"user_id": "123"},
+    scope={"user_id": "123"},  # Optional when using vertex_session_source
     config={
         "wait_for_completion": False,
         "metadata": {"source_app": {"string_value": "coding-agent"}, "verified": {"bool_value": True}},

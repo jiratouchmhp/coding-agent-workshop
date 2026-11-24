@@ -48,6 +48,11 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     1|2|3|4|5|6|7|8|all)
+      if [[ -n "${TARGET}" ]]; then
+        echo "ERROR: Multiple lab targets specified ('${TARGET}' and '$1'). Provide exactly one target." >&2
+        usage >&2
+        exit 2
+      fi
       TARGET="$1"
       shift
       ;;
@@ -79,6 +84,12 @@ fi
 if [[ "${TRACK}" != "starter" && "${TRACK}" != "solution" ]]; then
   echo "ERROR: TRACK must be 'starter' or 'solution' (got '${TRACK}')." >&2
   exit 2
+fi
+
+# Prefer the track's own virtualenv Python (absolute path so subshells after `cd` work)
+TRACK_PYTHON="python3"
+if [[ -x "${REPO_ROOT}/${TRACK}/.venv/bin/python" ]]; then
+  TRACK_PYTHON="${REPO_ROOT}/${TRACK}/.venv/bin/python"
 fi
 
 # Color helpers (disabled automatically when stdout is not a TTY)
@@ -426,11 +437,7 @@ PYEOF
     fi
 
     if ! has_todo_markers "${agy_mod}" "lab-1"; then
-      local agy_py="python3"
-      if [[ -x "${TRACK}/.venv/bin/python" ]]; then
-        agy_py="${TRACK}/.venv/bin/python"
-      fi
-      if (cd "${TRACK}" && env PYTHONDONTWRITEBYTECODE=1 "${agy_py}" -m coding_agent.tools.agy_headless_harness --prompt "Verify stream-json NDJSON dry-run" --dry-run >/dev/null 2>&1); then
+      if (cd "${TRACK}" && env PYTHONDONTWRITEBYTECODE=1 "${TRACK_PYTHON}" -m coding_agent.tools.agy_headless_harness --prompt "Verify stream-json NDJSON dry-run" --dry-run >/dev/null 2>&1); then
         pass "agy_headless_harness.py --dry-run passed (${agy_mod})"
       else
         fail "agy_headless_harness.py --dry-run failed (${agy_mod})"
@@ -451,8 +458,49 @@ PYEOF
   check_pattern "${TRACK}/coding_agent/agent.py" "ResumabilityConfig" "Configures ResumabilityConfig on App"
   check_pattern "${TRACK}/coding_agent/agent.py" 'App\(.*name="coding_agent"' "App.name matches coding_agent directory"
 
-  check_pattern "${TRACK}/coding_agent/architectures.py" "^from google\.adk import Context, Event, Workflow\b" "Uses direct ADK 2.0 top-level import (Context, Event, Workflow)"
-  check_pattern "${TRACK}/coding_agent/architectures.py" "^from google\.adk\.workflow import JoinNode, NodeTimeoutError, RetryConfig, node\b" "Uses direct ADK 2.0 workflow imports (JoinNode, NodeTimeoutError, RetryConfig, node)"
+  # AST-based import checks so adding symbols (e.g. DEFAULT_ROUTE) or running
+  # `ruff check --fix` (alphabetical / multi-line import sorting) never triggers false negatives.
+  if [[ -f "${TRACK}/coding_agent/architectures.py" ]]; then
+    if "${TRACK_PYTHON}" - "${TRACK}/coding_agent/architectures.py" <<'PYEOF'
+import ast
+import sys
+from pathlib import Path
+
+tree = ast.parse(Path(sys.argv[1]).read_text(encoding="utf-8"))
+imported: set[str] = set()
+for node in ast.walk(tree):
+    if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module == "google.adk":
+        for alias in node.names:
+            imported.add(alias.name)
+required = {"Context", "Event", "Workflow"}
+sys.exit(0 if required.issubset(imported) else 1)
+PYEOF
+    then
+      pass "Uses direct ADK 2.0 top-level import (Context, Event, Workflow) (${TRACK}/coding_agent/architectures.py)"
+    else
+      fail "Missing expected direct ADK 2.0 top-level imports (Context, Event, Workflow) from google.adk in ${TRACK}/coding_agent/architectures.py"
+    fi
+
+    if "${TRACK_PYTHON}" - "${TRACK}/coding_agent/architectures.py" <<'PYEOF'
+import ast
+import sys
+from pathlib import Path
+
+tree = ast.parse(Path(sys.argv[1]).read_text(encoding="utf-8"))
+imported: set[str] = set()
+for node in ast.walk(tree):
+    if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module == "google.adk.workflow":
+        for alias in node.names:
+            imported.add(alias.name)
+required = {"JoinNode", "NodeTimeoutError", "RetryConfig", "node"}
+sys.exit(0 if required.issubset(imported) else 1)
+PYEOF
+    then
+      pass "Uses direct ADK 2.0 workflow imports (JoinNode, NodeTimeoutError, RetryConfig, node) (${TRACK}/coding_agent/architectures.py)"
+    else
+      fail "Missing expected direct ADK 2.0 workflow imports (JoinNode, NodeTimeoutError, RetryConfig, node) from google.adk.workflow in ${TRACK}/coding_agent/architectures.py"
+    fi
+  fi
   check_pattern "${TRACK}/coding_agent/architectures.py" "def build_global_instruction_plugin\(" "Defines GlobalInstructionPlugin builder"
   check_pattern "${TRACK}/coding_agent/architectures.py" "def build_collaborative_coding_team\(" "Defines collaborative coordinator team builder"
   check_pattern "${TRACK}/coding_agent/architectures.py" "def build_graph_coding_workflow\(" "Defines declarative graph Workflow builder"
@@ -561,7 +609,7 @@ PYEOF
 
   # Validate services.yaml parses safely with a non-null services list
   if [[ -f "${TRACK}/services.yaml" ]]; then
-    if python3 - "${TRACK}/services.yaml" 2>/dev/null <<'PYEOF'
+    if "${TRACK_PYTHON}" - "${TRACK}/services.yaml" 2>/dev/null <<'PYEOF'
 import sys
 from pathlib import Path
 
@@ -586,7 +634,7 @@ PYEOF
   fi
 
   if [[ -d ".agents/skills" ]]; then
-    if python3 scripts/validate_skills.py .agents/skills >/dev/null 2>&1; then
+    if "${TRACK_PYTHON}" scripts/validate_skills.py .agents/skills >/dev/null 2>&1; then
       pass "All bundled skills under .agents/skills/ pass validate_skills.py"
     else
       fail "scripts/validate_skills.py failed on .agents/skills/ (run 'make validate-skills' for details)"
@@ -596,9 +644,9 @@ PYEOF
   fi
 
   if command -v agents-cli >/dev/null 2>&1; then
-    pass "agents-cli found on PATH ($(command -v agents-cli)) — optional for Labs 1-6"
+    pass "agents-cli found on PATH ($(command -v agents-cli)) — optional for Labs 1-8"
   else
-    warn "agents-cli not found on PATH (optional for Labs 1-6; install anytime with: uvx google-agents-cli setup)"
+    warn "agents-cli not found on PATH (optional for Labs 1-8; install anytime with: uvx google-agents-cli setup)"
   fi
 }
 
@@ -1905,12 +1953,12 @@ PYEOF
 
   # Dry-run smoke checks (always run when TODOs are completed)
   if [[ "${any_todo}" -eq 0 ]]; then
-    if python3 "${eval_dir}/run_offline_eval.py" --dry-run >/dev/null 2>&1; then
+    if "${TRACK_PYTHON}" "${eval_dir}/run_offline_eval.py" --dry-run >/dev/null 2>&1; then
       pass "run_offline_eval.py --dry-run succeeded"
     else
       fail "run_offline_eval.py --dry-run failed"
     fi
-    if python3 "${eval_dir}/run_simulated_eval.py" --dry-run >/dev/null 2>&1; then
+    if "${TRACK_PYTHON}" "${eval_dir}/run_simulated_eval.py" --dry-run >/dev/null 2>&1; then
       pass "run_simulated_eval.py --dry-run succeeded"
     else
       fail "run_simulated_eval.py --dry-run failed"
@@ -1922,8 +1970,8 @@ PYEOF
        GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=true \
        OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental \
        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=EVENT_ONLY \
-       python3 "${eval_dir}/setup_online_monitor.py" --strict-env 2>/dev/null
-    )" && MONITOR_OUT="${monitor_out}" python3 - <<'PYEOF'
+       "${TRACK_PYTHON}" "${eval_dir}/setup_online_monitor.py" --strict-env 2>/dev/null
+    )" && MONITOR_OUT="${monitor_out}" "${TRACK_PYTHON}" - <<'PYEOF'
 import json
 import os
 
@@ -1942,17 +1990,17 @@ PYEOF
     else
       fail "setup_online_monitor.py --strict-env failed or mixed runtime_location with eval_location"
     fi
-    if python3 "${eval_dir}/setup_quality_alerts.py" --dry-run >/dev/null 2>&1; then
+    if "${TRACK_PYTHON}" "${eval_dir}/setup_quality_alerts.py" --dry-run >/dev/null 2>&1; then
       pass "setup_quality_alerts.py --dry-run succeeded"
     else
       fail "setup_quality_alerts.py --dry-run failed"
     fi
-    if python3 "${eval_dir}/optimize_prompt.py" --dry-run >/dev/null 2>&1; then
+    if "${TRACK_PYTHON}" "${eval_dir}/optimize_prompt.py" --dry-run >/dev/null 2>&1; then
       pass "optimize_prompt.py --dry-run succeeded"
     else
       fail "optimize_prompt.py --dry-run failed"
     fi
-    if python3 "${eval_dir}/optimize_prompt.py" --optimizer gepa-skills --publish-skill --dry-run >/dev/null 2>&1; then
+    if "${TRACK_PYTHON}" "${eval_dir}/optimize_prompt.py" --optimizer gepa-skills --publish-skill --dry-run >/dev/null 2>&1; then
       pass "optimize_prompt.py --optimizer gepa-skills --publish-skill --dry-run succeeded (16-rule skill validation)"
     else
       fail "optimize_prompt.py --optimizer gepa-skills --publish-skill --dry-run failed"
@@ -2086,7 +2134,7 @@ PYEOF
     fi
   fi
 
-  if python3 - "${rbac}" "${tpl}" "${pool}" 2>/dev/null <<'PYEOF'
+  if "${TRACK_PYTHON}" - "${rbac}" "${tpl}" "${pool}" 2>/dev/null <<'PYEOF'
 import sys
 from pathlib import Path
 
@@ -2139,7 +2187,7 @@ PYEOF
     fi
   fi
 
-  if python3 "${py}" --mode inspect >/dev/null 2>&1; then
+  if "${TRACK_PYTHON}" "${py}" --mode inspect >/dev/null 2>&1; then
     pass "gke_agent_example.py --mode inspect succeeded"
   else
     fail "gke_agent_example.py --mode inspect failed"

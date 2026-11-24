@@ -19,9 +19,13 @@ Production reference for closing the **Quality Flywheel** on Gemini Enterprise A
 
 | Optimizer Class (`google.adk.optimization.*`) | Status | Scope Optimized | Algorithm & Default Model Config | Key Config Parameters |
 |---|---|---|---|---|
-| **`GEPARootAgentPromptOptimizer`** (`gepa_root_agent_prompt_optimizer`) | Experimental *(emits warning; default for `adk optimize`)* | **Root agent instructions ONLY** *(does NOT optimize sub-agents, tools, or skills)* | GEPA Pareto-frontier evolutionary reflection; default **10K token thinking budget** | `optimizer_model`, `model_configuration`, `max_metric_calls` (`100`), `reflection_minibatch_size` (`3`), `run_dir` (warm starts) |
-| **`GEPARootAgentOptimizer`** (`gepa_root_agent_optimizer`) | Experimental *(emits warning)* | **Root agent instructions AND `SkillToolset` skill instructions** *(NOT sub-agents or tools)* | GEPA Pareto-frontier reflection; default **`ThinkingLevel` `HIGH`** | `optimizer_model`, `model_configuration`, `max_metric_calls` (`100`), `reflection_minibatch_size` (`3`), `run_dir` (warm starts) |
-| **`SimplePromptOptimizer`** (`simple_prompt_optimizer`) | Built-in | **Root agent instructions ONLY** *(single-prompt sequential refinement; does NOT mutate initial agent)* | 4-stage async loop: **Execute -> Evaluate -> Critique -> Rewrite**; override `optimizer_model="gemini-4-hydrogen"` (or `"gemini-4-neon"`) on `global` with `ThinkingLevel` (`LOW\|MEDIUM\|HIGH\|XHIGH`) — replacing legacy `gemini-2.5-flash` (retired Oct 20, 2026) | `num_iterations` (`10`), `batch_size` (`5`), `optimizer_model` (`"gemini-4-hydrogen"`), `model_configuration` (`GenerateContentConfig`) |
+| **`GEPARootAgentPromptOptimizer`** (`gepa_root_agent_prompt_optimizer`) | Experimental *(emits warning; default for `adk optimize`)* | **Root agent instructions ONLY** *(does NOT optimize sub-agents, tools, or skills)* | GEPA Pareto-frontier evolutionary reflection; **ADK 2.15.0 default uses retired `gemini-2.5-flash` + `thinking_budget=10240` — MUST override for Gemini 4!** | `optimizer_model`, `model_configuration`, `max_metric_calls` (`100`), `reflection_minibatch_size` (`3`), `run_dir` (warm starts) |
+| **`GEPARootAgentOptimizer`** (`gepa_root_agent_optimizer`) | Experimental *(emits warning)* | **Root agent instructions AND `SkillToolset` skill instructions** *(NOT sub-agents or tools)* | GEPA Pareto-frontier reflection; override `optimizer_model="gemini-4-hydrogen"` + `ThinkingConfig(thinking_level="MEDIUM", include_thoughts=True)` (no `thinking_budget`) | `optimizer_model`, `model_configuration`, `max_metric_calls` (`100`), `reflection_minibatch_size` (`3`), `run_dir` (warm starts) |
+| **`SimplePromptOptimizer`** (`simple_prompt_optimizer`) | Built-in | **Root agent instructions ONLY** *(single-prompt sequential refinement; does NOT mutate initial agent)* | 4-stage async loop: **Execute -> Evaluate -> Critique -> Rewrite**; **ADK 2.15.0 default uses retired `gemini-2.5-flash` + `thinking_budget=10240` — MUST override both `optimizer_model` AND `model_configuration`!** | `num_iterations` (`10`), `batch_size` (`5`), `optimizer_model` (`"gemini-4-hydrogen"`), `model_configuration` (`GenerateContentConfig`) |
+
+> **CRITICAL ADK 2.15.0 + Gemini 4 Optimizer Traps (Must Fix Both!):**
+> 1. **`thinking_budget=10240` -> HTTP 400 on Gemini 4:** In `google-adk==2.15.0`, both `SimplePromptOptimizerConfig` and `GEPARootAgentPromptOptimizerConfig` default to `optimizer_model="gemini-2.5-flash"` (retired Oct 20, 2026) AND `model_configuration=GenerateContentConfig(thinking_config=ThinkingConfig(include_thoughts=True, thinking_budget=10240))`. Passing `optimizer_model="gemini-4-hydrogen"` without also overriding `model_configuration` triggers **HTTP 400** because Gemini 4 rejects `thinking_budget`! Always pass `ThinkingConfig(thinking_level="MEDIUM", include_thoughts=True)` (or `LOW`/`HIGH`/`XHIGH`, never `thinking_budget`).
+> 2. **Regional `GOOGLE_CLOUD_LOCATION=asia-southeast1` -> HTTP 404 on `gemini-4-hydrogen`/`neon`:** `SimplePromptOptimizer` and `GEPARootAgent*Optimizer` instantiate a default `Gemini(model=optimizer_model)` without `client_kwargs={"location": "global"}`. When running in Singapore/Bangkok setups (`GOOGLE_CLOUD_LOCATION=asia-southeast1`), export `GOOGLE_CLOUD_LOCATION=global` for the optimizer process (or use `optimizer_model="gemini-4-argon"` on `asia-southeast1`).
 
 ---
 
@@ -68,21 +72,40 @@ Production reference for closing the **Quality Flywheel** on Gemini Enterprise A
 
 - **All `LocalEvalSamplerConfig` fields:** `eval_config`, `app_name` (must match containing agent directory name), `train_eval_set`, optional `train_eval_case_ids`, optional `validation_eval_set` (reuses `train_eval_set` if omitted — **always provide a separate holdout set in production to detect overfitting**), and optional `validation_eval_case_ids`.
 
-### Step 3 — Run `adk optimize`
+### Step 3 — Create Gemini 4 Optimizer Config (`optimizer_config.json`) & Run `adk optimize`
+
+Always supply `--optimizer_config_file_path` and `GOOGLE_CLOUD_LOCATION=global` so `adk optimize` does not fall back to retired `gemini-2.5-flash` or `thinking_budget=10240`:
+
+```json
+{
+  "optimizer_model": "gemini-4-hydrogen",
+  "model_configuration": {
+    "thinking_config": {
+      "include_thoughts": true,
+      "thinking_level": "MEDIUM"
+    }
+  },
+  "max_metric_calls": 50,
+  "reflection_minibatch_size": 3
+}
+```
 
 ```bash
 adk optimize [OPTIONS] AGENT_MODULE_FILE_PATH
 
 # Example (AGENT_MODULE_FILE_PATH MUST be a directory whose __init__.py exposes `agent.root_agent`)
+# Export GOOGLE_CLOUD_LOCATION=global for gemini-4-hydrogen/neon (or use gemini-4-argon on asia-southeast1)
+GOOGLE_CLOUD_LOCATION="${MODEL_LOCATION:-global}" \
 adk optimize path/to/hello_world \
     --sampler_config_file_path path/to/hello_world/sampler_config.json \
+    --optimizer_config_file_path path/to/hello_world/optimizer_config.json \
     --print_detailed_results \
     --log_level INFO
 ```
 
 - **All verified CLI flags:**
   - `--sampler_config_file_path PATH` (required)
-  - `--optimizer_config_file_path PATH` (optional; defaults to `GEPARootAgentPromptOptimizerConfig`)
+  - `--optimizer_config_file_path PATH` (strongly recommended for Gemini 4; omitting it defaults to `GEPARootAgentPromptOptimizerConfig` with retired `gemini-2.5-flash` + `thinking_budget=10240`)
   - `--print_detailed_results` (optional; prints detailed optimizer metrics)
   - `--log_level` (`DEBUG|INFO|WARNING|ERROR|CRITICAL`, default `INFO`)
 
@@ -121,8 +144,21 @@ sampler_config = LocalEvalSamplerConfig(
 eval_sets_manager = LocalEvalSetsManager(agents_dir=os.path.dirname(os.getcwd()))
 sampler = LocalEvalSampler(sampler_config, eval_sets_manager)
 
+from google.genai import types
+
+# Route ADK's internal optimizer Gemini() client to global for gemini-4-hydrogen / gemini-4-neon
+# (or keep GOOGLE_CLOUD_LOCATION="asia-southeast1" and use optimizer_model="gemini-4-argon").
+os.environ["GOOGLE_CLOUD_LOCATION"] = os.environ.get("MODEL_LOCATION", "global")
+
+gemini4_opt_config = types.GenerateContentConfig(
+    # CRITICAL: Explicitly override ADK 2.15.0's default thinking_budget=10240 (HTTP 400 on Gemini 4)!
+    thinking_config=types.ThinkingConfig(thinking_level="MEDIUM", include_thoughts=True),
+)
+
 optimizer = GEPARootAgentPromptOptimizer(
     config=GEPARootAgentPromptOptimizerConfig(
+        optimizer_model="gemini-4-hydrogen",
+        model_configuration=gemini4_opt_config,
         max_metric_calls=100,
         reflection_minibatch_size=3,
         run_dir="./gepa_runs/exp1",  # Enables warm starts / checkpointing
@@ -130,9 +166,15 @@ optimizer = GEPARootAgentPromptOptimizer(
 )
 result = asyncio.run(optimizer.optimize(agent.root_agent, sampler))
 
-best_idx = result.gepa_result["best_idx"]
-print("Validation score:", result.optimized_agents[best_idx].overall_score)
-print("Optimized prompt:", result.optimized_agents[best_idx].optimized_agent.instruction)
+# Safe best-candidate selection across BOTH GEPA results (`gepa_result["best_idx"]`)
+# and SimplePromptOptimizer results (`OptimizerResult`, which has NO `gepa_result` attribute!)
+gepa_meta = getattr(result, "gepa_result", None)
+if isinstance(gepa_meta, dict) and "best_idx" in gepa_meta:
+    best = result.optimized_agents[gepa_meta["best_idx"]]
+else:
+    best = max(result.optimized_agents, key=lambda item: item.overall_score)
+print("Validation score:", best.overall_score)
+print("Optimized prompt:", best.optimized_agent.instruction)
 ```
 
 *(Swap `GEPARootAgentPromptOptimizer` / `GEPARootAgentPromptOptimizerConfig` with `GEPARootAgentOptimizer` / `GEPARootAgentOptimizerConfig` from `google.adk.optimization.gepa_root_agent_optimizer` to co-optimize root instructions + `SkillToolset` skill instructions.)*
@@ -144,20 +186,29 @@ print("Optimized prompt:", result.optimized_agents[best_idx].optimized_agent.ins
 ### B. Programmatic `SimplePromptOptimizer` (Sequential 4-Stage Loop)
 
 ```python
+import os
 from google.adk.optimization.simple_prompt_optimizer import (
     SimplePromptOptimizer,
     SimplePromptOptimizerConfig,
 )
+from google.genai import types
+
+os.environ["GOOGLE_CLOUD_LOCATION"] = os.environ.get("MODEL_LOCATION", "global")
 
 optimizer = SimplePromptOptimizer(
     config=SimplePromptOptimizerConfig(
         num_iterations=5,
         batch_size=10,
-        optimizer_model="gemini-4-hydrogen",  # Route via MODEL_LOCATION=global (or gemini-4-neon for deeper critiques)
+        optimizer_model="gemini-4-hydrogen",  # Or "gemini-4-neon" on global; "gemini-4-argon" on asia-southeast1
+        model_configuration=types.GenerateContentConfig(
+            # CRITICAL: Override default thinking_budget=10240 so Gemini 4 does not return HTTP 400!
+            thinking_config=types.ThinkingConfig(thinking_level="MEDIUM", include_thoughts=True),
+        ),
     )
 )
-# Non-mutating: initial agent object is unchanged; highest-scoring variant is returned
+# Non-mutating: initial agent object is unchanged; returns OptimizerResult (no `gepa_result` attribute!)
 optimized_result = await optimizer.optimize(agent.root_agent, sampler)
+best = max(optimized_result.optimized_agents, key=lambda item: item.overall_score)
 ```
 
 ### C. Custom `Sampler` & `AgentOptimizer` Extensibility (`google.adk.optimization.*`)
@@ -239,7 +290,7 @@ Combine **Feedback Service** (`agentplatform.Client`), **Offline Eval & Loss Clu
    └── Track B (Domain Skill Change — ZERO Agent Container Rebuild):
          ├── Re-validate 16 atomic ZIP checks (`package_registry_skill.py`)
          ├── Vertex AI Skill Registry: `client.skills.update(name=..., config={"display_name": ..., "description": ..., "local_path": skill_dir})` (DIRECTORY only — never `.zip`!)
-         └── Agent Registry (Governed): `gcloud alpha agent-registry skills revisions create rev-2 --skill=private-SKILL_ID --location=global --payload=zip` -> `ENABLED_BLOCKING` scan -> `gcloud alpha agent-registry skills update private-SKILL_ID --location=global --default-revision=.../revisions/rev-2` (1-cmd rollback to `rev-1` if Quality Alerts regress)
+         └── Agent Registry (Governed): `gcloud alpha agent-registry skills revisions create rev-2 --skill=private-SKILL_ID --location=global --payload=zip` -> poll `ENABLED_BLOCKING` scan (or use `enabled-nonblocking` for workshop demos) -> `gcloud alpha agent-registry skills update private-SKILL_ID --location=global --default-revision=.../revisions/rev-2 --target-state=active` (1-cmd rollback to `rev-1`; ALWAYS include `--target-state=active` so `GCPSkillRegistry.get_skill()` succeeds, and `--clear-default-revision --target-state=disabled` before deleting revisions!)
 ```
 
 ### Verified SDK Bridges (Feedback Harvest -> Canary Traffic Split & Zero-Redeploy Skill Update)

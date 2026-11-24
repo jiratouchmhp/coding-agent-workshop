@@ -79,16 +79,16 @@ Author, provision, execute, and secure **Managed Sandboxes** (`SandboxEnvironmen
    *Why:* Scale Sandboxes have **no built-in domain allowlist** (unlike Pre-GA Managed Agents API). Setting `internet_access: True` without `network_attachment` allows unrestricted `0.0.0.0/0` public egress (blocking only RFC 1918 and `169.254.0.0/16`).
 5. **Run authenticated Google Cloud API calls in the parent agent — NEVER expect ADC or `169.254.169.254` inside a sandbox.**
    *Why:* In-sandbox code runs under tenant identity `sandbox-untrusted` with **zero IAM roles**, no parent Agent Identity, and no Compute Engine metadata server. Pass only required input data into the sandbox, or inject short-lived narrowly scoped per-call tokens.
-6. **Always capture template and snapshot names from `operation.response.name` or `.list()` — NEVER copy buggy upstream doc snippets verbatim.**
-   *Why:* Verified upstream doc bugs exist in four places: (a) `manage-templates.md` hardcodes singular `.../SandboxEnvironmentTemplate/...` instead of `sandboxEnvironmentTemplates` and imports private `agentplatform._genai`; (b) `manage-snapshots.md` has a missing quote and passes a `sandboxEnvironments` path as `snapshot_name`; (c) `code-execution-quickstart.md` calls `.b64decode()` on a `str` instead of reading `Chunk.data` bytes; (d) `shell-sandbox-quickstart.md` mixes `client.agent_engines.sandboxes` and `client.sandboxes`.
+6. **Always capture template/snapshot names from `operation.response.name` or direct `.list()` iteration — NEVER pass `config={"wait_for_completion": True}` to `.delete()` or copy buggy upstream snippets.**
+   *Why:* (a) In `google-cloud-agentplatform >= 2.10.0`, `templates.list()` and `snapshots.list()` return plain `Iterator[...]` directly — accessing `.sandbox_environment_templates` / `.sandbox_environment_snapshots` raises `AttributeError` (use `getattr(resp, "...", resp)` for defensive compatibility); (b) `sandboxes.delete()`, `snapshots.delete()`, and `templates.delete()` return async LROs whose `Delete*Config` Pydantic models accept **only** `http_options` and raise `pydantic.ValidationError` if given `wait_for_completion`; poll delete LROs sequentially (`sandboxes -> snapshots -> templates`) with transient `FAILED_PRECONDITION` retries; (c) upstream doc bugs exist in `manage-templates.md`, `manage-snapshots.md`, `code-execution-quickstart.md`, and `shell-sandbox-quickstart.md`.
 7. **In custom ADK `BaseEnvironment` (`EnvironmentScope.SESSION`), NEVER short-circuit `initialize()` on `if self._is_initialized: return`.**
    *Why:* ADK's `EnvironmentToolset` reuses one environment instance across sessions and calls `initialize(ctx=ctx)` before every tool call. Always check `ctx.state` per session and declare `*, ctx: Context | None = None` on `initialize`, `execute`, `read_file`, and `write_file`.
 8. **Log sandbox command outputs from your parent agent — NEVER assume `reasoning_engine_stdout` captures sandbox logs.**
    *Why:* Automatic Cloud Logging applies only to the parent `ReasoningEngine`, Cloud Audit Logs does not log in-container child processes or WebSocket/CDP/PTY frames, and VPC-SC omits audit request/response payloads. Enable `ADMIN_READ` + `DATA_WRITE` audit logs and emit structured logs in the parent agent.
 9. **Always set `config.ttl` and respect lifecycle preconditions.**
    *Why:* Sandboxes bill while existing; `config.ttl` guarantees crash-safe auto-cleanup (max 7d BYOC, 14d Code Exec). `resume()` fails with `FAILED_PRECONDITION` unless state is `STATE_PAUSED`; snapshots are unsupported on Code Execution and fail to restore across CPU arch, runtime version, `image_uri`, or `owner` mismatches; CMEK requires a **single-region** KMS key set **immutably** at parent `ReasoningEngine` creation.
-10. **Bake `/usr/local/bin/agy` opt-in (`ARG INSTALL_AGY_CLI=true`), probe `/health` `agy_cli_available`, and restrict `/exec` `env` to `ALLOWED_EXEC_ENV_KEYS` — NEVER persist credentials or proxy personal OAuth.**
-    *Why:* Air-gapped sandboxes (`internet_access: False`) have zero IAM roles and block `169.254.169.254`. Prefer running `agy` in Agent Runtime (`AGY_ADC_AUTH=true`) with air-gapped sandboxes for `pytest`/`ruff`, or enable PSC-I + Cloud NGFW/SWP and inject only ephemeral scoped Secret Manager keys per `/exec` call (rejecting unknown `env` keys with HTTP 400).
+10. **Bake `/usr/local/bin/agy` opt-in (`ARG INSTALL_AGY_CLI=true`), probe `/health` `agy_cli_available`, and restrict `/exec` `env` to `ALLOWED_EXEC_ENV_KEYS` — NEVER persist credentials or route ADC-only `agy` into air-gapped BYOC.**
+    *Why:* Air-gapped BYOC gVisor sandboxes (`internet_access: False`) have zero IAM roles and block `169.254.169.254`, so running `agy -p` inside them exits `1` (`authentication required`) even when `/usr/local/bin/agy` is installed. Prefer running `agy` in trusted Agent Runtime (`AGY_EXECUTION_MODE=local`, `AGY_ADC_AUTH=true` + non-numeric `AGY_PROJECT_ID`) while keeping air-gapped BYOC for `pytest`/`ruff`, or enable PSC-I + Cloud NGFW/SWP and inject only ephemeral scoped Secret Manager keys per `/exec` call (rejecting unknown `env` keys with HTTP 400).
 
 ---
 
@@ -167,7 +167,9 @@ snap_op = client.sandboxes.snapshots.create(
     source_sandbox_environment_name=sandbox_name,
     config={"display_name": "checkpoint-1", "ttl": "3600s"},
 )
-client.sandboxes.delete(name=sandbox_name)
+# Delete returns an async LRO — NEVER pass config={"wait_for_completion": True} (raises pydantic.ValidationError)!
+# Teardown order: delete sandboxes -> poll LROs -> delete snapshots -> delete templates (retry transient FAILED_PRECONDITION).
+del_op = client.sandboxes.delete(name=sandbox_name)
 ```
 
 ### 4. Attach Managed Code Execution to an ADK Agent (`google-adk>=2.0.0`, Gemini 4)

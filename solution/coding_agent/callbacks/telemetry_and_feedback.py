@@ -166,7 +166,7 @@ def _extract_tool_execution_fields(tool_response: Any) -> dict[str, Any]:
             except (TypeError, ValueError):
                 exit_code = None
         timed_out = bool(tool_response.get("timed_out", False))
-    elif tool_response is not None and not isinstance(tool_response, (str, bytes)):
+    elif tool_response is not None and not isinstance(tool_response, str | bytes):
         stdout = str(getattr(tool_response, "stdout", "") or "")
         stderr = str(getattr(tool_response, "stderr", "") or "")
         raw_code = getattr(tool_response, "exit_code", None)

@@ -24,8 +24,8 @@ Decision playbook and technical reference for choosing between **Gemini Enterpri
 
 > **Four Distinct Layers — Never Conflate Them:**
 > 1. **Agent Runtime + Managed Sandbox**: Serverless `ReasoningEngine` + Google-managed tenant gVisor `SandboxEnvironment` (lowest ops, SPIFFE Identity, Managed Agent Gateway, 3LO OAuth, CPU-only, 7d/14d sandbox TTLs).
-> 2. **GKE Agent Sandbox (Pod-based, `v1.0.6`)**: 1 dedicated K8s Pod per sandbox (`v1beta1` CRDs), Standard & Autopilot, GPU/TPU (`gVisor`), microVMs (Standard), custom `PodSpec`/sidecars, Pod Snapshots (`>= 1.35.3-gke.1234000`, gVisor, non-E2).
-> 3. **GKE Agent Substrate (Actor-based, GKE Default)**: Actors multiplexed onto shared `WorkerPool` Pods outside `kube-apiserver`/`etcd`; GKE Standard `>= 1.37` x86 CPU-only; `< 1s` 3-layer GCS resume & per-actor SPIFFE/Envoy egress credential injection.
+> 2. **GKE Agent Sandbox (Pod-based, `v1.0.6`)**: 1 dedicated K8s Pod per sandbox (`v1beta1` CRDs), Standard & Autopilot, GPU/TPU (`gVisor`), microVMs (Standard), custom `PodSpec`/sidecars, Pod Snapshots (`whole-pod` `>= 1.35.3-gke.1234000`, gVisor, non-E2, + NVIDIA `cuda-checkpoint` GPU support; `rootfs-only` `>= 1.35.3-gke.1031000`, supports E2/cross-family restore).
+> 3. **GKE Agent Substrate (Actor-based, GKE Default)**: Actors multiplexed onto shared `WorkerPool` Pods outside `kube-apiserver`/`etcd`; GKE Standard `>= 1.37` x86 CPU-only (min `c3-standard-4`); `< 1s` 3-layer GCS resume & per-actor SPIFFE/Envoy egress credential injection.
 > 4. **`agents-cli` (`v1.15.0`)**: Multi-target scaffold/eval/Terraform/deploy/publish DX layer (`-d agent_runtime | cloud_run | gke`) — deploys agent containers only; does **not** install GKE Agent Sandbox/Substrate CRDs or Managed Sandboxes.
 
 ---
@@ -64,8 +64,8 @@ What constraint dominates your agent architecture?
 |---|---|
 | **Agent Platform Runtime** | `90 QPM` query, `10/min` concurrent Bidi, `300/min` session appends, `100` regional entities (adjustable); **`6,000` rev/project/region & `950` rev/agent** (non-adjustable); VPC-SC/PSC-I caps `max_instances=100`; `:streamQuery` `15m`, `:bidi` `10m`, `:asyncQuery` `7d`, `keep_alive_probe` `900..3600s`; **CPU-only**. |
 | **Managed Scale Sandboxes** | TTL max **`7d`** (BYOC/Shell) / **`14d`** (Code Exec, resets on call); Code Exec `1,000` req/min, `1,000` entities/region, `100 MB` payload, zero network, no snapshots; PSC-I subnet `>= /28`; PSC-E max `1` same-project consumer; gVisor only. |
-| **GKE Agent Sandbox (`v1.0.6`)** | `v1beta1` CRDs (`v1alpha1` removed in `v1.0.0`); Standard & Autopilot; `microvm` Standard only (`250 mCPU + 130 MiB/Pod`); Pod Snapshots **`>= 1.35.3-gke.1234000`**, **gVisor only**, **no E2**, **no TPUs** (`~3–5s` restore); `FQDNNetworkPolicy` **`50`** IPs/policy & **`100`** IPs/hostname; Dataplane V2 **`65,535`** `CiliumIdentity` cap *(uncached `troubleshooting/dataplane-v2-issues`)*; Hyperdisk **`128`** disks/node; Filestore **`80`** shares / `20k` conns/inst. |
-| **GKE Agent Substrate** | **Standard ONLY `>= 1.37`** (no Autopilot, no Extended channel); x86 CPU only, **no E2/mixed-CPU**, **no GPUs/TPUs**; `< 1s` GCS restore & `< 100 ms` Filestore agent volume re-attach; `>~800` sandboxes/node needs `inotify`/ARP sysctl tuning; **no GKE Sandbox on worker pools**; Cloud Shell install blocked (`5 GB`). |
+| **GKE Agent Sandbox (`v1.0.6`)** | `v1beta1` CRDs (`v1alpha1` removed in `v1.0.0`); Standard & Autopilot; `microvm` Standard only (`250 mCPU + 130 MiB/Pod`); Pod Snapshots: `whole-pod` **`>= 1.35.3-gke.1234000`** (**gVisor only**, **no E2**, **no TPUs**, **no GCS FUSE CSI**, NVIDIA `cuda-checkpoint` GPU support, no MIG; `~3–5s` restore) vs `rootfs-only` **`>= 1.35.3-gke.1031000`** (supports E2/cross-family restore); `FQDNNetworkPolicy` **`50`** IPs/policy & **`100`** IPs/hostname; Dataplane V2: cluster-create-only, `anetd` **2–3 vCPUs/node** under TCP churn, **0.25%** RAM eBPF map, **260k** Service map, **400k** Pods, **1,000-node** `CiliumNetworkPolicy` cap, & **`65,535`** `CiliumIdentity` cap *(uncached `troubleshooting/dataplane-v2-issues`)*; Hyperdisk **`128`** disks/node; Filestore **`80`** shares / `20k` conns/inst. |
+| **GKE Agent Substrate** | **Standard ONLY `>= 1.37`** (no Autopilot, no Extended channel); x86 CPU only (min **`c3-standard-4`**), **no E2/mixed-CPU**, **no GPUs/TPUs**; `< 1s` GCS restore & `< 100 ms` Filestore agent volume re-attach; `>~800` sandboxes/node needs 5 sysctls (`net.ipv4.neigh.default.gc_thresh1/2/3`, `fs.inotify.max_user_instances/watches`); **no GKE Sandbox on worker pools**; Cloud Shell install blocked (`5 GB`). |
 
 ---
 
@@ -73,12 +73,12 @@ What constraint dominates your agent architecture?
 
 1. **Calculate `U * X * Y * 1.5` and request Agent Platform quota increases BEFORE launch — never assume defaults handle production load.**
    *Why:* Default `Query`/`StreamQuery` is **90 QPM** and `session_event_append_requests` is **300/min**. A 250-user multi-tool agent (`2 req/min`, `12 events/req`) needs **750 QPM** (8.3x default) and **9,000 appends/min** (30x default). Revision caps (**6,000/project/region**, **950/agent**) are **non-adjustable** system limits.
-2. **Exclude `agents.x-k8s.io/sandbox-name-hash` in Dataplane V2 `cilium-config` before high-churn GKE Agent Sandbox scale — never ignore Pod label cardinality.**
-   *Why:* Dataplane V2 enforces a **65,535** cluster-wide `CiliumIdentity` cap across unique Pod label sets *(provenance: uncached `kubernetes-engine/docs/troubleshooting/dataplane-v2-issues` — re-verify on refresh; see `references/maintenance.md`)*. Agent Sandbox attaches per-Pod `agents.x-k8s.io/sandbox-name-hash` (used by `PodSnapshotPolicy`), which can exhaust identities under churn unless filtered (GKE `1.34.6-gke.1307000+` / `1.35.2-gke.1962000+` fixes override application).
+2. **Plan for GKE Dataplane V2 operational specs AND exclude `agents.x-k8s.io/sandbox-name-hash` in `cilium-config` before high-churn GKE Agent Sandbox scale.**
+   *Why:* Dataplane V2 is cluster-create-only; `anetd` can use **2–3 vCPUs/node** under rapid TCP churn (use HTTP keep-alives/pooling), reserves **0.25%** RAM for eBPF maps, caps Service maps at **260,000** entries (400k Pods), and caps `CiliumNetworkPolicy` CRDs at **1,000 nodes** (use `CiliumClusterwideNetworkPolicy` up to 5,000). Separately, Cilium enforces a **65,535** cluster-wide `CiliumIdentity` cap *(provenance: uncached `troubleshooting/dataplane-v2-issues`)* — filter per-Pod `agents.x-k8s.io/sandbox-name-hash` (GKE `1.34.6-gke.1307000+` / `1.35.2-gke.1962000+` fixes override application).
 3. **Never enable GKE Sandbox (`--sandbox=type=gvisor`) on GKE Agent Substrate worker node pools.**
    *Why:* Substrate manages its own gVisor/microVM runtimes inside `WorkerPool` Pods; the GKE Sandbox `sandbox.gke.io/runtime` taint prevents `WorkerPool` Pods from scheduling. Keep GKE Sandbox enabled *only* on separate Agent Sandbox pools.
-4. **Never use E2 machines, microVMs, or TPUs with GKE Pod Snapshots — and always wait for `PodSnapshot` `condition=Ready` before suspending.**
-   *Why:* Pod Snapshots require GKE **`>= 1.35.3-gke.1234000`**, **`gVisor` only**, **non-E2** (`n2`/`c3` or Autopilot `ComputeClass` `non-e2-class`), and **no TPUs**. Setting `spec.operatingMode: Suspended` deletes the Pod; suspending before `condition=Ready` silently cold-starts from scratch on resume.
+4. **Match GKE Pod Snapshot scope (`whole-pod` vs `rootfs-only`) and GPU rules — and always wait for `PodSnapshot` `condition=Ready` before suspending.**
+   *Why:* `whole-pod` snapshots require GKE **`>= 1.35.3-gke.1234000`**, **`gVisor` only**, **non-E2** (`n2`/`c3` or Autopilot `ComputeClass` `non-e2-class`), **no TPUs**, and **no GCS FUSE CSI sidecar** (NVIDIA `cuda-checkpoint` supports A100/H100/RTX PRO 6000 single-GPU and L4 `g2-standard-*` multi-GPU, no MIG). Use **`rootfs-only`** scope (`>= 1.35.3-gke.1031000`) when restoring across machine families including E2. Setting `spec.operatingMode: Suspended` deletes the Pod; suspending before `condition=Ready` cold-starts from scratch on resume.
 5. **Do not assume `secure-sandbox-policy` VAP works out-of-the-box with microVMs, WIF, or Istio/Envoy sidecars.**
    *Why:* The recommended VAP enforces `runtimeClassName: gvisor`, `automountServiceAccountToken: false`, and empty `capabilities.add` (rejecting microVMs and `istio-init` `NET_ADMIN`/`NET_RAW`). Auto-generated `SandboxTemplate` `NetworkPolicy` also blocks `169.254.169.254` (breaking WIF until customized) and is **not** created for direct `Sandbox` CRDs.
 6. **Never rely on Agent Platform `reasoning_engine_stdout` or Cloud Audit Logs for inside-sandbox observability.**
@@ -89,8 +89,8 @@ What constraint dominates your agent architecture?
    *Why:* Terraform cannot adopt an existing imperatively deployed Agent Runtime; all sizing and `--agent-identity` flags are rejected on `gke` (owned by `deployment/terraform/` + HPA).
 9. **Bind `default/default` KSA to `roles/aiplatform.user` and add `sessions.db` to `.dockerignore` when using `adk deploy gke`.**
    *Why:* `adk deploy gke` (Python-only; default `ClusterIP`) uses the `default` KSA (`403 PERMISSION_DENIED` without WIF binding), and copying a local SQLite `sessions.db` into a non-root container throws `OperationalError: attempt to write a readonly database`.
-10. **Never install GKE Agent Substrate from Cloud Shell, and set `--soft-delete-duration=0d` on GKE Pod Snapshot GCS buckets.**
-    *Why:* Cloud Shell's 5 GB persistent disk limit blocks Substrate installation (use a workstation/VM); Pod Snapshots create/delete many temporary upload files that trigger heavy soft-delete storage bills unless disabled.
+10. **Never install GKE Agent Substrate from Cloud Shell, set `--soft-delete-duration=0d` on Pod Snapshot GCS buckets, and isolate `google-adk==2.15.0` `GkeCodeExecutor` from `k8s-agent-sandbox==1.0.6`.**
+    *Why:* Cloud Shell's 5 GB disk cap blocks Substrate installation; Pod Snapshot temp files trigger soft-delete storage bills unless disabled; and `google-adk==2.15.0` `GkeCodeExecutor._execute_in_sandbox()` calls the pre-1.0 `SandboxClient(...)` context-manager API, which breaks if `k8s-agent-sandbox==1.0.6` (`SandboxClient(connection_config=...).create_sandbox(...)`) is installed in the same Python environment (see `references/gke-agent-sandbox-reference.md`).
 
 ---
 
@@ -107,17 +107,21 @@ rec_session_writes = rec_query_qpm                         # 750  (default: 100 
 # Async ADK Runtime scaling: 9 processes/container -> raise container_concurrency from 9 to 36 (watch RAM)
 ```
 
-### 2. ADK `GkeCodeExecutor` & `k8s-agent-sandbox==1.0.6` Wiring
+### 2. ADK `GkeCodeExecutor` vs. Standalone `k8s-agent-sandbox==1.0.6` Wiring
 ```python
-# Option A — ADK GkeCodeExecutor (pip install "google-adk[extensions]>=2.0.0"; ADK Python 2.0+)
+# WARNING (Breaking SDK API Skew): Do NOT co-install k8s-agent-sandbox==1.0.6 in the same venv as
+# google-adk==2.15.0 GkeCodeExecutor(executor_type="sandbox") — ADK 2.15.0 calls the pre-1.0
+# context-manager SandboxClient API until ADK migrates to k8s-agent-sandbox v1.x!
+
+# Option A — ADK GkeCodeExecutor (pip install "google-adk[extensions]>=2.0.0" + pre-1.0 k8s-agent-sandbox on ADK 2.15.0)
 from google.adk.code_executors import GkeCodeExecutor
-executor = GkeCodeExecutor(namespace="agent-sandbox-system", executor_type="sandbox", sandbox_template="python-sandbox-template")
+executor = GkeCodeExecutor(namespace="agent-workloads", executor_type="sandbox", sandbox_template="python-sandbox-template")
 # Pass code_executor=executor to LlmAgent (full RBAC & Gateway config -> references/gke-agent-sandbox-reference.md)
 
-# Option B — Direct k8s-agent-sandbox SDK (pip install k8s-agent-sandbox==1.0.6; prod uses Direct/Gateway configs)
+# Option B — Standalone k8s-agent-sandbox v1.0.6 SDK (pip install k8s-agent-sandbox==1.0.6; prod uses Direct/Gateway configs)
 from k8s_agent_sandbox import SandboxClient
 from k8s_agent_sandbox.models import SandboxLocalTunnelConnectionConfig
-sb = SandboxClient(connection_config=SandboxLocalTunnelConnectionConfig(), cleanup=True).create_sandbox(warmpool="python-sandbox-warmpool", namespace="default")
+sb = SandboxClient(connection_config=SandboxLocalTunnelConnectionConfig(), cleanup=True).create_sandbox(warmpool="python-sandbox-warmpool", namespace="agent-workloads")
 print(sb.commands.run("echo ok").stdout)
 ```
 

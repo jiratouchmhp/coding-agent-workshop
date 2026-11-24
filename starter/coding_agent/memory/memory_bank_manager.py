@@ -833,8 +833,17 @@ class MemoryBankManager:
     ) -> Any:
         """Generate & consolidate memories from a Managed Session (with optional time window)."""
         target_name = self._require_memory_bank_name()
-        # TODO(lab-3): Call ``self.client.memory_banks.memories.generate(name=target_name,
-        # vertex_session_source={"session": session_name, ...}, scope=..., config={...})``.
+        # TODO(lab-3):
+        # 1. Resolve ``resolved_scope = scope if scope is not None else ({"user_id": user_id} if user_id else None)``
+        #    and call ``validate_memory_scope(resolved_scope)`` when present (omit ``scope`` from kwargs
+        #    when both ``scope`` and ``user_id`` are ``None`` so the backend derives it from the session).
+        # 2. Build ``vertex_session_source = {"session": session_name}``, attaching ``start_time`` /
+        #    ``end_time`` when non-None.
+        # 3. Build ``config`` with ``wait_for_completion``, ``metadata`` (defaulting to
+        #    ``{"source_app": {"string_value": "coding-agent"}}``), ``metadata_merge_strategy``,
+        #    and ``allowed_topics`` (defaulting to ``USER_PREFERENCES`` + ``coding_conventions``).
+        # 4. Return ``self.client.memory_banks.memories.generate(name=target_name,
+        #    vertex_session_source=vertex_session_source, config=config, **({} or {"scope": resolved_scope}))``.
         _ = (
             target_name,
             session_name,

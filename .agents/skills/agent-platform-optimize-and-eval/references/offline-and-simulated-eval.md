@@ -60,15 +60,20 @@ Four metric categories are supported across Console, SDK, and `agents-cli`:
 ### Critical Metric Rules & Gotchas
 
 1. **SAFETY SCORE POLARITY FLIP (`safety_v3` vs `safety_v1`):**
-   - **`safety_v3` (latest default):** **`1` = UNSAFE** (at least one policy violated: `hate_harassment`, `sexual_content`, `violence_gore`, `medical_advice`, `dangerous_content`, `csae`) and **`0` = SAFE**.
-   - **`safety_v1` (legacy):** **`0` = UNSAFE** and **`1` = SAFE** (checks PII/demographic, hate speech, dangerous content, harassment, sexually explicit).
-   - Always verify which version is active before setting CI thresholds or Cloud Monitoring alerts!
+   - **`safety_v3` (modern Gemini 3.5 Flash default — recommended):** **`1` = UNSAFE** (at least one policy violated: `hate_harassment`, `sexual_content`, `violence_gore`, `medical_advice`, `dangerous_content`, `csae`) and **`0` = SAFE**. Use inverted CI checks and Cloud Monitoring **`COMPARISON_GT`** alerts (e.g., `> 0.05`).
+   - **`safety_v1` (legacy v1 rubric):** **`0` = UNSAFE** and **`1` = SAFE** (backend-managed legacy rubric; avoid relying on retired `gemini-2.5-flash` directly in your own code/judges).
+   - **Rule:** Always explicitly pin `version=` (`types.RubricMetric.SAFETY(version="v3")` with inverted checks, or `version="v1"` only for legacy compatibility) so polarity never shifts silently!
 2. **Multi-Turn 400 Restriction:** **ONLY** the 3 `multi_turn_*` metrics (`multi_turn_task_success`, `multi_turn_tool_use_quality`, `multi_turn_trajectory_quality`) accept multi-turn agent traces; every other built-in metric rejects them with HTTP 400 (`Single-turn metric '<name>' received agent_eval_data with N turns`). Split single-turn and multi-turn cases into separate dataset + config pairs.
-3. **Version Pinning & `global` Recommended:** Latest metric versions require **Gemini 3.5 Flash** judge availability (use `EVAL_LOCATION=global` for guaranteed availability alongside `generate_loss_clusters`; legacy `v1` metrics backed by Gemini 2.5 should be avoided as `gemini-2.5-flash` retired Oct 20, 2026):
+3. **Version Pinning & `global` Recommended:** Latest `v2`/`v3` metric versions require **Gemini 3.5 Flash** judge availability (use `EVAL_LOCATION=global` for guaranteed availability alongside `generate_loss_clusters`):
    ```python
-   from vertexai import types
-   general_v1 = types.RubricMetric.GENERAL_QUALITY(version="v1")
-   safety_v1 = types.RubricMetric.SAFETY(version="v1")
+   try:
+       from agentplatform import types
+   except ImportError:
+       from vertexai import types
+
+   # Prefer modern Gemini 3.5 Flash versions (note safety_v3 polarity: 1.0 = UNSAFE, 0.0 = SAFE!)
+   general_v2 = types.RubricMetric.GENERAL_QUALITY(version="v2")
+   safety_v3 = types.RubricMetric.SAFETY(version="v3")
    ```
 4. **Legacy Pointwise Compatibility:** Pointwise templates (`types.RubricMetric.COHERENCE`, `types.RubricMetric.FLUENCY`) still work in the GenAI Client; pairwise metrics are unsupported (compare multiple candidates in one evaluation instead).
 
@@ -95,16 +100,19 @@ Four metric categories are supported across Console, SDK, and `agents-cli`:
 ## 4. Python SDK Workflow (`vertexai._genai.evals.Evals`, `google-cloud-aiplatform>=1.153.1`)
 
 > **SDK Migration & Static Dataset Metric Selection (`google-cloud-agentplatform==2.10.0`):**
-> 1. **`agentplatform.Client` Replaces `vertexai.Client`:** On `google-cloud-aiplatform==2.10.0` / `google-cloud-agentplatform==2.10.0`, `vertexai.Client(...)` emits `FutureWarning: The vertexai.Client class is deprecated. Please use agentplatform.Client instead.` Prefer **`agentplatform.Client(project=..., location=EVAL_LOCATION)`** (falling back to `vertexai.Client` only on older builds) alongside `from vertexai import types`. Always pass **`dataset=`** to `client.evals.evaluate(...)` — ignore the `traces=` typo in high-level overview docs.
-> 2. **Static Single-Turn Dataset Metric Selection:** For static prompt/response datasets without live agent traces or pre-generated `rubric_groups`, grade cleanly with **`GENERAL_QUALITY`**, **`FINAL_RESPONSE_MATCH`**, and **`SAFETY(version="v1")`**. Avoid applying `FINAL_RESPONSE_REFERENCE_FREE` to static cases lacking explicit `rubric_groups`, where the evaluator can return `400 INVALID_ARGUMENT: Rubric results could not be reliably computed`. Reserve `FINAL_RESPONSE_QUALITY`, `TOOL_USE_QUALITY`, and `HALLUCINATION` for trace-populated single-turn runs.
+> 1. **`agentplatform.Client` Replaces `vertexai.Client`:** On `google-cloud-aiplatform==2.10.0` / `google-cloud-agentplatform==2.10.0`, `vertexai.Client(...)` emits `FutureWarning: The vertexai.Client class is deprecated. Please use agentplatform.Client instead.` Prefer **`from agentplatform import Client, types`** (falling back to `from vertexai import Client, types` only on older builds). Always pass **`dataset=`** to `client.evals.evaluate(...)` — ignore the `traces=` typo in high-level overview docs.
+> 2. **Static Single-Turn Dataset Metric Selection:** For static prompt/response datasets without live agent traces or pre-generated `rubric_groups`, grade cleanly with **`GENERAL_QUALITY`**, **`FINAL_RESPONSE_MATCH`**, and **`SAFETY(version="v3")`** (remember `safety_v3`: `1.0=UNSAFE`, `0.0=SAFE`; or pin `version="v1"` if legacy `1.0=SAFE` polarity is required). Avoid applying `FINAL_RESPONSE_REFERENCE_FREE` to static cases lacking explicit `rubric_groups`, where the evaluator can return `400 INVALID_ARGUMENT: Rubric results could not be reliably computed`. Reserve `FINAL_RESPONSE_QUALITY`, `TOOL_USE_QUALITY`, and `HALLUCINATION` for trace-populated single-turn runs.
+> 3. **Typed `EvaluationDataset` Required for `run_inference(src=...)`:** Unlike `evaluate(dataset=...)`, **`client.evals.run_inference(src=...)` rejects raw Python `dict`s**! Always wrap dict payloads via `types.EvaluationDataset.model_validate({"eval_cases": ...})` (or pass a `pandas.DataFrame` or file path string).
 
 ### Core Offline Evaluation, Rubric Generation, Batch Runs & Metric Registry CRUD
 
 ```python
 # pip install "google-cloud-agentplatform>=2.10.0" "google-cloud-aiplatform[adk,evaluation]"
 import os
-import agentplatform
-from vertexai import types
+try:
+    from agentplatform import Client, types
+except ImportError:
+    from vertexai import Client, types
 
 PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "YOUR_PROJECT_ID")
 # Agent Runtime region: Singapore fallback (asia-southeast1 — not yet launched in Bangkok asia-southeast3)
@@ -112,7 +120,7 @@ RUNTIME_LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION", "asia-southeast1")
 # Decouple Eval client location: `global` supports both evaluate() AND generate_loss_clusters()
 EVAL_LOCATION = os.environ.get("EVAL_LOCATION", "global")
 
-client = agentplatform.Client(project=PROJECT_ID, location=EVAL_LOCATION)
+client = Client(project=PROJECT_ID, location=EVAL_LOCATION)
 
 # 1. Synchronous offline evaluation (verified signature: dataset=, NOT traces=)
 result = client.evals.evaluate(
@@ -121,7 +129,7 @@ result = client.evals.evaluate(
         types.RubricMetric.FINAL_RESPONSE_QUALITY,
         types.RubricMetric.TOOL_USE_QUALITY,
         types.RubricMetric.HALLUCINATION,
-        types.RubricMetric.SAFETY,
+        types.RubricMetric.SAFETY(version="v3"),  # Pinned explicitly: 1.0 = UNSAFE, 0.0 = SAFE
     ],
 )
 result.show()  # Interactive Colab/Jupyter summary + expandable per-case rubric verdicts
@@ -204,27 +212,59 @@ Simulated evaluation bootstraps multi-turn test suites with zero production traf
 
 ### Python SDK Simulation Workflow
 
-```python
-import os
-from google.adk.agents import Agent
-from vertexai import Client, types
+> **CRITICAL Live SDK Bug (`google-cloud-agentplatform==2.10.0`) — `AgentInfo.load_from_agent()` Crashes on ADK `BaseToolset`:**
+> `types.evals.AgentInfo.load_from_agent(agent=agent)` calls `AgentConfig._get_tool_declarations_from_agent()`, which does **not** recognize ADK `BaseToolset` subclasses (`EnvironmentToolset`, `SkillToolset`, `McpToolset`) and passes them straight to `FunctionTool(func=tool)`, crashing with **`TypeError: Expected a callable object, got EnvironmentToolset`**!
+> **Verified Workaround:** Before calling `AgentInfo.load_from_agent()`, expand any `BaseToolset` in `agent.tools` via `await toolset.get_tools()` onto a shallow clone (`agent.model_copy(update={"tools": expanded_tools})`) — and remember `client.evals.run_inference(src=...)` requires a typed `types.EvaluationDataset` (not a raw `dict`)!
 
+```python
+import asyncio
+import inspect
+import os
+from google import genai
+from google.adk.agents import Agent
+from google.adk.models import Gemini
+from google.adk.tools.base_toolset import BaseToolset
+try:
+    from agentplatform import Client, types
+except ImportError:
+    from vertexai import Client, types
+
+PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "YOUR_PROJECT_ID")
 # Use EVAL_LOCATION="global" (decoupled from GOOGLE_CLOUD_LOCATION=asia-southeast1 in APAC)
 # so evaluate() and generate_loss_clusters() both succeed on the same client.
 client = Client(
-    project=os.environ.get("GOOGLE_CLOUD_PROJECT", "YOUR_PROJECT_ID"),
+    project=PROJECT_ID,
     location=os.environ.get("EVAL_LOCATION", "global"),
 )
 
+# Always route Gemini 4 Hydrogen via client_kwargs to global (bare model="gemini-4-hydrogen"
+# fails with HTTP 404 when GOOGLE_CLOUD_LOCATION="asia-southeast1"!)
+auth_key = "enterprise" if "enterprise" in inspect.signature(genai.Client.__init__).parameters else "vertexai"
+gemini4_model = Gemini(
+    model="gemini-4-hydrogen",
+    client_kwargs={auth_key: True, "project": PROJECT_ID, "location": os.environ.get("MODEL_LOCATION", "global")},
+)
+
 travel_agent = Agent(
-    model="gemini-4-hydrogen",  # Frontier Gemini 4 on MODEL_LOCATION=global (or gemini-4-argon on asia-southeast1)
+    model=gemini4_model,
     name="travel_agent",
     instruction="You are a travel expert; help users find flights and book flights with flight ID.",
     tools=[find_flights, book_flight],
 )
 
-# Step 1: Extract AgentInfo and synthesize multi-turn scenarios
-travel_agent_info = types.evals.AgentInfo.load_from_agent(agent=travel_agent)
+async def load_agent_info_safe(agent_obj: Agent):
+    """Expand ADK BaseToolset instances (EnvironmentToolset, SkillToolset) before load_from_agent()."""
+    expanded_tools = []
+    for t in getattr(agent_obj, "tools", []) or []:
+        if isinstance(t, BaseToolset):
+            expanded_tools.extend(await t.get_tools())
+        else:
+            expanded_tools.append(t)
+    clone = agent_obj.model_copy(update={"tools": expanded_tools})
+    return types.evals.AgentInfo.load_from_agent(agent=clone)
+
+# Step 1: Extract AgentInfo safely and synthesize multi-turn scenarios
+travel_agent_info = asyncio.run(load_agent_info_safe(travel_agent))
 eval_dataset = client.evals.generate_conversation_scenarios(
     agent_info=travel_agent_info,
     config={
@@ -235,6 +275,7 @@ eval_dataset = client.evals.generate_conversation_scenarios(
 )
 
 # Step 2: Execute multi-turn User Simulator to produce canonical traces
+# NOTE: If supplying custom scenarios from JSON/dict, wrap via types.EvaluationDataset.model_validate(data)!
 eval_dataset_with_traces = client.evals.run_inference(
     agent=travel_agent,
     src=eval_dataset,
@@ -370,3 +411,5 @@ thresholds:
 | Scores fluctuate across identical runs | Non-deterministic decoding or single-sample LLM judge | Pin an explicit `THINKING_LEVEL` on the agent and set `judge_model_sampling_count: 3` on custom judges (Gemini 4 ignores custom `temperature`/`top_p`/`top_k`; reserve `temperature=0` for legacy non-Gemini-4 models); never delete flaky cases or lower thresholds. |
 | Built-in judge ignores image/audio inputs | Default text extractor (`get_text_from_content()`) skips non-text parts | Implement a custom metric with a vision/audio-capable judge model. |
 | `400 FAILED_PRECONDITION: Unsupported region` | `--region` or client `location` outside the 15 supported eval regions (e.g., APAC `asia-southeast1` or `asia-southeast3`) | Decouple `EVAL_LOCATION=global` from `GOOGLE_CLOUD_LOCATION=asia-southeast1` (so both `evaluate()` and `generate_loss_clusters()` succeed cleanly), pass `--region global` (or a supported US/EU region), or use local `custom_function` metrics for strict in-country residency. |
+| `TypeError: Expected a callable object, got EnvironmentToolset` in `AgentInfo.load_from_agent()` | `google-cloud-agentplatform==2.10.0` `AgentConfig._get_tool_declarations_from_agent()` does not unwrap ADK `BaseToolset` subclasses (`EnvironmentToolset`, `SkillToolset`) | Expand `BaseToolset` entries via `await toolset.get_tools()` onto a shallow agent clone before calling `types.evals.AgentInfo.load_from_agent()`. |
+| `run_inference(src=...)` rejects raw Python `dict` | `run_inference` only accepts `types.EvaluationDataset`, `pd.DataFrame`, or path `str` | Wrap dict datasets with `types.EvaluationDataset.model_validate({"eval_cases": ...})`. |

@@ -78,9 +78,45 @@ class ObservableAgent:
             extras["trace"] = trace_id
         self.struct_logger.log_struct(
             {"event": "tool_exec", "tool": tool_name, "exit_code": exit_code, "stdout_preview": preview[:1000]},
-            severity="INFO" if exit_code == 0 else "ERROR",
+            severity="INFO" if exit_code == 0 else "WARNING",
             **extras,
         )
+```
+
+### ADK 2.0 Tool Callbacks (`before_tool_callback` / `after_tool_callback`) + OTel Span Attributes
+
+> **CRITICAL ADK 2.0 `ToolContext.state` Gotcha:** `tool_context.state` is a `google.adk.sessions.state.State` instance — it supports `.get()`, `.setdefault()`, `.update()`, and `.to_dict()`, but does **NOT** implement `dict.pop()` (calling `tool_context.state.pop(key, None)` raises `AttributeError`)! Clear timing keys by assigning `tool_context.state[key] = None`.
+
+```python
+import time
+from opentelemetry import trace
+from google.adk.tools import BaseTool, ToolContext
+
+_START_KEY = "temp:tool_start_ts"
+
+async def before_tool_telemetry_callback(
+    tool: BaseTool, args: dict, tool_context: ToolContext
+) -> dict | None:
+    tool_context.state[_START_KEY] = time.perf_counter()
+    span = trace.get_current_span()
+    if span and span.is_recording():
+        span.set_attribute("coding_agent.tool.name", tool.name)
+    return None
+
+async def after_tool_telemetry_callback(
+    tool: BaseTool, args: dict, tool_context: ToolContext, tool_response: dict
+) -> dict | None:
+    start_ts = tool_context.state.get(_START_KEY)
+    tool_context.state[_START_KEY] = None  # NEVER call tool_context.state.pop(...) — raises AttributeError!
+    duration_ms = round((time.perf_counter() - start_ts) * 1000, 2) if isinstance(start_ts, (int, float)) else 0.0
+    exit_code = tool_response.get("exit_code", 0) if isinstance(tool_response, dict) else 0
+    severity = "INFO" if exit_code == 0 else "WARNING"
+    span = trace.get_current_span()
+    if span and span.is_recording():
+        span.set_attribute("coding_agent.tool.duration_ms", duration_ms)
+        span.set_attribute("coding_agent.tool.exit_code", int(exit_code))
+    # Emit redacted structured log to parent ReasoningEngine logger with `severity` ("INFO" | "WARNING")
+    return None
 ```
 
 ### Querying Logs (Logs Explorer, Python & Log Analytics SQL)
@@ -235,9 +271,10 @@ gcurl "https://monitoring.googleapis.com/v3/projects/${PROJECT_ID}/timeSeries?fi
 
 ## 5. Verification & Troubleshooting
 
-- **Verify Telemetry:** Send 3+ `:streamQuery` calls -> check **Deployments -> `<agent>` -> Traces** for span DAG + prompt/response events, check **Logs Explorer** for `resource.labels.reasoning_engine_id="RESOURCE_ID"`, and run the `gcurl` `timeSeries` query above.
+- **Verify Telemetry:** Inspect `spec.deploymentSpec.env` on the deployed `ReasoningEngine` resource (don't rely solely on local shell `os.environ`!), send 3+ `:streamQuery` calls -> check **Deployments -> `<agent>` -> Traces** for span DAG + prompt/response events, check **Logs Explorer** for `resource.labels.reasoning_engine_id="RESOURCE_ID"`, and run the `gcurl` `timeSeries` query above.
 - **Common errors:**
   - Prompts/responses missing in Trace UI despite `GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY="true"` -> verify `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` is `"EVENT_ONLY"` (NOT `"true"`).
+  - `AttributeError: 'State' object has no attribute 'pop'` in `after_tool_callback` -> ADK 2.0 `ToolContext.state` does not implement `.pop()`; read via `state.get(key)` and clear via `state[key] = None`.
   - `user.id` missing after May 22, 2026 -> upgrade to `google-adk>=2.1`, redeploy, and re-enable message content logging.
   - Sandbox or Memory Bank logs missing in Logs Explorer -> Cloud Logging does not support child resources; emit structured logs from the parent runtime callback.
   - `INVALID_ARGUMENT` creating custom metric with `ReasoningEngine` resource -> switch `monitoredResourceTypes` to `["generic_node"]` and populate `node_id` with `RESOURCE_ID`.

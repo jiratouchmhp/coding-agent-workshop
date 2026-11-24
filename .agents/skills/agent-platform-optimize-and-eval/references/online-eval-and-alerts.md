@@ -28,6 +28,7 @@ Online Monitors will produce empty dashboards unless your deployed Agent Runtime
   # OTEL_INSTRUMENTATION_GENAI_COMPLETION_HOOK='upload'
   # OTEL_INSTRUMENTATION_GENAI_UPLOAD_BASE_PATH='gs://STORAGE_BUCKET_NAME/PATH'
   ```
+- **Verification Note:** When verifying telemetry on a deployed runtime, inspect `spec.deploymentSpec.env` on the deployed `ReasoningEngine` resource (via `gcloud ai reasoning-engines describe` or `client.runtimes.get()`) — checking only local shell `os.environ` will not catch missing env vars in the remote container!
 
 ### Exported Cloud Monitoring Metric Descriptors (Verified `metrics_gcp_a_b`)
 
@@ -88,10 +89,13 @@ Agent Platform supports a **three-level diagnostic model**:
 2. **Evaluations Report & Failure Clusters (Console):** `Evaluation -> Evaluations` tab -> click a completed run name -> inspect aggregate scores, expandable per-case rubric verdicts/rationales, and **Failure Clusters** (**Automatic Loss Analysis**).
 3. **Trace Drill-Down (Console):** Click any failing row in an evaluation report (or open `Deployments -> Agent -> Traces` -> select row -> **Evaluation** tab) to jump directly to the failing turn, model input, tool calls, and judge rationale.
 
-### Python SDK Visualization & Failure Clustering (`vertexai.evals`)
+### Python SDK Visualization & Failure Clustering (`agentplatform` / `vertexai.evals`)
 
 ```python
-from vertexai import Client, types
+try:
+    from agentplatform import Client, types
+except ImportError:
+    from vertexai import Client, types
 
 # CRITICAL: generate_loss_clusters is ONLY available in the `global` region!
 client = Client(project="YOUR_PROJECT_ID", location="global")

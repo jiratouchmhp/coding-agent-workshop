@@ -115,7 +115,8 @@ Before authoring IAM, Agent Gateway, or Semantic Governance rules, verify which 
    > **Empirically Verified `gcloud 588.0.0 alpha` Standalone Skills Quirks:**
    > 1. **Use `gcloud alpha agent-registry skills` with `--location=global`:** GA `gcloud agent-registry skills` does not exist yet (`Invalid choice`), and `--location=asia-southeast3` currently times out for `skills list`/`skills create` (keep Bangkok `asia-southeast3` for A2A/MCP discovery and use `AGENT_REGISTRY_SKILLS_LOCATION=global` for standalone skills).
    > 2. **2-Step Create (Never Pass `--payload` to `skills create`):** In `gcloud 588.0.0 alpha`, `skills create --payload=...` drops `--payload` from the request body (`400 source is required`), and 2-char revision IDs (`v1`/`v2`) fail format validation. Create the bare skill shell first, then upload `rev-1` via `revisions create --payload=...`.
-   > 3. **Delete Revisions Before Deleting the Skill:** `skills delete` has no `--force` flag and returns `FAILED_PRECONDITION` (`cannot_delete_skill_with_revisions`) until every child revision is deleted via `revisions delete`.
+   > 3. **Activate with `--target-state=active` Before Runtime Download:** Creating a skill without `--target-state` defaults to `STATE_DRAFT` (and `--target-state=disabled` starts disabled). While `search_skills` finds `DRAFT` skills, ADK **`GCPSkillRegistry.get_skill()` (`?alt=media`) returns HTTP 400 `FAILED_PRECONDITION: skill container must be in ACTIVE or DEPRECATED state to download content`** until Step 3 promotes `--default-revision` AND sets `--target-state=active`!
+   > 4. **Clear `--default-revision` & Delete Revisions Before Deleting the Skill:** On teardown, first clear any active default revision (`skills update ... --clear-default-revision --target-state=disabled`), then delete every child revision via `revisions delete` **before** `skills delete` (`skills delete` has no `--force` flag and fails `cannot_delete_skill_with_revisions` otherwise).
 
    ```bash
    gcloud services enable agentregistry.googleapis.com --project="${GOOGLE_CLOUD_PROJECT}"
@@ -176,7 +177,7 @@ Before authoring IAM, Agent Gateway, or Semantic Governance rules, verify which 
      --project="${GOOGLE_CLOUD_PROJECT}" \
      --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
      --default-revision="projects/${GOOGLE_CLOUD_PROJECT}/locations/${AGENT_REGISTRY_SKILLS_LOCATION}/skills/private-secure-code-review/revisions/rev-1" \
-     --target-state=ACTIVE
+     --target-state=active
 
    gcloud alpha agent-registry skills search \
      --project="${GOOGLE_CLOUD_PROJECT}" \
@@ -184,7 +185,11 @@ Before authoring IAM, Agent Gateway, or Semantic Governance rules, verify which 
      --query="find SQL injection and unsafe subprocess vulnerabilities" \
      --search-type=semantic
 
-   # Clean teardown order (always delete child revisions BEFORE deleting the parent skill!):
+   # Clean teardown order: clear --default-revision FIRST, then delete child revisions BEFORE the parent skill!
+   # gcloud alpha agent-registry skills update private-secure-code-review \
+   #   --clear-default-revision --target-state=disabled \
+   #   --project="${GOOGLE_CLOUD_PROJECT}" \
+   #   --location="${AGENT_REGISTRY_SKILLS_LOCATION}"
    # gcloud alpha agent-registry skills revisions delete rev-1 \
    #   --skill=private-secure-code-review \
    #   --project="${GOOGLE_CLOUD_PROJECT}" \
@@ -351,7 +356,7 @@ When deployed with `identity_type = "AGENT_IDENTITY"`, your Coding Agent receive
 | **3. Delegated Identity** | Scoped 3LO user token brokered by Agent Identity Auth Manager | `AGENT_TO_ANYWHERE` egress: **least-privilege intersection** of agent egress policy AND user permissions/consented scopes | **Dual attribution** (both agent SPIFFE ID and human user) |
 
 > [!CAUTION]
-> **Enterprise `agy` Headless CLI Auth & ToS Boundary:** Never proxy, copy, or relay a developer's personal `agy` OAuth session into a shared multi-tenant Agent Runtime or BYOC Sandbox. Inside Agent Runtime, run `/usr/local/bin/agy` exclusively via **`AGY_ADC_AUTH=true`** on the runtime's dedicated least-privilege Service Account (`coding-agent-runtime-sa`), OR use native ADK 2.0 `LlmAgent` / `ManagedAgent` / `google-antigravity` SDK with SPIFFE `AGENT_IDENTITY` + Auth Manager 3LO delegation. Inside gVisor Sandboxes (zero IAM roles, metadata server blocked), pass only scoped ephemeral credentials/API keys per `/exec` call (when PSC-I + Cloud NGFW/SWP egress is enabled) or keep sandboxes air-gapped for `pytest`/`ruff`/`bandit`!
+> **Enterprise `agy` Headless CLI Auth & ToS Boundary:** Never proxy, copy, or relay a developer's personal `agy` OAuth session into a shared multi-tenant Agent Runtime or BYOC Sandbox. Inside Agent Runtime, run `/usr/local/bin/agy` exclusively via **`AGY_ADC_AUTH=true`** + non-numeric **`AGY_PROJECT_ID = var.project_id`** (overriding Agent Runtime's auto-injected numeric project number, which `agy 1.5.15` rejects with exit 3) on the runtime's dedicated least-privilege Service Account (`coding-agent-runtime-sa`), OR use native ADK 2.0 `LlmAgent` / `ManagedAgent` / `google-antigravity` SDK with SPIFFE `AGENT_IDENTITY` + Auth Manager 3LO delegation. Inside gVisor Sandboxes (zero IAM roles, metadata server blocked), pass only scoped ephemeral credentials/API keys per `/exec` call (when PSC-I + Cloud NGFW/SWP egress is enabled) or keep sandboxes air-gapped for `pytest`/`ruff`/`bandit`!
 
 ### Step C2: Upgrade Lab 5's Custom SA Terraform (`starter/terraform/main.tf`) to `AGENT_IDENTITY` + Agent Gateway
 
@@ -384,9 +389,10 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
 
     deployment_spec {
       # ... keep existing OTel, GOOGLE_GENAI_USE_ENTERPRISE, MODEL_NAME, REASONING_MODEL_NAME,
-      #     MODEL_LOCATION, THINKING_LEVEL, AGY_EXECUTION_MODE, AGY_ADC_AUTH, SANDBOX_*,
-      #     ENABLE_MEMORY_BANK, ENABLE_SKILL_REGISTRY, SKILL_REGISTRY_LOCATION,
-      #     and secret_env blocks from Lab 5's starter/terraform/main.tf ...
+      #     MODEL_LOCATION, THINKING_LEVEL, AGY_EXECUTION_MODE, AGY_PROJECT_ID, AGY_ADC_AUTH,
+      #     SANDBOX_*, ENABLE_MEMORY_BANK, ENABLE_SKILL_REGISTRY, SKILL_REGISTRY_LOCATION,
+      #     AGENT_REGISTRY_LOCATION, AGENT_REGISTRY_SKILLS_LOCATION, and secret_env blocks
+      #     from Lab 5's starter/terraform/main.tf ...
 
       # Optional (recommended for decoupled state — see Step C3): Lab 5's main.tf
       # omits REASONING_ENGINE_NAME and falls back to auto-injected

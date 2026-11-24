@@ -103,7 +103,7 @@ async def _ndjson_stream(output: Any) -> AsyncGenerator[str, None]:
             yield encoded
         return
 
-    if hasattr(output, "__iter__") and not isinstance(output, (str, bytes, dict)):
+    if hasattr(output, "__iter__") and not isinstance(output, str | bytes | dict):
         for chunk in output:
             encoded = _encode_ndjson_chunk(chunk)
             if encoded is None:

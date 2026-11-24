@@ -3,7 +3,7 @@
 # Enterprise Coding Agent Workshop — Pre-Flight Environment & GCP Validator
 # =============================================================================
 # Usage:
-#   ./scripts/preflight_check.sh [--offline] [--env-file PATH]
+#   ./scripts/preflight_check.sh [--offline|--skip-gcp] [--env-file PATH]
 #
 # Validates local developer toolchain (including advisory Antigravity `agy` CLI),
 # Zero-Docker readiness, Gemini 4 model/location/thinking_level compatibility,
@@ -31,15 +31,15 @@ Usage: ./scripts/preflight_check.sh [OPTIONS]
 Run pre-flight checks for the Enterprise Coding Agent Workshop.
 
 Options:
-  --offline          Skip live gcloud network, auth, ADC, and API checks (for local CI/dry-runs)
-  --env-file <path>  Path to .env file to validate (default: ./.env)
-  -h, --help         Show this help message
+  --offline, --skip-gcp  Skip live gcloud network, auth, ADC, and API checks (for local CI/dry-runs)
+  --env-file <path>      Path to .env file to validate (default: ./.env)
+  -h, --help             Show this help message
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --offline)
+    --offline|--skip-gcp)
       OFFLINE=1
       shift
       ;;
@@ -133,7 +133,7 @@ if command -v uv >/dev/null 2>&1; then
 else
   warn "uv not found on PATH."
   info "Recommended zero-sudo standalone install (avoids Debian/Ubuntu missing python3-venv pitfall):"
-  info "  curl -LsSf https://astral.sh/uv/install.sh | sh"
+  info "  curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv_install.sh && sh /tmp/uv_install.sh"
   info "Alternative without uv: run 'make install-pip' (requires system python3-venv on Debian/Ubuntu)."
 fi
 
@@ -172,9 +172,9 @@ else
 fi
 
 if command -v agents-cli >/dev/null 2>&1; then
-  pass "agents-cli detected ($(command -v agents-cli)) — optional for Labs 1-6"
+  pass "agents-cli detected ($(command -v agents-cli)) — optional for Labs 1-8"
 else
-  info "agents-cli not found on PATH (optional for Labs 1-6; install anytime with: uvx google-agents-cli setup)"
+  info "agents-cli not found on PATH (optional for Labs 1-8; install anytime with: uvx google-agents-cli setup)"
 fi
 
 if command -v agy >/dev/null 2>&1; then
@@ -182,7 +182,7 @@ if command -v agy >/dev/null 2>&1; then
   pass "Antigravity CLI (agy) detected (${AGY_VER}) — ready for local headless harness mode"
 else
   info "Antigravity CLI (agy) not found on PATH (optional locally — 'make test-agy-harness' --dry-run and Bangkok Cloud Build BYOC images work without installing agy locally and without Docker)."
-  info "  To install agy locally for headless mode: curl -fsSL https://antigravity.google/cli/install.sh | bash"
+  info "  To install agy locally for headless mode: curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy_install.sh && bash /tmp/agy_install.sh"
 fi
 
 # -----------------------------------------------------------------------------
@@ -205,9 +205,16 @@ else
     ENV_LOADED_FROM="${REPO_ROOT}/.env.example"
     # Read .env.example defaults without overwriting variables already exported in shell
     while IFS='=' read -r raw_key raw_val; do
-      key="${raw_key%%[[:space:]]*}"
+      # Trim leading whitespace before checking for optional `export ` prefix
+      key="${raw_key#"${raw_key%%[![:space:]]*}"}"
       [[ -z "${key}" || "${key}" == \#* ]] && continue
-      key="${key#export }"
+      if [[ "${key}" == export[[:space:]]* ]]; then
+        key="${key#export}"
+        key="${key#"${key%%[![:space:]]*}"}"
+      fi
+      # Trim trailing whitespace from key
+      key="${key%"${key##*[![:space:]]}"}"
+      [[ -z "${key}" ]] && continue
       raw_val="${raw_val%%#*}"
       val="$(printf '%s' "${raw_val}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
       val="${val%\"}"
@@ -232,6 +239,7 @@ SKILL_REG_LOC="${SKILL_REGISTRY_LOCATION:-us-central1}"
 EVAL_LOC="${EVAL_LOCATION:-global}"
 MODEL_VAL="${MODEL_NAME:-gemini-4-hydrogen}"
 REASONING_MODEL_VAL="${REASONING_MODEL_NAME:-gemini-4-neon}"
+AGY_MODEL_VAL="${AGY_MODEL:-gemini-4-hydrogen}"
 MODEL_LOC="${MODEL_LOCATION:-global}"
 THINK_LVL="${THINKING_LEVEL:-MEDIUM}"
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-}"
@@ -271,8 +279,8 @@ validate_model_location_pair() {
   local model_loc="$3"
 
   case "${model_id}" in
-    gemini-2.5-flash|gemini-2.5-flash-*)
-      fail "${var_name}=${model_id} uses retired Gemini 2.5 Flash (retired Oct 20, 2026). Upgrade to MODEL_NAME=gemini-4-hydrogen / REASONING_MODEL_NAME=gemini-4-neon with MODEL_LOCATION=global (or gemini-4-argon with MODEL_LOCATION=asia-southeast1)."
+    gemini-2.5-flash|gemini-2.5-flash-*|gemini-2.5-pro|gemini-2.5-pro-*|gemini-2.0-*|gemini-1.5-*)
+      fail "${var_name}=${model_id} uses a retired/legacy Gemini model. Upgrade to MODEL_NAME=gemini-4-hydrogen / REASONING_MODEL_NAME=gemini-4-neon / AGY_MODEL=gemini-4-hydrogen with MODEL_LOCATION=global (or gemini-4-argon with MODEL_LOCATION=asia-southeast1)."
       ;;
     gemini-4-hydrogen|gemini-4-neon)
       if [[ "${model_loc}" == "global" ]]; then
@@ -297,7 +305,7 @@ validate_model_location_pair() {
       fi
       ;;
     "")
-      fail "${var_name} is unset. Set MODEL_NAME=gemini-4-hydrogen and REASONING_MODEL_NAME=gemini-4-neon (with MODEL_LOCATION=global)."
+      fail "${var_name} is unset. Set MODEL_NAME=gemini-4-hydrogen, REASONING_MODEL_NAME=gemini-4-neon, and AGY_MODEL=gemini-4-hydrogen (with MODEL_LOCATION=global)."
       ;;
     *)
       info "${var_name}=${model_id} paired with MODEL_LOCATION=${model_loc} (workshop defaults: gemini-4-hydrogen / gemini-4-neon on global)"
@@ -307,8 +315,9 @@ validate_model_location_pair() {
 
 validate_model_location_pair "MODEL_NAME" "${MODEL_VAL}" "${MODEL_LOC}"
 validate_model_location_pair "REASONING_MODEL_NAME" "${REASONING_MODEL_VAL}" "${MODEL_LOC}"
+validate_model_location_pair "AGY_MODEL" "${AGY_MODEL_VAL}" "${MODEL_LOC}"
 
-if [[ "${MODEL_VAL}" == gemini-4-* || "${REASONING_MODEL_VAL}" == gemini-4-* ]]; then
+if [[ "${MODEL_VAL}" == gemini-4-* || "${REASONING_MODEL_VAL}" == gemini-4-* || "${AGY_MODEL_VAL}" == gemini-4-* ]]; then
   THINK_LVL_UPPER="$(printf '%s' "${THINK_LVL}" | tr '[:lower:]' '[:upper:]')"
   case "${THINK_LVL_UPPER}" in
     LOW|MEDIUM|HIGH|XHIGH)
@@ -384,6 +393,10 @@ check_prod_project_warning() {
   fi
 }
 
+if [[ -f "${ENV_FILE}" && "${PROJECT_ID}" == "your-gcp-project-id" ]]; then
+  warn "GOOGLE_CLOUD_PROJECT in ${ENV_FILE} is still the template placeholder 'your-gcp-project-id'. Replace it with your sandbox GCP project ID before running Labs 2-8."
+fi
+
 check_prod_project_warning "${PROJECT_ID}"
 
 # -----------------------------------------------------------------------------
@@ -421,6 +434,11 @@ else
     fi
 
     if [[ -z "${PROJECT_ID}" || "${PROJECT_ID}" == "your-gcp-project-id" ]]; then
+      if [[ "${PROJECT_ID}" == "your-gcp-project-id" && ! -f "${ENV_FILE}" ]]; then
+        warn "GOOGLE_CLOUD_PROJECT is still template placeholder 'your-gcp-project-id'; falling back to 'gcloud config get-value project'."
+      elif [[ "${PROJECT_ID}" == "your-gcp-project-id" ]]; then
+        info "Falling back to 'gcloud config get-value project' while GOOGLE_CLOUD_PROJECT is placeholder 'your-gcp-project-id'."
+      fi
       PROJECT_ID="$(gcloud config get-value project 2>/dev/null | tr -d '[:space:]' || true)"
     fi
 

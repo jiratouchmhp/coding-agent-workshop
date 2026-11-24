@@ -184,13 +184,15 @@ Before running `terraform plan` or `terraform apply` with Path 1 (`container_spe
 > - **Lab 5 Trusted Agent Runtime (`starter/Dockerfile`, `starter/main.py`, `starter/requirements.txt`, `starter/coding_agent/`, `starter/skills_to_register/` -> `coding-agent:v1`, `AGENT_IMAGE_URI`):** Packages your complete Labs 1–4 Coding Agent (ADK 2.0 + Managed Sandbox adapters + Sessions/Memory/OTel/Feedback + Skills & Agent Registry, including bundled local skill fallback) behind the trusted FastAPI/ADK HTTP server implementing `GET /`, `POST /api/reasoning_engine`, and `POST /api/stream_reasoning_engine` on `0.0.0.0:8080`. Pulled by **`gcp-sa-aiplatform-re`**.
 
 1. Inspect the three runtime server files at the root of `starter/`:
-   - [`starter/Dockerfile`](../starter/Dockerfile) — Non-root (`USER appuser`) Python 3.11+ container packaging `main.py`, `requirements.txt`, the complete `coding_agent/` package, `skills_to_register/` (for Lab 4 local skill fallback parity), **and opt-in `/usr/local/bin/agy` (`ARG INSTALL_AGY_CLI=true`)** installed via the official static Go script — built remotely in Bangkok Cloud Build (`make push-agent`) or Agent Runtime `source_code_spec` (`make pack-agent-source`) with **zero local Docker**, starting Uvicorn on `0.0.0.0:8080`.
+   - [`starter/Dockerfile`](../starter/Dockerfile) — Non-root (`USER appuser`) Python 3.11+ container packaging `main.py`, `requirements.txt`, the complete `coding_agent/` package, `skills_to_register/` (for Lab 4 local skill fallback parity), **and opt-in `/usr/local/bin/agy` (`ARG INSTALL_AGY_CLI=true`)** installed via the official static Go script — built remotely in Bangkok Cloud Build (`make push-agent`) or Agent Runtime `source_code_spec` (`make pack-agent-source`) with **zero local Docker**, starting Uvicorn on `0.0.0.0:8080`. *(Benign build log note: `agy_install.sh --dir /usr/local/bin` installs the working binary at `/usr/local/bin/agy` with mode `0755` for `appuser` even though its internal self-install step may also log `/root/.local/bin/agy`.)*
    - [`starter/main.py`](../starter/main.py) — FastAPI/ADK HTTP adapter implementing `GET /` (`200 OK`), `POST /api/reasoning_engine` (JSON), and `POST /api/stream_reasoning_engine` (NDJSON) — contains **3 `# TODO(lab-5)` blocks** (`get_runtime_app()`, `query_endpoint()`, `stream_query_endpoint()`).
    - [`starter/requirements.txt`](../starter/requirements.txt) — Pinned runtime dependencies (including **`google-genai>=2.34.0`** for Gemini 4 1M-token automatic long decodes) shared by both Option 1 (`container_spec`) and Option 2 (`source_code_spec`).
 
 > [!CAUTION]
-> **Agent Runtime `agy` Authentication & Enterprise ToS Boundary (`AGY_ADC_AUTH=true`):**
+> **Agent Runtime `agy` Authentication, Numeric Project ID Trap & Enterprise ToS Boundary (`AGY_ADC_AUTH=true` + `AGY_PROJECT_ID`):**
 > - Inside the deployed Agent Runtime container, `/usr/local/bin/agy` runs as non-root `appuser` authenticated **exclusively via `AGY_ADC_AUTH=true`** backed by the runtime's dedicated least-privilege Custom Service Account (`coding-agent-runtime-sa`), with `AGY_CLI_DISABLE_AUTO_UPDATE=true` and `GOOGLE_CLOUD_LOCATION=global` scoped per `agy` subprocess invocation (preserving Agent Runtime's own auto-injected `GOOGLE_CLOUD_LOCATION=asia-southeast1` for Sessions, Memory Bank & Sandboxes!).
+> - **CRITICAL Live Runtime Gotcha (`AGY_PROJECT_ID`):** Agent Runtime auto-injects your **numeric project number** into `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_QUOTA_PROJECT` (and its GCE metadata server returns an internal Google tenant project `...-tp`), whereas `agy 1.5.15` **rejects numeric project IDs with exit code `3` (`invalid project ID: "<PROJECT_NUMBER>"`)**! Because `GOOGLE_CLOUD_PROJECT` is a reserved env var in `deployment_spec.env`, Terraform injects the non-reserved **`AGY_PROJECT_ID = var.project_id`** (your string project ID), and `build_local_agy_env()` passes that non-numeric ID as `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_QUOTA_PROJECT` strictly inside `agy` subprocesses!
+> - **Air-Gapped BYOC Split:** When `SANDBOX_MODE=byoc` runs air-gapped (`internet_access=false`), `AGY_EXECUTION_MODE=local` (or `auto` with `AGY_ADC_AUTH=true` and no BYOC API key override) runs `agy` in the trusted Agent Runtime under Custom SA ADC while routing untrusted `pytest`/`ruff`/`bandit` into the air-gapped BYOC gVisor sandbox.
 > - **NEVER** proxy, copy, or relay a developer's personal `agy` OAuth credentials inside a shared or multi-tenant Agent Runtime! Use Custom SA ADC (`AGY_ADC_AUTH=true`) or native ADK 2.0 `LlmAgent` / `ManagedAgent` / `google-antigravity` SDK.
 
 2. Complete the 3 `# TODO(lab-5)` blocks in [`starter/main.py`](../starter/main.py) **before** building the image (compare with [`solution/main.py`](../solution/main.py) if you get stuck):
@@ -206,9 +208,11 @@ Before running `terraform plan` or `terraform apply` with Path 1 (`container_spe
        except ImportError:
            from vertexai.agent_engines import AdkApp
 
-       # Defensive guard: `AdkApp.set_up()` checks `"GOOGLE_CLOUD_AGENT_ENGINE_ID" in os.environ`
-       # (truthy even on `""`), which would raise `ValueError: agent_engine_id is required for
-       # VertexAiMemoryBankService.` during local smoke tests when exported as an empty string.
+       # CRITICAL ORDERING GUARD: Keep this pop() AFTER importing `coding_agent.agent`
+       # (which may load `.env`) and BEFORE instantiating `AdkApp` / calling `set_up()`!
+       # `AdkApp.set_up()` checks `"GOOGLE_CLOUD_AGENT_ENGINE_ID" in os.environ` (truthy
+       # even on `""`), which raises `ValueError: agent_engine_id is required for
+       # VertexAiMemoryBankService.` during local smoke tests when exported as empty/whitespace.
        if not os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID", "").strip():
            os.environ.pop("GOOGLE_CLOUD_AGENT_ENGINE_ID", None)
 
@@ -312,9 +316,9 @@ Before running `terraform plan` or `terraform apply` with Path 1 (`container_spe
 
 Review the files in `starter/terraform/`:
 - [`starter/terraform/versions.tf`](../starter/terraform/versions.tf) — Terraform and Google provider constraints (`hashicorp/google >= 6.0.0` and `hashicorp/google-beta >= 6.0.0`, required for `spec.container_spec`; note upstream `use-terraform` docs still print `>= 5.28.0`)
-- [`starter/terraform/variables.tf`](../starter/terraform/variables.tf) — Input variables (`project_id`, `project_number`, `location` defaulting to `asia-southeast1` Singapore fallback, `repository_name`, `agent_image_uri` & `sandbox_image_uri` in Bangkok `asia-southeast3-docker.pkg.dev`, `sandbox_template_name`, Frontier Gemini 4 & `agy` variables **`model_name`** [`"gemini-4-hydrogen"`], **`reasoning_model_name`** [`"gemini-4-neon"`], **`model_location`** [`"global"`], **`thinking_level`** [`"MEDIUM"`], **`agy_execution_mode`** [`"auto"`], `api_key_value`, plus optional Lab 3/4 feature variables `enable_memory_bank`, `enable_skill_registry`, `skill_registry_location` defaulting to `us-central1`, `agent_registry_location` defaulting to `asia-southeast3`, and `agent_registry_skills_location` defaulting to `global`)
+- [`starter/terraform/variables.tf`](../starter/terraform/variables.tf) — Input variables (`project_id`, `project_number`, `location` defaulting to `asia-southeast1` Singapore fallback, `agent_image_uri` in Bangkok `asia-southeast3-docker.pkg.dev`, `sandbox_template_name`, Frontier Gemini 4 & `agy` variables **`model_name`** [`"gemini-4-hydrogen"`], **`reasoning_model_name`** [`"gemini-4-neon"`], **`model_location`** [`"global"`], **`thinking_level`** [`"MEDIUM"`], **`agy_execution_mode`** [`"auto"`], `api_key_value`, plus optional Lab 3/4 feature variables `enable_memory_bank`, `enable_skill_registry`, `skill_registry_location` defaulting to `us-central1`, `agent_registry_location` defaulting to `asia-southeast3`, and `agent_registry_skills_location` defaulting to `global`). *(Note: `repository_name` and `sandbox_image_uri` are also declared in `variables.tf` / `terraform.tfvars.example` as reference inputs alongside `agent_image_uri` — they do not need to be wired directly into `google_vertex_ai_reasoning_engine` because Lab 2 already binds `sandbox_image_uri` into `sandbox_template_name`.)*
 - [`starter/terraform/main.tf`](../starter/terraform/main.tf) — Service accounts, Secret Manager, dual service agent IAM bindings, and `google_vertex_ai_reasoning_engine` (contains `# TODO(lab-5)` markers)
-- [`starter/terraform/outputs.tf`](../starter/terraform/outputs.tf) — Exports `reasoning_engine_id`, `reasoning_engine_resource_name`, and `agent_runtime_service_account`
+- [`starter/terraform/outputs.tf`](../starter/terraform/outputs.tf) — Exports `reasoning_engine_id`, `reasoning_engine_resource_name`, `agent_runtime_service_account`, and `api_key_secret_id`
 - [`starter/terraform/terraform.tfvars.example`](../starter/terraform/terraform.tfvars.example) — Sample variables template
 
 ### Step B2: Understand the Service Agent IAM Matrix & `depends_on` Race Condition
@@ -445,7 +449,7 @@ locals {
 }
 
 resource "google_vertex_ai_reasoning_engine" "coding_agent" {
-  display_name = "coding_agent_byoc_tf"
+  display_name = var.display_name
   description  = "Enterprise ADK Coding Agent deployed declaratively with Terraform BYOC container_spec"
   project      = var.project_id
   region       = var.location
@@ -500,6 +504,10 @@ resource "google_vertex_ai_reasoning_engine" "coding_agent" {
       env {
         name  = "AGY_EXECUTION_MODE"
         value = var.agy_execution_mode # auto | local | sandbox
+      }
+      env {
+        name  = "AGY_PROJECT_ID"
+        value = var.project_id # Non-numeric string project ID for `agy` subprocesses (overrides Agent Runtime's numeric GOOGLE_CLOUD_PROJECT!)
       }
       env {
         name  = "AGY_ADC_AUTH"
@@ -644,6 +652,11 @@ output "agent_runtime_service_account" {
   value       = google_service_account.agent_runtime_sa.email
   description = "Dedicated custom runtime service account email"
 }
+
+output "api_key_secret_id" {
+  value       = google_secret_manager_secret.coding_agent_api_key.secret_id
+  description = "Secret Manager secret ID bound to CODING_AGENT_API_KEY"
+}
 ```
 
 ### Step B4: Plan, Apply, and Smoke-Test Your Deployed Agent
@@ -671,8 +684,8 @@ output "agent_runtime_service_account" {
    thinking_level          = "MEDIUM"             # Strictly LOW | MEDIUM | HIGH | XHIGH
    agy_execution_mode      = "auto"               # auto | local | sandbox (uses AGY_ADC_AUTH=true on Runtime Custom SA)
    api_key_value           = "replace-with-workshop-placeholder-value"
-   enable_memory_bank      = false
-   enable_skill_registry   = false
+   enable_memory_bank      = false              # Set true to enable live Lab 3 Memory Bank recall inside the runtime
+   enable_skill_registry   = false              # Set true to enable live Lab 4 GCPSkillRegistry (`global`, requires Step B3 `--target-state=active` skill)
    skill_registry_location        = "us-central1"      # 3-region Vertex AI Skill Registry Preview
    agent_registry_location        = "asia-southeast3"  # Bangkok default for A2A/MCP discovery
    agent_registry_skills_location = "global"           # Standalone Agent Registry skills (`gcloud alpha`)
@@ -705,21 +718,55 @@ output "agent_runtime_service_account" {
    > 1. **Unified Runtime Binding *(Recommended for Lab 6)*:** Update `REASONING_ENGINE_NAME` (and `REASONING_ENGINE_ID`) in `.env` to Terraform's output above. Sessions, Memory Bank, Feedback entries, Cloud Trace spans, and Lab 6 Online Evaluation Monitors all correlate together on your deployed runtime's single Cloud Console page.
    > 2. **Decoupled Standalone State Instance *(Enterprise Pattern)*:** Keep Lab 2/3's standalone instance ID dedicated to Memory Bank and Managed Sessions (wired via `memory_service_builder` / explicit engine ID) while targeting Terraform's deployed `REASONING_ENGINE_NAME` for live inference — ensuring long-term user memories survive blue/green redeploys or [Lab 7 (Optional)](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md)'s immutable SPIFFE `AGENT_IDENTITY` upgrade!
 
-4. Run a streaming verification query over SSE:
+4. **Run the Verified Post-Deploy Smoke-Test Suite (Unary `:query`, Streaming `:streamQuery?alt=sse`, BYOC Sandbox, Skill Registry & Memory Bank):**
 
    ```bash
-   curl -X POST \
+   # (a) Unary :query — create a Managed Session and capture SESSION_ID (verifies FastAPI /api/reasoning_engine + AdkApp)
+   SESSION_JSON=$(curl -sS -X POST \
+     -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+     -H "Content-Type: application/json; charset=utf-8" \
+     -d '{
+       "class_method": "create_session",
+       "input": {"user_id": "terraform_test_user"}
+     }' \
+     "https://${GOOGLE_CLOUD_LOCATION}-aiplatform.googleapis.com/v1/projects/${GOOGLE_CLOUD_PROJECT}/locations/${GOOGLE_CLOUD_LOCATION}/reasoningEngines/${REASONING_ENGINE_ID}:query")
+   echo "${SESSION_JSON}"
+   export SESSION_ID="$(echo "${SESSION_JSON}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["output"]["id"])')"
+
+   # (b) Streaming :streamQuery?alt=sse — verifies Gemini 4 (global) + BYOC/Shell Sandbox (asia-southeast1)
+   #     (and live GCPSkillRegistry list_skills/search_skills/load_skill if enable_skill_registry=true!)
+   curl -sS -X POST \
      -H "Authorization: Bearer $(gcloud auth print-access-token)" \
      -H "Content-Type: application/json; charset=utf-8" \
      -d '{
        "class_method": "async_stream_query",
        "input": {
          "user_id": "terraform_test_user",
-         "message": "Summarize how you safely execute unit tests in a sandbox."
+         "session_id": "'"${SESSION_ID}"'",
+         "message": "Create calc.py with add(a, b) and test_calc.py, run pytest -q and ruff check, and summarize the verified test output."
        }
      }' \
      "https://${GOOGLE_CLOUD_LOCATION}-aiplatform.googleapis.com/v1/projects/${GOOGLE_CLOUD_PROJECT}/locations/${GOOGLE_CLOUD_LOCATION}/reasoningEngines/${REASONING_ENGINE_ID}:streamQuery?alt=sse"
    ```
+
+   *(Optional — if `enable_memory_bank = true`)* verify live Memory Bank consolidation & cross-session search via `:query`:
+   ```bash
+   # CRITICAL AdkApp signature note: `async_search_memory` accepts `(user_id, query)` ONLY
+   # (passing `app_name` raises TypeError!).
+   curl -sS -X POST \
+     -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+     -H "Content-Type: application/json; charset=utf-8" \
+     -d '{
+       "class_method": "async_search_memory",
+       "input": {
+         "user_id": "terraform_test_user",
+         "query": "coding conventions and pytest workflow"
+       }
+     }' \
+     "https://${GOOGLE_CLOUD_LOCATION}-aiplatform.googleapis.com/v1/projects/${GOOGLE_CLOUD_PROJECT}/locations/${GOOGLE_CLOUD_LOCATION}/reasoningEngines/${REASONING_ENGINE_ID}:query"
+   ```
+
+   *(Optional — when deploying `AGENT_ARCHITECTURE=agy_harness` with `AGY_EXECUTION_MODE=local` or `auto`)*: your container's baked `/usr/local/bin/agy` runs directly under `coding-agent-runtime-sa` ADC (`AGY_ADC_AUTH=true`) with `GOOGLE_CLOUD_PROJECT=${AGY_PROJECT_ID}`, `GOOGLE_CLOUD_QUOTA_PROJECT=${AGY_PROJECT_ID}`, and `GOOGLE_CLOUD_LOCATION=global` — verified live for both `agy models` and `agy -p ... --output-format stream-json --model gemini-4-hydrogen --effort medium [--sandbox]`!
 
 ---
 
@@ -878,8 +925,8 @@ Run the automated Lab 5 verification script to check HCL formatting, Terraform v
 
 Expected pass criteria:
 1. `make test-agent-local` passes locally (zero Docker!) and `terraform -chdir=starter/terraform fmt -check` + `terraform validate` pass cleanly.
-2. Both `starter/main.py` and `starter/terraform/main.tf` contain zero remaining `# TODO(lab-5)` markers; `starter/Dockerfile` bakes opt-in `/usr/local/bin/agy` (`ARG INSTALL_AGY_CLI=true`) as non-root `appuser`; `starter/terraform/main.tf` uses `region = var.location` (`asia-southeast1` Singapore), wires Frontier Gemini 4 & `agy` env vars (`MODEL_NAME`, `REASONING_MODEL_NAME`, `MODEL_LOCATION`, `THINKING_LEVEL`, `AGY_EXECUTION_MODE`, `AGY_ADC_AUTH=true`), grants `roles/aiplatform.memoryUser`, conditional `roles/agentregistry.viewer` (when `enable_skill_registry = true`), `roles/telemetry.tracesWriter`, and self `roles/iam.serviceAccountTokenCreator` on `coding-agent-runtime-sa`, declares `roles/artifactregistry.reader` for `gcp-sa-aiplatform-re` and `gcp-sa-vertex-sandbox`, wires optional Lab 3/4 variables (`enable_memory_bank`, `enable_skill_registry`, `skill_registry_location`, and `agent_registry_location`), and lists IAM bindings inside `depends_on`.
-3. *(If applied)* `REASONING_ENGINE_NAME` in Singapore (`asia-southeast1`) responds to `:streamQuery?alt=sse` with streamed output events.
+2. Both `starter/main.py` and `starter/terraform/main.tf` contain zero remaining `# TODO(lab-5)` markers; `starter/Dockerfile` bakes opt-in `/usr/local/bin/agy` (`ARG INSTALL_AGY_CLI=true`) as non-root `appuser`; `starter/terraform/main.tf` uses `region = var.location` (`asia-southeast1` Singapore) and `display_name = var.display_name`, wires Frontier Gemini 4 & `agy` env vars (`MODEL_NAME`, `REASONING_MODEL_NAME`, `MODEL_LOCATION`, `THINKING_LEVEL`, `AGY_EXECUTION_MODE`, `AGY_PROJECT_ID`, `AGY_ADC_AUTH=true`), grants `roles/aiplatform.memoryUser`, conditional `roles/agentregistry.viewer` (when `enable_skill_registry = true`), `roles/telemetry.tracesWriter`, and self `roles/iam.serviceAccountTokenCreator` on `coding-agent-runtime-sa`, declares `roles/artifactregistry.reader` for `gcp-sa-aiplatform-re` and `gcp-sa-vertex-sandbox`, wires optional Lab 3/4 variables (`enable_memory_bank`, `enable_skill_registry`, `skill_registry_location`, `agent_registry_location`, and `agent_registry_skills_location`), and lists IAM bindings inside `depends_on`.
+3. *(If applied)* `REASONING_ENGINE_NAME` in Singapore (`asia-southeast1`) responds HTTP 200 to `:query` (`create_session` / `list_sessions`) and `:streamQuery?alt=sse` (`async_stream_query`) with streamed output events.
 
 Need a clean reference? Compare your files against [`solution/main.py`](../solution/main.py) and [`solution/terraform/`](../solution/terraform/).
 

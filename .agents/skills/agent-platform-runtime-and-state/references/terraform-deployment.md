@@ -35,7 +35,7 @@ Declarative Infrastructure-as-Code (IaC) reference for provisioning **Gemini Ent
 |---|---|---|---|
 | **1. Agent Runtime Service Agent** | `service-${var.project_number}@gcp-sa-aiplatform-re.iam.gserviceaccount.com` | **Always for BYOC `container_spec`** (pulls same-project AR image). Also required for CMEK (`roles/cloudkms.cryptoKeyEncrypterDecrypter`), async query jobs (`roles/storage.objectCreator`/`roles/storage.objectViewer`), and `agents-cli` Secret Manager access. | `roles/artifactregistry.reader` (project or AR repository) |
 | **2. Agent Platform Service Agent** | `service-${var.project_number}@gcp-sa-aiplatform.iam.gserviceaccount.com` | **Required when:** (a) referencing `secret_env` with `identity_type = "AGENT_IDENTITY"` (deploy-time secret fetch); (b) pulling a BYOC image from a **cross-project** AR repo; (c) binding a **cross-project** Agent Gateway (`ar_agw_cross_project_sa`); (d) attaching a cross-project custom SA (`roles/iam.serviceAccountTokenCreator`); (e) Shared VPC PSC-I (`roles/compute.networkUser` on host project + `roles/compute.networkAdmin` on network attachment project). | `roles/secretmanager.secretAccessor` / `roles/artifactregistry.reader` / `ar_agw_cross_project_sa` / `roles/compute.networkUser` |
-| **3. Custom Runtime SA** *(if not using `AGENT_IDENTITY`)* | `google_service_account.agent_runtime_sa.email` | When using `service_account = ...` with `secret_env` or telemetry/Vertex/sandbox APIs. | `roles/secretmanager.secretAccessor`, `roles/aiplatform.user`, `roles/logging.logWriter`, `roles/cloudtrace.agent`, `roles/telemetry.tracesWriter`, `roles/monitoring.metricWriter` |
+| **3. Custom Runtime SA** *(if not using `AGENT_IDENTITY`)* | `google_service_account.agent_runtime_sa.email` | When using `service_account = ...` with `secret_env`, Memory Bank, Skill Registry, BYOC sandbox JWT signing (`generate_access_token`), or telemetry/Vertex APIs. | `roles/secretmanager.secretAccessor`, `roles/aiplatform.user`, `roles/aiplatform.memoryUser` *(Memory Bank)*, conditional `roles/agentregistry.viewer` *(when `ENABLE_SKILL_REGISTRY=true`)*, self-bound `roles/iam.serviceAccountTokenCreator` via `google_service_account_iam_member` *(for BYOC `generate_access_token`)*, `roles/logging.logWriter`, `roles/cloudtrace.agent`, `roles/telemetry.tracesWriter`, `roles/monitoring.metricWriter` |
 | **4. Agent Sandbox Service Agent** *(if agent spawns BYOC sandboxes)* | `service-${var.project_number}@gcp-sa-vertex-sandbox.iam.gserviceaccount.com` | When the runtime creates BYOC `SandboxEnvironmentTemplate` instances. | `roles/artifactregistry.reader` (on sandbox AR repo) |
 
 ---
@@ -126,6 +126,54 @@ variable "image_tag" {
 variable "api_key_value" {
   type      = string
   sensitive = true
+}
+
+variable "sandbox_template_name" {
+  type        = string
+  default     = ""
+  description = "Optional BYOC SandboxEnvironmentTemplate resource name (omitted from env when empty)"
+}
+
+variable "model_name" {
+  type        = string
+  default     = "gemini-4-hydrogen"
+  description = "Primary Gemini 4 coding model"
+}
+
+variable "reasoning_model_name" {
+  type        = string
+  default     = "gemini-4-neon"
+  description = "Deep reasoning / review Gemini 4 model"
+}
+
+variable "model_location" {
+  type        = string
+  default     = "global"
+  description = "Gemini 4 inference endpoint location (global for Hydrogen/Neon; asia-southeast1 for Argon)"
+}
+
+variable "thinking_level" {
+  type        = string
+  default     = "MEDIUM"
+  description = "Gemini 4 ThinkingConfig level (strictly LOW|MEDIUM|HIGH|XHIGH)"
+}
+
+variable "agy_execution_mode" {
+  type        = string
+  default     = "local"
+  description = "agy CLI execution mode on Agent Runtime (local uses Custom SA ADC; auto|local|sandbox)"
+}
+
+variable "agent_registry_location" {
+  type        = string
+  default     = "asia-southeast3"
+  description = "Region for Agent Registry A2A/MCP discovery (Bangkok default; standalone skills use global)"
+}
+
+variable "agent_registry_skills_location" {
+  type        = string
+  default     = "global"
+  description = "Location for Agent Registry standalone skills (GCPSkillRegistry requires global)"
 }
 ```
 
@@ -236,6 +284,50 @@ resource "google_vertex_ai_reasoning_engine" "byoc_agent" {
         name  = "GOOGLE_GENAI_USE_ENTERPRISE"
         value = "TRUE"
       }
+      env {
+        name  = "MODEL_NAME"
+        value = var.model_name
+      }
+      env {
+        name  = "REASONING_MODEL_NAME"
+        value = var.reasoning_model_name
+      }
+      env {
+        name  = "MODEL_LOCATION"
+        value = var.model_location
+      }
+      env {
+        name  = "THINKING_LEVEL"
+        value = upper(var.thinking_level)
+      }
+      # CRITICAL (agy 1.5.15 on Agent Runtime): Agent Runtime auto-injects the NUMERIC project number into
+      # GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_QUOTA_PROJECT (and GCE metadata returns Google's internal tenant
+      # project), which `agy 1.5.15` rejects with exit 3 ("invalid project ID"). Inject a non-reserved
+      # AGY_PROJECT_ID string project ID so `agy` subprocesses can override GOOGLE_CLOUD_PROJECT cleanly.
+      env {
+        name  = "AGY_PROJECT_ID"
+        value = var.project_id
+      }
+      env {
+        name  = "AGY_EXECUTION_MODE"
+        value = var.agy_execution_mode
+      }
+      env {
+        name  = "AGY_ADC_AUTH"
+        value = "true"
+      }
+      env {
+        name  = "AGY_CLI_DISABLE_AUTO_UPDATE"
+        value = "true"
+      }
+      env {
+        name  = "AGENT_REGISTRY_LOCATION"
+        value = var.agent_registry_location
+      }
+      env {
+        name  = "AGENT_REGISTRY_SKILLS_LOCATION"
+        value = var.agent_registry_skills_location
+      }
       # CRITICAL TRAP: Vertex AI rejects empty-string `env { value = "" }` with HTTP 400
       # (`reasoning_engine.spec.deployment_spec.env[N].value: Required field is not set`).
       # Always gate optional env vars (such as SANDBOX_TEMPLATE_NAME) with `dynamic "env"`:
@@ -262,6 +354,18 @@ resource "google_vertex_ai_reasoning_engine" "byoc_agent" {
     google_project_iam_member.re_service_agent_ar_reader,
     google_secret_manager_secret_iam_member.platform_service_agent_secret_accessor,
     google_secret_manager_secret_version.api_key_version,
+    # When combining a Custom Runtime SA with BYOC sandboxes, Memory Bank, and Skill Registry,
+    # ALSO include these IAM bindings in depends_on so startup never races IAM propagation:
+    # google_artifact_registry_repository_iam_member.sandbox_service_agent_ar_reader,
+    # google_secret_manager_secret_iam_member.runtime_sa_secret_accessor,
+    # google_service_account_iam_member.runtime_sa_self_token_creator,
+    # google_project_iam_member.runtime_sa_aiplatform_user,
+    # google_project_iam_member.runtime_sa_memory_user,
+    # google_project_iam_member.runtime_sa_agentregistry_viewer,
+    # google_project_iam_member.runtime_sa_logging_writer,
+    # google_project_iam_member.runtime_sa_trace_agent,
+    # google_project_iam_member.runtime_sa_telemetry_writer,
+    # google_project_iam_member.runtime_sa_monitoring_writer,
   ]
 }
 ```
@@ -402,10 +506,10 @@ resource "google_project_iam_member" "ar_agw_cross_project_binding" {
   member   = "serviceAccount:service-${each.value}@gcp-sa-aiplatform.iam.gserviceaccount.com"
 }
 
-# Register runtime endpoint in Agent Registry (Bangkok default for A2A/MCP: asia-southeast3; standalone skills use global)
+# Register runtime endpoint in Agent Registry (Bangkok default for A2A/MCP: var.agent_registry_location = "asia-southeast3"; standalone skills use global)
 resource "google_agent_registry_service" "runtime_agent_entry" {
   project      = "AGENT_GATEWAY_PROJECT_ID"
-  location     = "asia-southeast3" # Or var.agent_registry_location (Bangkok default for A2A/MCP; decoupled from Runtime var.location)
+  location     = var.agent_registry_location # Default "asia-southeast3" (decoupled from Runtime var.location)
   service_id   = "runtime-agent-svc"
   display_name = "Runtime Agent Service"
   endpoint_spec { no_spec {} }
@@ -432,7 +536,8 @@ resource "google_iam_project_access_policy" "egress_policy" {
       operation { permissions = ["iap.googleapis.com/resources.egressViaIAP"] }
       conditions {
         service    = "iap.googleapis.com"
-        expression = "(destination.is_registered == true) && (destination.agent_registry.endpoint.name == 'projects/AGENT_GATEWAY_PROJECT_ID/locations/${var.location}/endpoints/AGENT_ENDPOINT_ID')"
+        # Match the Agent Registry location (`var.agent_registry_location`, default "asia-southeast3") where the endpoint is registered
+        expression = "(destination.is_registered == true) && (destination.agent_registry.endpoint.name == 'projects/AGENT_GATEWAY_PROJECT_ID/locations/${var.agent_registry_location}/endpoints/AGENT_ENDPOINT_ID')"
       }
     }
   }

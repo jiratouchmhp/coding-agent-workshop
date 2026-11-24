@@ -18,6 +18,11 @@
 # `adk deploy gke` binds Pods to the `default/default` KSA unless overridden, which
 # returns `403 PERMISSION_DENIED` on Vertex AI calls until bound via WIF to a GSA
 # holding `roles/aiplatform.user`. Prefer this dedicated KSA for production deploys.
+#
+# Production Namespace Note:
+# For full `secure-sandbox-policy` ValidatingAdmissionPolicy enforcement, target a
+# dedicated non-system workload namespace (e.g., `coding-sandboxes`) instead of the
+# controller's `agent-sandbox-system` namespace, and update `GKE_SANDBOX_NAMESPACE`.
 
 apiVersion: v1
 kind: ServiceAccount

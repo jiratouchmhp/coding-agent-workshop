@@ -89,9 +89,11 @@ def _build_remote_execution_components(
 
     if settings.sandbox_mode == "code_execution":
         # TODO(lab-2): Import ``build_code_execution_executor`` from
-        # ``coding_agent.tools.sandbox_execution``, build ``AgentEngineSandboxCodeExecutor``
-        # using ``settings.sandbox_resource_name`` or ``settings.reasoning_engine_name``,
-        # and return ``(None, [], code_executor)``.
+        # ``coding_agent.tools.sandbox_execution``, call
+        # ``build_code_execution_executor(
+        #     sandbox_resource_name=settings.sandbox_resource_name or None,
+        #     agent_engine_resource_name=settings.reasoning_engine_name or None,
+        # )``, and return ``(None, [], code_executor)``.
         raise NotImplementedError(
             "Complete TODO(lab-2) in starter/coding_agent/agent.py for "
             "SANDBOX_MODE='code_execution'."
@@ -137,11 +139,14 @@ def _build_optional_callbacks(settings: Settings) -> dict[str, Any]:
     if not settings.enable_telemetry_callbacks and not settings.enable_memory_bank:
         return callbacks
 
-    # TODO(lab-3): Import ``before_tool_callback`` and ``after_tool_callback`` from
+    # TODO(lab-3): When ``settings.enable_telemetry_callbacks`` is True, import
+    # ``before_tool_callback`` and ``after_tool_callback`` from
     # ``coding_agent.callbacks.telemetry_and_feedback`` to log Managed Sandbox stdout/stderr
     # under the parent ReasoningEngine resource and attach OTel tool span attributes.
-    # If ``settings.enable_memory_bank`` is enabled, attach ``PreloadMemoryTool()`` and
-    # ``persist_turn_to_memory_callback`` as ``after_agent_callback``.
+    # When ``settings.enable_memory_bank`` is True, import ``PreloadMemoryTool`` from
+    # ``google.adk.tools.preload_memory_tool`` (append ``PreloadMemoryTool()`` to
+    # ``callbacks["extra_tools"]``) and import ``persist_turn_to_memory_callback`` from
+    # ``coding_agent.memory.memory_bank_manager`` (assign as ``callbacks["after_agent_callback"]``).
     return callbacks
 
 

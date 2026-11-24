@@ -139,7 +139,8 @@ else
   info "No ${ENV_FILE} found; using active shell environment and regional defaults."
 fi
 
-PROJECT_ID="${CLI_PROJECT:-${GOOGLE_CLOUD_PROJECT:-}}"
+ENV_PROJECT="${GOOGLE_CLOUD_PROJECT:-}"
+PROJECT_ID="${CLI_PROJECT:-${ENV_PROJECT}}"
 if [[ -z "${PROJECT_ID}" || "${PROJECT_ID}" == "your-gcp-project-id" ]]; then
   if command -v gcloud >/dev/null 2>&1; then
     PROJECT_ID="$(gcloud config get-value project 2>/dev/null | tr -d '[:space:]' || true)"
@@ -159,7 +160,30 @@ SKILL_REG_LOC="${SKILL_REGISTRY_LOCATION:-us-central1}"
 
 ENGINE_NAME="${REASONING_ENGINE_NAME:-}"
 if [[ -z "${ENGINE_NAME}" && -n "${PROJECT_ID}" && -n "${REASONING_ENGINE_ID:-}" ]]; then
-  ENGINE_NAME="projects/${PROJECT_ID}/locations/${AGENT_PLATFORM_LOC}/reasoningEngines/${REASONING_ENGINE_ID}"
+  if [[ -z "${CLI_PROJECT}" || "${CLI_PROJECT}" == "${ENV_PROJECT}" ]]; then
+    ENGINE_NAME="projects/${PROJECT_ID}/locations/${AGENT_PLATFORM_LOC}/reasoningEngines/${REASONING_ENGINE_ID}"
+  fi
+fi
+
+ENGINE_PROJECT=""
+if [[ -n "${ENGINE_NAME}" ]]; then
+  ENGINE_PROJECT="$(printf '%s\n' "${ENGINE_NAME}" | sed -nE 's|^projects/([^/]+)/locations/[^/]+/reasoningEngines/.*|\1|p')"
+fi
+
+ENGINE_PROJECT_MISMATCH=0
+if [[ -n "${ENGINE_PROJECT}" && -n "${PROJECT_ID}" && "${ENGINE_PROJECT}" != "${PROJECT_ID}" ]]; then
+  # Allow numeric project number match ONLY when it matches the active target project
+  TARGET_PROJ_NUM=""
+  if [[ "${ENGINE_PROJECT}" =~ ^[0-9]+$ ]]; then
+    if [[ -z "${CLI_PROJECT}" && -n "${GOOGLE_CLOUD_PROJECT_NUMBER:-}" ]]; then
+      TARGET_PROJ_NUM="${GOOGLE_CLOUD_PROJECT_NUMBER}"
+    elif command -v gcloud >/dev/null 2>&1; then
+      TARGET_PROJ_NUM="$(gcloud projects describe "${PROJECT_ID}" --format='value(projectNumber)' 2>/dev/null | tr -d '[:space:]' || true)"
+    fi
+  fi
+  if [[ -z "${TARGET_PROJ_NUM}" || "${ENGINE_PROJECT}" != "${TARGET_PROJ_NUM}" ]]; then
+    ENGINE_PROJECT_MISMATCH=1
+  fi
 fi
 
 printf "\n=============================================================================\n"
@@ -175,18 +199,29 @@ printf "  Artifact Registry:       %s-docker.pkg.dev/%s/%s\n" "${AR_LOC}" "${PRO
 printf "  Skill Registry Cleanup:  %s\n" "$([[ "${INCLUDE_SKILL_REGISTRY}" -eq 1 ]] && echo "ENABLED (${SKILL_REG_LOC} — PERMANENT SKILL_ID RESERVATION!)" || echo "SKIPPED (safe default)")"
 printf "=============================================================================\n"
 
-# Production project safety check
-if [[ -n "${PROJECT_ID}" ]]; then
-  LOWER_PROJ="$(printf '%s' "${PROJECT_ID}" | tr '[:upper:]' '[:lower:]')"
-  if [[ "${LOWER_PROJ}" == *prod* ]]; then
-    printf "\n${C_BOLD}${C_RED}WARNING: Target project '%s' looks like a PRODUCTION project (contains 'prod')!${C_RESET}\n" "${PROJECT_ID}" >&2
+# Production project safety check (covers BOTH PROJECT_ID and REASONING_ENGINE_NAME project)
+enforce_prod_safety_gate() {
+  local proj_val="$1"
+  local source_label="$2"
+  if [[ -z "${proj_val}" ]]; then
+    return 0
+  fi
+  local lower_proj
+  lower_proj="$(printf '%s' "${proj_val}" | tr '[:upper:]' '[:lower:]')"
+  if [[ "${lower_proj}" == *prod* ]]; then
+    printf "\n${C_BOLD}${C_RED}WARNING: %s '%s' looks like a PRODUCTION project (contains 'prod')!${C_RESET}\n" "${source_label}" "${proj_val}" >&2
     if [[ "${DRY_RUN}" -eq 0 && "${ALLOW_NON_SANDBOX}" -ne 1 ]]; then
-      echo "ERROR: Refusing live teardown against project '${PROJECT_ID}' (contains 'prod')." >&2
+      echo "ERROR: Refusing live teardown against ${source_label} '${proj_val}' (contains 'prod')." >&2
       echo "Note: --yes does NOT bypass this safety guardrail." >&2
-      echo "Verify GOOGLE_CLOUD_PROJECT, run with --dry-run first, or pass --allow-non-sandbox if you explicitly accept the risk." >&2
+      echo "Verify GOOGLE_CLOUD_PROJECT / REASONING_ENGINE_NAME, run with --dry-run first, or pass --allow-non-sandbox if you explicitly accept the risk." >&2
       exit 1
     fi
   fi
+}
+
+enforce_prod_safety_gate "${PROJECT_ID}" "Target project"
+if [[ -n "${ENGINE_PROJECT}" && "${ENGINE_PROJECT}" != "${PROJECT_ID}" ]]; then
+  enforce_prod_safety_gate "${ENGINE_PROJECT}" "REASONING_ENGINE_NAME project"
 fi
 
 # Confirmation prompt when live and not --yes
@@ -246,7 +281,7 @@ for tf_dir in starter/terraform solution/terraform; do
   fi
 
   if [[ "${DRY_RUN}" -eq 1 ]]; then
-    dry "Would run: terraform -chdir=${tf_dir} destroy -auto-approve ${TF_ARGS[*]:-}"
+    dry "Would run: terraform -chdir=${tf_dir} destroy -auto-approve${TF_ARGS[@]+ ${TF_ARGS[*]}}"
   elif ! command -v terraform >/dev/null 2>&1; then
     warn "Active Terraform state found in ${tf_dir}, but 'terraform' binary is not installed."
   else
@@ -270,6 +305,8 @@ if [[ -z "${ENGINE_NAME}" ]]; then
     info "To check for orphaned instances in ${AGENT_PLATFORM_LOC}, run:"
     info "  curl -sS -H \"Authorization: Bearer \$(gcloud auth print-access-token)\" \"https://${AGENT_PLATFORM_LOC}-aiplatform.googleapis.com/v1beta1/projects/${PROJECT_ID}/locations/${AGENT_PLATFORM_LOC}/reasoningEngines\""
   fi
+elif [[ "${ENGINE_PROJECT_MISMATCH}" -eq 1 ]]; then
+  warn "Skipping Step 2: REASONING_ENGINE_NAME (${ENGINE_NAME}) targets project '${ENGINE_PROJECT}', which does not match target project '${PROJECT_ID}'."
 elif [[ "${DRY_RUN}" -eq 1 ]]; then
   dry "Would delete all sandboxes, snapshots, and templates under: ${ENGINE_NAME}"
   dry "Would delete parent ReasoningEngine (force=true): ${ENGINE_NAME}"
@@ -282,17 +319,22 @@ else
 
   # 2a. Clean up child resources in strict sandbox -> snapshot -> template order,
   #     waiting/retrying LRO completion at each stage so zero leftovers survive.
+  #     Always run against solution/ when present so incomplete starter/ Lab 2
+  #     stubs never trigger NotImplementedError retry loops.
   PY_BIN=""
   PY_TRACK_DIR=""
   if [[ -x "${REPO_ROOT}/solution/.venv/bin/python" ]]; then
     PY_BIN="${REPO_ROOT}/solution/.venv/bin/python"
-    PY_TRACK_DIR="${REPO_ROOT}/solution"
   elif [[ -x "${REPO_ROOT}/starter/.venv/bin/python" ]]; then
     PY_BIN="${REPO_ROOT}/starter/.venv/bin/python"
+  fi
+  if [[ -d "${REPO_ROOT}/solution/coding_agent" ]]; then
+    PY_TRACK_DIR="${REPO_ROOT}/solution"
+  elif [[ -d "${REPO_ROOT}/starter/coding_agent" ]]; then
     PY_TRACK_DIR="${REPO_ROOT}/starter"
   fi
 
-  if [[ -n "${PY_BIN}" ]]; then
+  if [[ -n "${PY_BIN}" && -n "${PY_TRACK_DIR}" ]]; then
     info "Draining sandboxes -> snapshots -> templates (with LRO wait/retry) under ${ENGINE_NAME}..."
     if (cd "${PY_TRACK_DIR}" && env PYTHONDONTWRITEBYTECODE=1 "${PY_BIN}" - \
       "${PROJECT_ID}" "${ENGINE_LOC}" "${ENGINE_NAME}" <<'PYEOF'
@@ -318,6 +360,9 @@ def _drain_stage(label: str, list_fn, delete_fn, max_attempts: int = 12, delay_s
     for attempt in range(1, max_attempts + 1):
         try:
             items = list(list_fn())
+        except NotImplementedError as exc:
+            print(f"  [{label}] SandboxLifecycleManager method not yet implemented ({exc}); skipping drain.", file=sys.stderr)
+            return False
         except Exception as exc:
             if _is_not_found(exc):
                 print(f"  [{label}] Parent instance already removed (404).")
@@ -337,6 +382,9 @@ def _drain_stage(label: str, list_fn, delete_fn, max_attempts: int = 12, delay_s
                 continue
             try:
                 delete_fn(res_name)
+            except NotImplementedError as exc:
+                print(f"  [{label}] SandboxLifecycleManager delete not yet implemented ({exc}); skipping drain.", file=sys.stderr)
+                return False
             except Exception as exc:
                 if not _is_not_found(exc):
                     print(f"    retrying delete {res_name} after error: {exc}", file=sys.stderr)
@@ -344,6 +392,8 @@ def _drain_stage(label: str, list_fn, delete_fn, max_attempts: int = 12, delay_s
 
     try:
         leftovers = list(list_fn())
+    except NotImplementedError:
+        return False
     except Exception as exc:
         if _is_not_found(exc):
             return True
@@ -458,6 +508,18 @@ else
       skill_short="${skill_full_name##*/}"
       if [[ "${skill_short}" == private-secure-code-review* ]]; then
         FOUND_AR_SKILL=1
+        # Clear any active --default-revision and disable the skill first so deleting
+        # promoted revisions (Labs 4, 6, 7) does not fail with FAILED_PRECONDITION.
+        info "Clearing default revision & disabling Agent Registry skill: ${skill_short} (${AGENT_REG_SKILLS_LOC})"
+        CLEAR_OUT=""
+        if ! CLEAR_OUT="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills update "${skill_short}" \
+          --clear-default-revision \
+          --target-state=disabled \
+          --project="${PROJECT_ID}" \
+          --location="${AGENT_REG_SKILLS_LOC}" </dev/null 2>&1)"; then
+          warn "Could not clear default revision for skill '${skill_short}' (continuing): ${CLEAR_OUT}"
+        fi
+
         # Agent Registry skills delete has no --force flag and fails FAILED_PRECONDITION
         # while child revisions exist, so delete all revisions first.
         SKILL_REVISIONS="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills revisions list \
@@ -470,26 +532,28 @@ else
             [[ -z "${rev_full_name}" ]] && continue
             rev_short="${rev_full_name##*/}"
             info "Deleting Agent Registry skill revision: ${skill_short}/revisions/${rev_short} (${AGENT_REG_SKILLS_LOC})"
-            if CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills revisions delete "${rev_short}" \
+            REV_DEL_OUT=""
+            if REV_DEL_OUT="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills revisions delete "${rev_short}" \
               --skill="${skill_short}" \
               --project="${PROJECT_ID}" \
               --location="${AGENT_REG_SKILLS_LOC}" \
-              --quiet </dev/null 2>/dev/null; then
+              --quiet </dev/null 2>&1)"; then
               ok "Deleted Agent Registry skill revision: ${rev_short}"
             else
-              warn "Could not delete revision '${rev_short}' for skill '${skill_short}' (may already be deleted)."
+              warn "Could not delete revision '${rev_short}' for skill '${skill_short}': ${REV_DEL_OUT}"
             fi
           done <<< "${SKILL_REVISIONS}"
         fi
 
         info "Deleting Agent Registry standalone skill: ${skill_short} (${AGENT_REG_SKILLS_LOC})"
-        if CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills delete "${skill_short}" \
+        SKILL_DEL_OUT=""
+        if SKILL_DEL_OUT="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills delete "${skill_short}" \
           --project="${PROJECT_ID}" \
           --location="${AGENT_REG_SKILLS_LOC}" \
-          --quiet </dev/null 2>/dev/null; then
+          --quiet </dev/null 2>&1)"; then
           ok "Deleted Agent Registry skill: ${skill_short}"
         else
-          warn "Could not delete Agent Registry skill '${skill_short}' (may have remaining revisions or already be deleted)."
+          warn "Could not delete Agent Registry skill '${skill_short}': ${SKILL_DEL_OUT}"
         fi
       fi
     done <<< "${AGENT_REG_SKILLS}"

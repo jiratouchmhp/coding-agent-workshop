@@ -765,9 +765,11 @@ class SandboxLifecycleManager:
         # source_sandbox_environment_name=sandbox_name,
         # config={"display_name": display_name, "ttl": ttl,
         #         "wait_for_completion": wait_for_completion})``,
-        # resolve the snapshot resource name dynamically from ``op.response.name`` (falling back
-        # to matching ``display_name`` in ``self.list_snapshots(instance_name)``), and return
-        # ``SnapshotSummary``.
+        # resolve the snapshot resource name dynamically from ``getattr(getattr(op, "response", None), "name", "")``
+        # (NOTE: do NOT pass ``_extract_response(op)`` blindly when ``op.response`` is ``None``,
+        # because ``op.name`` is an ``/operations/...`` LRO path rather than ``/sandboxEnvironmentSnapshots/...``!),
+        # falling back to matching ``display_name`` in ``self.list_snapshots(instance_name=parent)``,
+        # and return ``SnapshotSummary``.
         _ = (sandbox_name, display_name, ttl, wait_for_completion, instance_name)
         raise NotImplementedError("Complete TODO(lab-2): SandboxLifecycleManager.snapshot_sandbox")
 
@@ -879,7 +881,6 @@ class SandboxLifecycleManager:
                 sandbox = self.create_sandbox(
                     display_name="workshop-shell-demo-sandbox",
                     template_name=template.name,
-                    spec={"shell_environment": {}},
                     ttl=ttl,
                 )
             else:

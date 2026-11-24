@@ -102,12 +102,14 @@ spec:
 
 ### 1.4 Verified `v1beta1` CRD Manifests (`SandboxTemplate`, `SandboxWarmPool`, `SandboxClaim`, Direct `Sandbox`)
 
+> **Namespace & VAP Isolation Best Practice:** Deploy untrusted workload CRDs (`SandboxTemplate`, `SandboxWarmPool`, `SandboxClaim`) in a **dedicated non-system workload namespace** (e.g., `agent-workloads`) rather than the controller's `agent-sandbox-system` namespace so `secure-sandbox-policy` VAP (which excludes system namespaces by default) enforces Pod hardening automatically and isolates untrusted sandboxes from controller/router components. (If deploying a lab overlay inside `agent-sandbox-system`, explicitly verify your VAP `ValidatingAdmissionPolicyBinding` matchExpressions include that namespace!)
+
 ```yaml
 apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxTemplate
 metadata:
   name: python-sandbox-template
-  namespace: default
+  namespace: agent-workloads
 spec:
   podTemplate:
     metadata:
@@ -118,6 +120,7 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
+        runAsUser: 1000
       nodeSelector:
         sandbox.gke.io/runtime: gvisor
       tolerations:
@@ -149,7 +152,7 @@ apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxWarmPool
 metadata:
   name: python-sandbox-warmpool
-  namespace: default
+  namespace: agent-workloads
 spec:
   replicas: 2
   sandboxTemplateRef:
@@ -159,7 +162,7 @@ apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxClaim
 metadata:
   name: python-sandbox-claim
-  namespace: default
+  namespace: agent-workloads
 spec:
   warmPoolRef:
     name: python-sandbox-warmpool
@@ -172,10 +175,15 @@ spec:
 
 ## 2. Python SDK (`k8s-agent-sandbox==1.0.6`) & ADK `GkeCodeExecutor`
 
-### 2.1 `k8s-agent-sandbox` Connection Modes
+> **CRITICAL Breaking API Skew (`google-adk==2.15.0` vs. `k8s-agent-sandbox==1.0.6`):**
+> `google-adk==2.15.0` `GkeCodeExecutor._execute_in_sandbox()` invokes the **pre-1.0 context-manager API** (`with SandboxClient(template_name=..., gateway_name=..., namespace=...) as sandbox: sandbox.write(...); sandbox.run(...)`), whereas **`k8s-agent-sandbox==1.0.6`** changed `SandboxClient` to `SandboxClient(connection_config=..., cleanup=True).create_sandbox(...)` with `sandbox.commands.run(...)`!
+> - **Do NOT install `k8s-agent-sandbox==1.0.6` in the same Python environment as `google-adk==2.15.0` `GkeCodeExecutor(executor_type="sandbox")`** — doing so breaks `_execute_in_sandbox()` with `TypeError`/`AttributeError`.
+> - Either use standalone `k8s-agent-sandbox==1.0.6` directly in an ADK `FunctionTool`/`BaseEnvironment` wrapper (recommended for `v1.0.6` controllers), OR pin the pre-1.0 `k8s-agent-sandbox` version compatible with `google-adk==2.15.0` in a separate environment until a future ADK release migrates `GkeCodeExecutor` to `k8s-agent-sandbox` v1.x.
+
+### 2.1 Standalone `k8s-agent-sandbox==1.0.6` Connection Modes
 
 ```python
-# pip install k8s-agent-sandbox==1.0.6  (pin to match controller version)
+# pip install k8s-agent-sandbox==1.0.6  (pin to match v1.0.6 controller; keep isolated from ADK 2.15.0 GkeCodeExecutor!)
 from k8s_agent_sandbox import SandboxClient
 from k8s_agent_sandbox.models import SandboxLocalTunnelConnectionConfig
 # Production modes:
@@ -186,7 +194,7 @@ client = SandboxClient(
     connection_config=SandboxLocalTunnelConnectionConfig(),  # Dev-only kubectl port-forward!
     cleanup=True,  # Deletes SandboxClaim/Sandbox on exit
 )
-sandbox = client.create_sandbox(warmpool="python-sandbox-warmpool", namespace="default")
+sandbox = client.create_sandbox(warmpool="python-sandbox-warmpool", namespace="agent-workloads")
 result = sandbox.commands.run("python3 -c 'print(2 + 2)'")
 print(result.stdout)
 ```
@@ -195,7 +203,7 @@ print(result.stdout)
 
 | Parameter | Type | Default | Notes |
 |---|---|---|---|
-| `namespace` | `str` | `"default"` | Namespace where `SandboxClaim` and `Sandbox` resources are created. |
+| `namespace` | `str` | `"default"` | Dedicated workload namespace where `SandboxClaim` and `Sandbox` resources are created (match `SandboxTemplate` namespace, e.g., `"agent-workloads"`). |
 | `executor_type` | `str` | *(set `"sandbox"`)* | Always set **`"sandbox"`** to execute via GKE Agent Sandbox CRDs (`Sandbox`, `SandboxTemplate`, `SandboxClaim`, `SandboxWarmPool`). |
 | `sandbox_template` | `str \| None` | `"python-sandbox-template"` | `SandboxTemplate` name in `namespace`. |
 | `sandbox_gateway_name` | `str \| None` | `None` | Optional GKE Gateway API name for out-of-cluster routing. |
@@ -207,9 +215,10 @@ print(result.stdout)
 from google.adk.agents import LlmAgent
 from google.adk.code_executors import GkeCodeExecutor
 
-# GKE Agent Sandbox Mode (CRD-backed warm-pool latency)
+# GKE Agent Sandbox Mode (match dedicated non-system workload namespace & SandboxTemplate name;
+# on ADK 2.15.0, requires pre-1.0 k8s-agent-sandbox client until GkeCodeExecutor migrates to v1.x)
 sandbox_executor = GkeCodeExecutor(
-    namespace="agent-sandbox-system",
+    namespace="agent-workloads",
     executor_type="sandbox",
     sandbox_template="python-sandbox-template",
     sandbox_gateway_name="your-gateway-name",  # Optional
@@ -232,12 +241,14 @@ agent = LlmAgent(
 
 ## 3. GKE Pod Snapshots for Agent Sandbox (`podsnapshot.gke.io/v1`)
 
-### 3.1 Hard Requirements & Limitations
-- **GKE Version:** **`>= 1.35.3-gke.1234000`** (`--release-channel=rapid --enable-pod-snapshots`). Both **Standard and Autopilot** supported.
-- **Runtime:** **`gVisor` ONLY** (`runtimeClassName: gvisor`). **Does NOT work with microVMs.**
-- **Machine Families:** **E2 NOT supported.** On Standard, use `n2-standard-2` / `c3` etc. On Autopilot, bind a custom `ComputeClass` (`non-e2-class` below).
-- **Accelerators:** **TPUs NOT supported** with Pod Snapshots.
-- **Restore Latency:** **~3 to 5 seconds** (memory + rootfs restored from GCS).
+### 3.1 Hard Requirements, Scopes (`whole-pod` vs. `rootfs-only`) & GPU Checkpointing (`cuda-checkpoint`)
+- **GKE Version:** **`>= 1.35.3-gke.1234000`** (`--release-channel=rapid --enable-pod-snapshots`, Standard & Autopilot) for **`whole-pod`** snapshots; **`>= 1.35.3-gke.1031000`** for **`rootfs-only`** (file system) snapshots.
+- **Runtime & Sidecars:** **`gVisor` ONLY** (`runtimeClassName: gvisor`). **Does NOT work with microVMs**, **TPUs**, or **Cloud Storage FUSE CSI sidecars**.
+- **Scopes & Machine Families:**
+  - **Default `whole-pod` scope:** Captures process memory + rootfs; target node must match machine series, CPU vendor, and `CPUID` flags (**NO E2 machine types** — on Standard use `n2`/`c3`, and on Autopilot bind a custom `ComputeClass` `non-e2-class` below).
+  - **`rootfs-only` (file system) scope (`>= 1.35.3-gke.1031000`):** Skips process memory and distilled Pod spec hash matching, enabling restore **across different machine families (including E2)** while keeping compatible container images and node versions.
+- **GPU Checkpointing (NVIDIA `cuda-checkpoint`):** Writes GPU state into Pod process memory during snapshot and reverses it on restore (size Pod memory limits accordingly and measure readiness via TTFT/readiness probes since GPU state streams asynchronously). Supported GPU machine types: **`a2-highgpu-1g`** (A100-40GB), **`a2-ultragpu-1g`** (A100-80GB), **`a3-highgpu-1g`** (H100-80GB), **`g4-standard-48`** (RTX PRO 6000) single-GPU, and single- or multi-GPU L4 **`g2-standard-*`** (`4, 8, 12, 16, 32, 48, 96`; multi-GPU Pods supported **only** on L4 `g2-standard-*`). **Multi-Instance GPU (MIG) is NOT supported.**
+- **Restore Latency:** **~3 to 5 seconds** (with background memory streaming from GCS).
 
 ### 3.2 Cluster, GCS Bucket (`--soft-delete-duration=0d`), WIF & IAM Setup
 
@@ -383,7 +394,8 @@ kubectl wait sandbox "${SANDBOX_NAME}" -n "${SNAPSHOT_NAMESPACE}" --for=conditio
 
 - **Hard Requirements:**
   - **GKE Standard ONLY `>= 1.37`** (control plane & node pools); **Autopilot unsupported** (privileged `atelet` DaemonSet); **Extended release channel unsupported** by installer (enables beta APIs).
-  - **x86 CPU only** (no Arm), **no E2 / mixed-CPU** (gVisor issue), uniform VM family per `ActorTemplate` (`workerSelector` -> `WorkerPool` `nodeSelector`). **NO GPUs or TPUs.**
+  - **x86 CPU only** (minimum **`c3-standard-4`** nodes; no Arm), **no E2 / mixed-CPU** (gVisor issue), uniform VM family per `ActorTemplate` (`workerSelector` -> `WorkerPool` `nodeSelector`). **NO GPUs or TPUs.**
+  - **High-Density Kernel Sysctls (`>~800` concurrent sandboxes/node):** Configure all 5 Linux kernel sysctls on worker nodes: `net.ipv4.neigh.default.gc_thresh1=4096`, `net.ipv4.neigh.default.gc_thresh2=16384`, `net.ipv4.neigh.default.gc_thresh3=32768`, `fs.inotify.max_user_instances=65536`, and `fs.inotify.max_user_watches=1048576`.
   - **NEVER enable GKE Sandbox** on Substrate worker pools (`sandbox.gke.io/runtime` taint blocks `WorkerPool` Pods).
   - **Cloud Shell install blocked** (5 GB persistent disk cap) — install from workstation/VM via `github.com/ai-on-gke/substrate-gke`.
   - **Open network connections** (DB/MCP) drop on suspend — agent code must reconnect on resume.
@@ -485,6 +497,7 @@ kubectl ate resume actor my-agent-1 -a ate-demo
 | ~2-minute delay connecting to external APIs or Vertex AI from sandbox | Dual-stack IPv6 GKE cluster without IPv6 NAT/IGW causes Node.js AAAA SYN timeout. | Configure IPv6 egress or set `NODE_OPTIONS="--dns-result-order=ipv4first --no-network-family-autoselection"`. |
 | `FAILED_PRECONDITION` creating `podSnapshotGcsReadWriter` | Deleted custom IAM role ID is in 37-day deletion cooldown. | Create with a new ID (e.g., `podSnapshotGcsReadWriter2`). |
 | `WorkerPool` Pods stuck `Pending` on GKE Agent Substrate | GKE Sandbox (`--sandbox=type=gvisor`) enabled on Substrate worker node pool (`sandbox.gke.io/runtime` taint). | Recreate Substrate worker node pool **without** GKE Sandbox (keep GKE Sandbox on separate Agent Sandbox pools). |
+| `TypeError` / `AttributeError` in `GkeCodeExecutor._execute_in_sandbox()` | `google-adk==2.15.0` calls pre-1.0 `SandboxClient` context-manager API, which is incompatible with `k8s-agent-sandbox==1.0.6`. | Keep `k8s-agent-sandbox==1.0.6` isolated from ADK 2.15.0 `GkeCodeExecutor` (wrap `k8s-agent-sandbox==1.0.6` directly in a `FunctionTool`/`BaseEnvironment`, or pin pre-1.0 client until ADK migrates to v1.x). |
 
 ```bash
 # Verify Agent Sandbox CRDs, controller, router, and active claims

@@ -44,11 +44,11 @@ By the end of Lab 1, you will:
 [`google/agents-cli`](https://github.com/google/agents-cli) is Google's official lifecycle CLI for scaffolding, locally running, evaluating, deploying, and publishing ADK agents (requires **Python 3.11+** and **`uv`**).
 
 > [!TIP]
-> **Standalone `uv` — Zero `python3-venv` or Docker Required!** Installing `uv` via its standalone installer (`curl -LsSf https://astral.sh/uv/install.sh | sh`) bundles its own Python environment management and works cleanly even on fresh Debian/Linux workstations or cloud dev environments without `python3-venv` or local `docker`.
+> **Standalone `uv` — Zero `python3-venv` or Docker Required!** Downloading and running `uv`'s standalone installer bundles its own Python environment management and works cleanly even on fresh Debian/Linux workstations or cloud dev environments without `python3-venv` or local `docker`.
 
 ```bash
 # 0. Install standalone uv if not already available (works without python3-venv or docker!)
-command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh
+command -v uv >/dev/null 2>&1 || (curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv_install.sh && sh /tmp/uv_install.sh && rm -f /tmp/uv_install.sh)
 
 # 1. (Optional) Install google-agents-cli and register its 7 built-in IDE workflow skills
 #    All labs work end-to-end with `uv`, `gcloud`, and Terraform even if `agents-cli` is not on your PATH.
@@ -184,6 +184,9 @@ MAX_FIX_ROUNDS=3
 ENABLE_HITL_APPROVAL=false
 # Lab 1 Part B / Lab 2 / Lab 5: Antigravity (`agy`) headless CLI execution mode: auto | local | sandbox
 AGY_EXECUTION_MODE=auto
+# Optional non-numeric project ID override for `agy` subprocesses (leave blank locally;
+# Lab 5 Terraform injects AGY_PROJECT_ID = var.project_id to override Agent Runtime's numeric project number):
+# AGY_PROJECT_ID=
 # Optional ADK Python v2.4.0 Preview ManagedAgent ID (global-only backend):
 # MANAGED_AGENT_ID=antigravity-preview-05-2026
 # Optional ADK Python 2.0+ programmatic Service Registration (`services.py` overrides `services.yaml`):
@@ -350,6 +353,7 @@ ADK 2.0 (Python GA May 19, 2026; Go GA June 30, 2026; TypeScript GA Aug 21, 2026
    - Python nodes communicate via **`Event(output=..., message=..., route=..., state=...)`**: `output` flows to successor `node_input`; `message` streams to the user; `route` picks edges; `state` persists key-value entries (`app:`, `user:`, `temp:`, or session-scoped). Keep `state` lightweight — store large files in Artifacts or workspace files.
    - **Strictly ONE `Event(output=...)` per Python node execution:** You may `yield` multiple progress `Event(message=...)` events, but yielding two `Event(output=...)` events in one node raises a **runtime error**!
    - **Python `{key}` State vs. `node_input` Trap:** In Python `LlmAgent.instruction`, `{key}` placeholders substitute **session state**, NOT `node_input` (writing `{CityTime.time_info}` leaves it verbatim in the prompt!). Either attach `input_schema=MyPydanticModel` and refer to fields in prose, or emit `Event(state={"code": ..., "findings": ...})` before calling the agent! *(By contrast, ADK TypeScript supports `{Class.field}` and `<Class.field from source_node>` directly.)*
+   - **ADK 2.0 `State` Object API Gotcha (`No .pop()`):** `ctx.state` / `tool_context.state` (`google.adk.sessions.state.State`) supports `.get()`, `.setdefault()`, `.update()`, `.to_dict()`, `__contains__`, `__getitem__`, `__setitem__`, and `__iter__`, but does **NOT** implement `dict.pop()`, `.keys()`, `.items()`, `.values()`, `__delitem__`, or `__len__`. Never call `state.pop(key, None)` (raises `AttributeError`) — clear keys via `state[key] = None` or `yield Event(state={key: ""})`.
 
 4. **Human Input (`RequestInput`) & Tool Confirmation ([`graphs/human-input/`](https://adk.dev/graphs/human-input/)):**
    - **Workflow HITL:** Yield `RequestInput(message=..., payload=..., response_schema=ApprovalDecision)` (`from google.adk.events import RequestInput`). Leaf HITL nodes use **`rerun_on_resume=False`** (default handoff: user reply flows directly to the successor/caller); parent dynamic orchestrators calling `ctx.run_node()` MUST set **`rerun_on_resume=True`**. **Important:** `response_schema` does **NOT** reformat free-text human replies — collect structured input in your UI or add a formatting agent node after the pause.
@@ -617,9 +621,9 @@ flowchart LR
 ```
 
 Key verified ADK 2.0 patterns you implement in `build_graph_coding_workflow(...)`:
-- **Resilient check nodes:** Decorate `run_pytest_node` and `run_ruff_node` with `@node(retry_config=RetryConfig(max_attempts=3, initial_delay=1.0, exceptions=[TimeoutError, NodeTimeoutError]), timeout=30.0)`.
-- **Fan-in without `ValueError`:** Connect both parallel check nodes into `JoinNode(name="verify_join")` so every predecessor produces an output and the graph terminates through a single leaf (`finalize_report`).
-- **Explicitly bounded back-edge:** `verdict_router(ctx, node_input, fix_attempts: int = 0)` receives `fix_attempts` via ADK's automatic session-state parameter binding and routes `"NEEDS_FIX"` directly back to `coder_agent` — emitting `Event(route="NEEDS_FIX", output=fix_prompt, state={"fix_attempts": next_attempt, "latest_findings": findings, "checks_passed": False})` only while `fix_attempts < settings.max_fix_rounds` (preventing unbounded graph cycles!).
+- **Resilient check nodes & `pytest` exit code 5:** Decorate `run_pytest_node` and `run_ruff_node` with `@node(retry_config=RetryConfig(max_attempts=3, initial_delay=1.0, exceptions=[TimeoutError, NodeTimeoutError]), timeout=30.0)`. The pre-filled `_run_workspace_check(...)` helper accepts `allow_exit_codes=frozenset({0, 5})` so `pytest` exit code `5` (no tests collected yet) is treated cleanly rather than triggering unnecessary fix loops.
+- **Fan-in without `ValueError` & carrying upstream output across `JoinNode` + HITL:** Attach `output_key` on `coder_agent` (or persist summary/findings into `ctx.state`), and connect both parallel check nodes into `JoinNode(name="verify_join")` so every predecessor produces an output and the graph terminates through a single leaf (`finalize_report`). Because a `rerun_on_resume=False` `RequestInput` HITL pause replaces downstream `node_input` with the human's reply, reading persisted summary/findings from `ctx.state` in `finalize_report` preserves the full report across pauses.
+- **Explicitly bounded back-edge & `DEFAULT_ROUTE`:** `verdict_router(ctx, node_input, fix_attempts: int = 0)` receives `fix_attempts` via ADK's automatic session-state parameter binding and routes `"NEEDS_FIX"` directly back to `coder_agent` — emitting `Event(route="NEEDS_FIX", output=fix_prompt, state={"fix_attempts": next_attempt, "latest_findings": findings, "checks_passed": False})` only while `fix_attempts < settings.max_fix_rounds` (preventing unbounded graph cycles!). When wiring partial route dicts, import `DEFAULT_ROUTE` from `google.adk.workflow` (tip: scoping `from google.adk.workflow import DEFAULT_ROUTE` inside `build_graph_coding_workflow()` avoids `ruff` import-sorting conflicts with the top-level `from google.adk.workflow import JoinNode, NodeTimeoutError, RetryConfig, node` line). Also include `{"checks_passed", "findings"}` keys in non-HITL payloads routed from `verdict_router` so pre-filled `_format_approval_note()` distinguishes them cleanly from human HITL replies.
 - **Deterministic HITL gate:** When `ENABLE_HITL_APPROVAL=true`, `verdict_router` routes `"NEEDS_APPROVAL"` to `@node(rerun_on_resume=False)` `request_human_approval`, which yields `RequestInput(message=..., payload=..., response_schema=ApprovalDecision)`.
 - **Single `Event(output=...)` rule, multi-turn state reset & global guardrails:** `finalize_report` formats any HITL response with `_format_approval_note(...)`, renders `_build_final_report(...)`, invokes `_invoke_optional_after_agent_callback(callbacks, ctx)`, and returns strictly **one** `Event(message=report, output=report, state={"fix_attempts": 0, "latest_findings": ""})` — keeping state intact across HITL pauses while guaranteeing Turn 2+ in a multi-turn session starts fresh at `fix_attempts=0`. Meanwhile, `App` attaches `GlobalInstructionPlugin` across `collaborative`, `graph`, `dynamic`, and `agy_harness` workflows.
 
@@ -744,18 +748,27 @@ flowchart LR
 `agy` ships as a **static native Go binary** (supporting custom `--dir` for containers and CI runners — zero local Docker required!):
 
 ```bash
-# Laptop / Workstation / Cloud Workstations install (adds `agy` to your user bin dir):
-curl -fsSL https://antigravity.google/cli/install.sh | bash
+# Laptop / Workstation / Cloud Workstations install (download-then-execute; adds `agy` to your user bin dir):
+curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy_install.sh \
+  && bash /tmp/agy_install.sh \
+  && rm -f /tmp/agy_install.sh
 
 # Container / CI deterministic install into /usr/local/bin (used in Lab 2 BYOC & Lab 5 Runtime Dockerfiles!):
+# Note: `agy_install.sh --dir /usr/local/bin` installs the working static binary at `/usr/local/bin/agy`
+# (0755, accessible to `appuser`) even though its internal self-install step may also log `/root/.local/bin/agy`.
 # curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy_install.sh \
 #   && bash /tmp/agy_install.sh --dir /usr/local/bin \
 #   && rm -f /tmp/agy_install.sh && chmod 0755 /usr/local/bin/agy
 
-# Run a single headless turn with streaming NDJSON events, Gemini 4 Hydrogen, and ADC auth:
+# Quick ADC sanity check (lists available Gemini models under AGY_ADC_AUTH=true):
+AGY_ADC_AUTH=true agy models
+
+# Run a single headless turn with streaming NDJSON events, Gemini 4 Hydrogen, and ADC auth
+# (CRITICAL: pass the string project ID to BOTH GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_QUOTA_PROJECT!):
 AGY_ADC_AUTH=true \
 AGY_CLI_DISABLE_AUTO_UPDATE=true \
 GOOGLE_CLOUD_PROJECT="${GOOGLE_CLOUD_PROJECT}" \
+GOOGLE_CLOUD_QUOTA_PROJECT="${GOOGLE_CLOUD_PROJECT}" \
 GOOGLE_CLOUD_LOCATION="global" \
 agy -p "Create math_utils.py with safe_divide(a, b) and pytest tests." \
   --output-format stream-json \
@@ -764,6 +777,10 @@ agy -p "Create math_utils.py with safe_divide(a, b) and pytest tests." \
   --print-timeout 5m \
   --sandbox
 ```
+
+> [!WARNING]
+> **Live Agent Runtime Gotcha (`AGY_PROJECT_ID` vs. Numeric `GOOGLE_CLOUD_PROJECT`):**
+> On deployed Agent Runtime (Lab 5), Google Cloud auto-injects your **numeric project number** into `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_QUOTA_PROJECT` (and its GCE metadata server returns an internal Google tenant project `...-tp`), whereas `agy 1.5.15` **rejects numeric project IDs with exit code `3` (`invalid project ID: "<PROJECT_NUMBER>"`)**! In Lab 5, `terraform/main.tf` injects a non-reserved env var **`AGY_PROJECT_ID = var.project_id`** (the string project ID), and `build_local_agy_env()` prefers `AGY_PROJECT_ID` for both `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_QUOTA_PROJECT` (plus `GOOGLE_CLOUD_LOCATION=global`) inside every `agy` subprocess so both `agy -p ...` and `agy -p ... --sandbox` succeed cleanly (`EXIT=0`) under Custom SA ADC!
 
 | Verified `agy` Headless Flag | Purpose in Outer ADK Factory |
 |---|---|
@@ -777,21 +794,34 @@ agy -p "Create math_utils.py with safe_divide(a, b) and pytest tests." \
 | `--dangerously-skip-permissions` | Unattended auto-approve **strictly inside** an isolated gVisor Managed Sandbox or ephemeral CI runner (never on an unprotected developer laptop!). |
 | `--json-schema <schema_json>` | Optional structured JSON contract for machine-parsed harness outputs. |
 
-##### 5.2 Verified 4-Tier Exit-Code State Machine (`AgyExitCode`) & Execution Modes
+##### 5.2 Verified 4-Tier Exit-Code State Machine (`AgyExitCode`), NDJSON Schema & Execution Modes
 
 `starter/coding_agent/tools/agy_headless_harness.py` enforces the exact verified 4-tier exit-code contract so the outer ADK loop retries **only** when safe:
 
 | Exit Code (`AgyExitCode`) | Meaning | Outer ADK Harness Policy |
 |---|---|---|
-| **`0` (`SUCCESS`)** | Harness completed cleanly | Parse NDJSON events, extract `conversation_id`, token/tool telemetry, and proceed to independent `pytest` + `ruff` gates. |
-| **`1` (`FAILURE`)** | CLI, authentication, or transport fault | **Fail fast** with an actionable hint (`AGY_ADC_AUTH=true`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION=global`, or ADC login). |
+| **`0` (`SUCCESS`)** | Harness completed cleanly | Parse NDJSON events, extract `conversation_id`, token/tool telemetry, and proceed to independent `pytest` + `ruff` gates. *(Harmless `stderr` on exit `0` leaves `agy_error=None`.)* |
+| **`1` (`FAILURE`)** | CLI, authentication, or transport fault | **Fail fast** with an actionable hint (`AGY_ADC_AUTH=true`, non-numeric `GOOGLE_CLOUD_PROJECT`/`AGY_PROJECT_ID`, `GOOGLE_CLOUD_LOCATION=global`, or ADC login). |
 | **`2` (`UNSUPPORTED_COMMAND`)** | Invalid CLI usage or unsupported flag | **NEVER retry** — surface exact CLI flag error immediately. |
-| **`3` (`AGENT_ERROR`)** | Model/quota failure or timeout (parses `AGY_ERROR` on `stderr`) | Eligible for **bounded retry** and automatic model fallback (`gemini-4-neon` → `gemini-4-hydrogen`). |
+| **`3` (`AGENT_ERROR`)** | Model/quota failure, numeric project ID rejection, or timeout (parses `AGY_ERROR` on `stderr`) | Eligible for **bounded retry** and automatic model fallback (`gemini-4-neon` → `gemini-4-hydrogen`). |
+
+###### Verified `--output-format stream-json` NDJSON Event Schema & `AGY_ERROR` Format
+
+`parse_agy_stream_json()` must handle **both** real **`agy 1.5.15`** nested event envelopes AND flat/dry-run envelopes (plus plain-text fallback):
+
+- **Real `agy 1.5.15` Nested Envelopes (`"event"` key):**
+  ```json
+  {"event": "init", "conversation_id": "conv-123", "init": {"model": "gemini-4-hydrogen"}}
+  {"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": "AGY_LIVE_OK\n", "usage": {"input_tokens": 8200, "output_tokens": 120, "thinking_tokens": 410, "cache_read_tokens": 7100, "total_tokens": 8730}}}
+  {"event": "result", "result": {"conversation_id": "conv-123", "status": "SUCCESS", "response": "AGY_LIVE_OK\n", "error": "", "usage": {"input_tokens": 8200, "output_tokens": 120, "thinking_tokens": 410, "cache_read_tokens": 7100, "total_tokens": 8730}}}
+  ```
+- **Flat / `--dry-run` Compatibility Envelopes (`"type"` key):** `session_start` (`conversation_id`), `tool_use` (`id`, `name`, `input`), `text_delta` (`delta`), `result` (`result`, `usage`), and `error` (`message`/`error`).
+- **Stderr `AGY_ERROR:` Extraction:** On non-zero exit codes, scan `stderr` for lines prefixed with `AGY_ERROR: <detail>` (falling back to the `result.error` field or trimmed `stderr`), while keeping `agy_error=None` on exit `0`! Unwrapping nested `result` / `step_update` / `init` dicts and capturing `thinking_tokens` / `cache_read_tokens` ensures live `agy 1.5.15` output never collapses to empty `response_text=""` or `token_usage={}`.
 
 Control where the inner harness executes with **`AGY_EXECUTION_MODE`**:
-- **`local`:** Runs `agy` in the current process environment (laptop, CI runner, Cloud Workstations, or trusted **Agent Runtime** container authenticated via Custom SA ADC `AGY_ADC_AUTH=true` + `GOOGLE_CLOUD_LOCATION=global`).
-- **`sandbox`:** Delegates `agy -p ... --output-format stream-json --dangerously-skip-permissions` inside the gVisor **BYOC Managed Sandbox** via `AgentPlatformSandboxEnvironment.execute_with_env(...)` (with `execute(...)` fallback for environments without `execute_with_env`), passing only allowlisted ephemeral env keys into `/exec` (covered in [Lab 2](./02-LAB-CUSTOM-SANDBOX-BYOC.md)).
-- **`auto` *(default)*:** Uses `sandbox` when `SANDBOX_MODE=byoc` and sandbox `GET /health` confirms `agy_cli_available=True`, uses `local` when `agy` is on `PATH` (`shutil.which("agy")`), and **gracefully falls back** to native ADK 2.0 `LlmAgent` + `EnvironmentToolset` if `agy` is unavailable or the sandbox is air-gapped (`internet_access=False`).
+- **`local`:** Runs `agy` in the current process environment (laptop, CI runner, Cloud Workstations, or trusted **Agent Runtime** container authenticated via Custom SA ADC `AGY_ADC_AUTH=true` + non-numeric `AGY_PROJECT_ID` + `GOOGLE_CLOUD_LOCATION=global`).
+- **`sandbox`:** Delegates `agy -p ... --output-format stream-json --dangerously-skip-permissions` inside the gVisor **BYOC Managed Sandbox** via `AgentPlatformSandboxEnvironment.execute_with_env(...)` (with `execute(...)` fallback for environments without `execute_with_env`), passing only allowlisted ephemeral env keys into `/exec` (requires PSC-I egress + scoped ephemeral credentials; covered in [Lab 2](./02-LAB-CUSTOM-SANDBOX-BYOC.md)).
+- **`auto` *(default)*:** When `AGY_ADC_AUTH=true` and no BYOC `GEMINI_API_KEY`/egress override is supplied, **`auto` prefers `local`** (trusted laptop / Agent Runtime Custom SA ADC) while keeping untrusted `pytest`/`ruff`/`bandit` inside the air-gapped BYOC gVisor sandbox — because an air-gapped BYOC sandbox (`internet_access=False`, zero metadata server) exits `1` (`Error: authentication required`) if `agy` is invoked inside it without credentials/egress. When BYOC credentials/egress are explicitly supplied and `GET /health` confirms `agy_cli_available=True`, it uses `sandbox`; if `agy` is unavailable locally, it **gracefully falls back** to native ADK 2.0 `LlmAgent` + `EnvironmentToolset`.
 
 > [!CAUTION]
 > **Enterprise Auth & ToS Boundary (Mandatory Production Rule):**

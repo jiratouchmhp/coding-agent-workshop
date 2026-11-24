@@ -15,10 +15,10 @@
 #   2. BYOC Sandbox `GET /health` (local + live BYOC from Bangkok AR) + Shell Sandbox lifecycle (Singapore asia-southeast1 fallback)
 #   3. Managed Sessions + Memory Bank + Feedback Service (Singapore asia-southeast1 fallback)
 #   4. Disposable Vertex AI Skill Registry create+update (us-central1) +
-#      Agent Registry standalone skill two-step create+describe via `gcloud alpha` (global fallback)
-#   5. Isolated Terraform apply (Singapore asia-southeast1 fallback, Bangkok AR image, Gemini 4 vars) + live GET / & query check
+#      Agent Registry standalone skill create + rev-1 + default-revision promote/activate via `gcloud alpha` (global fallback)
+#   5. Isolated Terraform apply (Singapore asia-southeast1 fallback, Bangkok AR image, Gemini 4 + BYOC + Memory Bank + Skill Registry) + live :query & :streamQuery?alt=sse (Gemini 4 Hydrogen + BYOC `agy` check)
 #   6. Offline Evaluation (global) + Cloud Monitoring Quality Alert Policy
-#   7. Full Teardown + Verification that 0 dry-run resources remain
+#   7. Full Teardown + Verification that 0 dry-run resources remain (including SA & Secret)
 #
 # Safety Guardrails:
 #   - --project is REQUIRED.
@@ -85,30 +85,58 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --primary-region)
+      if [[ $# -lt 2 ]]; then
+        echo "ERROR: $1 requires a value." >&2
+        exit 2
+      fi
       PRIMARY_REG="$2"
       shift 2
       ;;
     --agent-location)
+      if [[ $# -lt 2 ]]; then
+        echo "ERROR: $1 requires a value." >&2
+        exit 2
+      fi
       AGENT_PLATFORM_LOC="$2"
       shift 2
       ;;
     --agent-registry-skills-location)
+      if [[ $# -lt 2 ]]; then
+        echo "ERROR: $1 requires a value." >&2
+        exit 2
+      fi
       AGENT_REG_SKILLS_LOC="$2"
       shift 2
       ;;
     --skill-registry-location)
+      if [[ $# -lt 2 ]]; then
+        echo "ERROR: $1 requires a value." >&2
+        exit 2
+      fi
       SKILL_REG_LOC="$2"
       shift 2
       ;;
     --eval-location)
+      if [[ $# -lt 2 ]]; then
+        echo "ERROR: $1 requires a value." >&2
+        exit 2
+      fi
       EVAL_LOC="$2"
       shift 2
       ;;
     --ar-repo)
+      if [[ $# -lt 2 ]]; then
+        echo "ERROR: $1 requires a value." >&2
+        exit 2
+      fi
       AR_REPO="$2"
       shift 2
       ;;
     --track)
+      if [[ $# -lt 2 ]]; then
+        echo "ERROR: $1 requires a value." >&2
+        exit 2
+      fi
       TRACK="$2"
       shift 2
       ;;
@@ -156,6 +184,9 @@ SHORT_TS="$(date +%m%d%H%M%S)"
 SKILL_ID="secure-code-review-${RUN_SUFFIX}"
 AGENT_REG_SKILL_NAME="private-${SKILL_ID}"
 TF_DISPLAY_NAME="coding-agent-${RUN_SUFFIX}"
+TF_SA_ID="ca-dr-${SHORT_TS}"
+TF_SA_EMAIL="${TF_SA_ID}@${PROJECT_ID}.iam.gserviceaccount.com"
+TF_SECRET_ID="coding-agent-key-${RUN_SUFFIX}"
 ALERT_DISPLAY_NAME="Coding Agent Quality Drift (${RUN_SUFFIX})"
 
 SANDBOX_IMG_URI="${AR_LOC}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/coding-sandbox:${RUN_SUFFIX}"
@@ -166,6 +197,7 @@ TF_WORK_DIR="${TMP_WORK_DIR}/terraform"
 
 # Track live resources created for guaranteed teardown
 TF_APPLIED=0
+TF_DESTROY_FAILED=0
 STANDALONE_ENGINE_NAME=""
 BYOC_TEMPLATE_NAME=""
 TF_ENGINE_NAME=""
@@ -209,8 +241,11 @@ run_teardown() {
   # 1. Destroy Terraform-managed Agent Runtime, SA, Secret, and IAM bindings
   if [[ "${TF_APPLIED}" -eq 1 && -d "${TF_WORK_DIR}" ]]; then
     log "Teardown [1/6]: terraform destroy in ${TF_WORK_DIR}"
-    terraform -chdir="${TF_WORK_DIR}" destroy -auto-approve \
-      -var-file="${TF_WORK_DIR}/e2e.tfvars" || warn "terraform destroy reported errors"
+    if ! terraform -chdir="${TF_WORK_DIR}" destroy -auto-approve \
+      -var-file="${TF_WORK_DIR}/e2e.tfvars"; then
+      TF_DESTROY_FAILED=1
+      warn "terraform destroy reported errors (will be surfaced in Stage 7 leak verification)"
+    fi
   fi
 
   # 2. Delete standalone Agent Platform instance (sandboxes -> snapshots -> templates + engine)
@@ -237,12 +272,26 @@ PYEOF
       sleep 5
     done
 
-    local token
+    local token del_code check_code del_resp
     token="$(gcloud auth print-access-token 2>/dev/null || true)"
     if [[ -n "${token}" ]]; then
-      curl -sS -o /dev/null -X DELETE \
+      del_resp="${TMP_WORK_DIR}/delete_standalone_engine.json"
+      del_code="$(curl -sS -o "${del_resp}" -w "%{http_code}" -X DELETE \
         -H "Authorization: Bearer ${token}" \
-        "https://${AGENT_PLATFORM_LOC}-aiplatform.googleapis.com/v1beta1/${STANDALONE_ENGINE_NAME}?force=true" || true
+        "https://${AGENT_PLATFORM_LOC}-aiplatform.googleapis.com/v1beta1/${STANDALONE_ENGINE_NAME}?force=true" || echo "000")"
+      if [[ "${del_code}" == "200" || "${del_code}" == "202" || "${del_code}" == "204" ]]; then
+        for _ in $(seq 1 12); do
+          check_code="$(curl -sS -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${token}" \
+            "https://${AGENT_PLATFORM_LOC}-aiplatform.googleapis.com/v1beta1/${STANDALONE_ENGINE_NAME}" || echo "000")"
+          if [[ "${check_code}" == "404" ]]; then
+            break
+          fi
+          sleep 5
+        done
+      elif [[ "${del_code}" != "404" ]]; then
+        warn "Unexpected HTTP ${del_code} deleting ${STANDALONE_ENGINE_NAME}: $(cat "${del_resp}" 2>/dev/null || true)"
+      fi
     fi
   fi
 
@@ -253,10 +302,17 @@ PYEOF
       --project="${PROJECT_ID}" --quiet >/dev/null 2>&1 || true
   fi
 
-  # 4. Delete Agent Registry standalone skill revisions first, then skill in AGENT_REG_SKILLS_LOC
+  # 4. Clear default revision, delete Agent Registry standalone skill revisions, then delete skill
   if [[ "${AGENT_REG_CREATED}" -eq 1 ]]; then
-    log "Teardown [4/6]: Deleting Agent Registry skill revisions & skill ${AGENT_REG_SKILL_NAME} (${AGENT_REG_SKILLS_LOC})"
-    local rev_list rev_full rev_short
+    log "Teardown [4/6]: Clearing default revision & deleting Agent Registry skill ${AGENT_REG_SKILL_NAME} (${AGENT_REG_SKILLS_LOC})"
+    local clear_out rev_list rev_full rev_short rev_del_out skill_del_out
+    if ! clear_out="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills update "${AGENT_REG_SKILL_NAME}" \
+      --clear-default-revision \
+      --target-state=disabled \
+      --project="${PROJECT_ID}" \
+      --location="${AGENT_REG_SKILLS_LOC}" </dev/null 2>&1)"; then
+      warn "Could not clear default revision for ${AGENT_REG_SKILL_NAME} (continuing): ${clear_out}"
+    fi
     rev_list="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills revisions list \
       --skill="${AGENT_REG_SKILL_NAME}" \
       --project="${PROJECT_ID}" \
@@ -266,17 +322,21 @@ PYEOF
       while IFS= read -r rev_full; do
         [[ -z "${rev_full}" ]] && continue
         rev_short="${rev_full##*/}"
-        CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills revisions delete "${rev_short}" \
+        if ! rev_del_out="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills revisions delete "${rev_short}" \
           --skill="${AGENT_REG_SKILL_NAME}" \
           --project="${PROJECT_ID}" \
           --location="${AGENT_REG_SKILLS_LOC}" \
-          --quiet </dev/null >/dev/null 2>&1 || true
+          --quiet </dev/null 2>&1)"; then
+          warn "Failed to delete Agent Registry revision ${rev_short} for ${AGENT_REG_SKILL_NAME}: ${rev_del_out}"
+        fi
       done <<< "${rev_list}"
     fi
-    CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills delete "${AGENT_REG_SKILL_NAME}" \
+    if ! skill_del_out="$(CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills delete "${AGENT_REG_SKILL_NAME}" \
       --project="${PROJECT_ID}" \
       --location="${AGENT_REG_SKILLS_LOC}" \
-      --quiet </dev/null >/dev/null 2>&1 || true
+      --quiet </dev/null 2>&1)"; then
+      warn "Failed to delete Agent Registry skill ${AGENT_REG_SKILL_NAME}: ${skill_del_out}"
+    fi
   fi
 
   # 5. Delete disposable Vertex AI Skill Registry skill in SKILL_REG_LOC
@@ -504,25 +564,103 @@ try:
             print(json.dumps({"skipped_reason": str(exc)}))
             sys.exit(0)
         raise
+
+    # agentplatform's Sandboxes.send_command() returns HttpResponse(body=..., headers=...)
+    # without calling raise_for_status(), so HTTP 401/403 without a signed SA token
+    # often yields an empty or non-JSON body instead of raising an exception.
+    status_code = getattr(resp, "status_code", None)
+    raw_headers = getattr(resp, "headers", None) or {}
+    headers_lower = (
+        {str(k).lower(): str(v) for k, v in raw_headers.items()}
+        if isinstance(raw_headers, dict)
+        else {}
+    )
     raw_body = getattr(resp, "body", resp)
     if isinstance(raw_body, bytes):
         raw_body = raw_body.decode("utf-8", errors="replace")
-    health = json.loads(raw_body) if isinstance(raw_body, str) else raw_body
+
+    if isinstance(raw_body, str):
+        stripped = raw_body.strip()
+        if not stripped:
+            if not sa_email and (
+                status_code in (401, 403, None)
+                or "www-authenticate" in headers_lower
+            ):
+                print(
+                    json.dumps(
+                        {
+                            "skipped_reason": (
+                                "BYOC data-plane returned empty response body without "
+                                f"SANDBOX_SERVICE_ACCOUNT_EMAIL (status_code={status_code!r}, "
+                                f"www-authenticate={headers_lower.get('www-authenticate', '')!r}); "
+                                "live BYOC data-plane auth is exercised in Stage 5 via the deployed Runtime SA."
+                            )
+                        }
+                    )
+                )
+                sys.exit(0)
+            raise AssertionError(
+                f"Live BYOC GET /health returned empty body (status_code={status_code!r}, headers={headers_lower!r})"
+            )
+        try:
+            health = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            if not sa_email and (
+                status_code in (401, 403, None)
+                or "www-authenticate" in headers_lower
+                or any(
+                    tok in stripped.upper()
+                    for tok in ("401", "403", "UNAUTHENTICATED", "UNAUTHORIZED", "PERMISSION_DENIED")
+                )
+            ):
+                print(
+                    json.dumps(
+                        {
+                            "skipped_reason": (
+                                "BYOC data-plane returned non-JSON auth response without "
+                                f"SANDBOX_SERVICE_ACCOUNT_EMAIL: {stripped[:200]!r}"
+                            )
+                        }
+                    )
+                )
+                sys.exit(0)
+            raise AssertionError(
+                f"Live BYOC GET /health returned non-JSON body ({exc}): {stripped[:300]!r}"
+            ) from exc
+    else:
+        health = raw_body
+
     assert isinstance(health, dict) and health.get("status") == "ok", (
         f"Unexpected live BYOC GET /health payload: {health!r}"
     )
     assert isinstance(health.get("agy_cli_available"), bool), (
         f"Live BYOC GET /health missing boolean 'agy_cli_available': {health!r}"
     )
-    print(json.dumps(health))
+
+    # Also probe POST /exec when data-plane authentication succeeded
+    exec_resp = sandboxes_ns.send_command(
+        http_method="POST",
+        path="exec",
+        access_token=token,
+        request_dict={"command": "echo byoc-exec-ok"},
+        sandbox_environment=sandbox_env,
+    )
+    exec_body = getattr(exec_resp, "body", exec_resp)
+    if isinstance(exec_body, bytes):
+        exec_body = exec_body.decode("utf-8", errors="replace")
+    exec_json = json.loads(exec_body) if isinstance(exec_body, str) and exec_body.strip() else exec_body
+    assert isinstance(exec_json, dict) and exec_json.get("returncode") == 0 and "byoc-exec-ok" in str(exec_json.get("stdout", "")), (
+        f"Unexpected live BYOC POST /exec payload: {exec_json!r}"
+    )
+    print(json.dumps({"health": health, "exec_stdout": str(exec_json.get("stdout", "")).strip()}))
 finally:
     mgr.delete_sandbox(sb.name, wait_for_completion=True)
 PYEOF
 )"
 if grep -q '"skipped_reason"' <<< "${BYOC_HEALTH_OUT}"; then
-  warn "Live BYOC data-plane GET /health skipped without SANDBOX_SERVICE_ACCOUNT_EMAIL (${BYOC_HEALTH_OUT}); local GET /health + agy_cli_available already verified."
+  warn "Live BYOC data-plane GET /health skipped without SANDBOX_SERVICE_ACCOUNT_EMAIL (${BYOC_HEALTH_OUT}); local GET /health + agy_cli_available verified, and Stage 5 exercises live BYOC via the deployed Runtime SA."
 else
-  pass "Live BYOC Sandbox GET /health verified in ${AGENT_PLATFORM_LOC} (${BYOC_HEALTH_OUT})"
+  pass "Live BYOC Sandbox GET /health + POST /exec verified in ${AGENT_PLATFORM_LOC} (${BYOC_HEALTH_OUT})"
 fi
 
 run_track_python -m coding_agent.tools.sandbox_lifecycle \
@@ -598,8 +736,9 @@ SKILL_DIR="${REPO_ROOT}/${TRACK}/skills_to_register/secure-code-review"
 SKILL_ZIP="${TMP_WORK_DIR}/secure-code-review-${RUN_SUFFIX}.zip"
 python3 "${REPO_ROOT}/scripts/package_registry_skill.py" \
   "${SKILL_DIR}" \
+  --agent-registry \
   --output "${SKILL_ZIP}" >/dev/null
-pass "Packaged validated 16-rule skill ZIP: ${SKILL_ZIP}"
+pass "Packaged validated 16-rule Agent Registry + Skill Registry skill ZIP: ${SKILL_ZIP}"
 
 # Vertex AI Skill Registry `local_path` requires a directory (auto-zipped by SDK)
 run_track_python -m coding_agent.tools.registry_loader \
@@ -621,31 +760,40 @@ run_track_python -m coding_agent.tools.registry_loader \
   --description "Updated disposable E2E dry-run skill (${RUN_SUFFIX})." >/dev/null
 pass "Updated disposable Vertex AI Skill Registry skill: ${SKILL_ID} (${SKILL_REG_LOC})"
 
-# Two-step Agent Registry standalone skill creation (gcloud alpha in global fallback):
+# Three-step Agent Registry standalone skill lifecycle (gcloud alpha in global fallback):
 # 1. Create bare skill container without --payload (works around gcloud alpha --payload drop bug)
-# 2. Upload initial revision `rev-1` (3+ chars required) with --payload=<zip>
+#    using --scanning-policy=enabled-nonblocking so immediate --default-revision promotion succeeds
+#    (production hardening in Lab 7 uses enabled-blocking and awaits async scan completion).
+# 2. Upload initial revision `rev-1` (3+ chars required) with --payload=<zip>.
+# 3. Promote `rev-1` as --default-revision and activate (--target-state=active) so ADK
+#    GCPSkillRegistry.get_skill() can download content cleanly in Stage 5 (DRAFT returns 400).
 CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills create "${SKILL_ID}" \
   --project="${PROJECT_ID}" \
   --location="${AGENT_REG_SKILLS_LOC}" \
   --display-name="Secure Code Review (${RUN_SUFFIX})" \
   --description="Disposable E2E dry-run standalone skill (${RUN_SUFFIX})." \
   --target-state=disabled \
-  --scanning-policy=enabled-blocking </dev/null >/dev/null
+  --scanning-policy=enabled-nonblocking </dev/null >/dev/null
 AGENT_REG_CREATED=1
 CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills revisions create rev-1 \
   --skill="${AGENT_REG_SKILL_NAME}" \
   --project="${PROJECT_ID}" \
   --location="${AGENT_REG_SKILLS_LOC}" \
   --payload="${SKILL_ZIP}" </dev/null >/dev/null
+CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills update "${AGENT_REG_SKILL_NAME}" \
+  --project="${PROJECT_ID}" \
+  --location="${AGENT_REG_SKILLS_LOC}" \
+  --default-revision="projects/${PROJECT_ID}/locations/${AGENT_REG_SKILLS_LOC}/skills/${AGENT_REG_SKILL_NAME}/revisions/rev-1" \
+  --target-state=active </dev/null >/dev/null
 CLOUDSDK_CORE_DISABLE_PROMPTS=1 gcloud alpha agent-registry skills describe "${AGENT_REG_SKILL_NAME}" \
   --project="${PROJECT_ID}" \
   --location="${AGENT_REG_SKILLS_LOC}" </dev/null >/dev/null
-pass "Created rev-1 and described Agent Registry standalone skill: ${AGENT_REG_SKILL_NAME} (${AGENT_REG_SKILLS_LOC})"
+pass "Created rev-1, promoted default revision, activated, and described Agent Registry skill: ${AGENT_REG_SKILL_NAME} (${AGENT_REG_SKILLS_LOC})"
 
 # -----------------------------------------------------------------------------
-# Stage 5: Terraform Apply (asia-southeast1) + Live GET / & Query Check
+# Stage 5: Terraform Apply (asia-southeast1) + Live :query & :streamQuery Checks
 # -----------------------------------------------------------------------------
-log "Stage 5: Deploying isolated Agent Runtime via Terraform (${AGENT_PLATFORM_LOC}) + Live health/query checks"
+log "Stage 5: Deploying isolated Agent Runtime via Terraform (${AGENT_PLATFORM_LOC}) + Live :query & :streamQuery checks"
 
 # Verify HTTP contract locally (GET / + POST /api/reasoning_engine with and without application/json)
 make -C "${REPO_ROOT}" TRACK="${TRACK}" test-agent-local
@@ -655,7 +803,7 @@ cp -R "${REPO_ROOT}/${TRACK}/terraform" "${TF_WORK_DIR}"
 rm -rf "${TF_WORK_DIR}/.terraform" "${TF_WORK_DIR}/terraform.tfstate" "${TF_WORK_DIR}/terraform.tfstate.backup"
 
 # Isolate ephemeral SA account_id (<=30 chars) & secret_id so E2E never collides with attendee state
-python3 - "${TF_WORK_DIR}/main.tf" "ca-dr-${SHORT_TS}" "coding-agent-key-${RUN_SUFFIX}" <<'PYEOF'
+python3 - "${TF_WORK_DIR}/main.tf" "${TF_SA_ID}" "${TF_SECRET_ID}" <<'PYEOF'
 import sys
 from pathlib import Path
 
@@ -682,8 +830,8 @@ reasoning_model_name    = "gemini-4-neon"
 model_location          = "global"
 thinking_level          = "MEDIUM"
 api_key_value           = "e2e-dryrun-placeholder-${RUN_SUFFIX}"
-enable_memory_bank      = false
-enable_skill_registry   = false
+enable_memory_bank      = true
+enable_skill_registry   = true
 skill_registry_location = "${SKILL_REG_LOC}"
 EOF
 
@@ -704,9 +852,9 @@ terraform -chdir="${TF_WORK_DIR}" apply -auto-approve -input=false -var-file="${
 
 TF_ENGINE_NAME="$(terraform -chdir="${TF_WORK_DIR}" output -raw reasoning_engine_resource_name)"
 TF_ENGINE_ID="$(terraform -chdir="${TF_WORK_DIR}" output -raw reasoning_engine_id)"
-pass "Terraform deployed Agent Runtime: ${TF_ENGINE_NAME} (id=${TF_ENGINE_ID})"
+pass "Terraform deployed Agent Runtime (BYOC + Memory Bank + Skill Registry + Gemini 4): ${TF_ENGINE_NAME} (id=${TF_ENGINE_ID})"
 
-# Verify deployed ReasoningEngine metadata & live :query endpoint
+# Verify deployed ReasoningEngine metadata & live :query / :streamQuery endpoints
 run_track_python eval/setup_online_monitor.py \
   --project "${PROJECT_ID}" \
   --agent-resource-name "${TF_ENGINE_NAME}" \
@@ -739,7 +887,128 @@ if [[ "${CREATE_SESS_HTTP_CODE}" != "200" ]]; then
   echo "ERROR: Live Agent Runtime :query (create_session) returned HTTP ${CREATE_SESS_HTTP_CODE}: $(cat "${CREATE_SESS_RESP_FILE}")" >&2
   exit 1
 fi
-pass "Live Agent Runtime :query (create_session) returned HTTP 200 (exercises Stage 7 deletion_policy=\"FORCE\")"
+STREAM_SESSION_ID="$(python3 - "${CREATE_SESS_RESP_FILE}" <<'PYEOF'
+import json, sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+out = data.get("output") if isinstance(data, dict) else None
+sid = ""
+if isinstance(out, dict):
+    sid = str(out.get("id") or out.get("session_id") or "")
+    if not sid and out.get("name"):
+        sid = str(out["name"]).rstrip("/").split("/")[-1]
+elif isinstance(out, str):
+    sid = out.rstrip("/").split("/")[-1]
+if not sid:
+    raise SystemExit(f"Could not extract session_id from create_session response: {data!r}")
+print(sid)
+PYEOF
+)"
+pass "Live Agent Runtime :query (create_session) returned HTTP 200 (session_id=${STREAM_SESSION_ID}; exercises Stage 7 deletion_policy=\"FORCE\")"
+
+# Live :streamQuery?alt=sse turn testing Gemini 4 Hydrogen + BYOC sandbox `agy` check
+STREAM_RESP_FILE="${TMP_WORK_DIR}/live_stream_query_resp.sse"
+STREAM_REQ_BODY="$(python3 - "e2e-smoke-${RUN_SUFFIX}" "${STREAM_SESSION_ID}" <<'PYEOF'
+import json, sys
+
+print(
+    json.dumps(
+        {
+            "class_method": "async_stream_query",
+            "input": {
+                "user_id": sys.argv[1],
+                "session_id": sys.argv[2],
+                "message": (
+                    "Use your sandbox Execute tool to run `whoami && which agy && agy --version` "
+                    "inside the BYOC sandbox, then reply concisely with the command output and E2E_STREAM_OK."
+                ),
+            },
+        }
+    )
+)
+PYEOF
+)"
+STREAM_HTTP_CODE="$(curl -sS --max-time 180 -o "${STREAM_RESP_FILE}" -w "%{http_code}" \
+  -X POST \
+  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "${STREAM_REQ_BODY}" \
+  "https://${AGENT_PLATFORM_LOC}-aiplatform.googleapis.com/v1beta1/${TF_ENGINE_NAME}:streamQuery?alt=sse")"
+if [[ "${STREAM_HTTP_CODE}" != "200" ]]; then
+  echo "ERROR: Live Agent Runtime :streamQuery?alt=sse returned HTTP ${STREAM_HTTP_CODE}: $(cat "${STREAM_RESP_FILE}")" >&2
+  exit 1
+fi
+STREAM_SUMMARY="$(python3 - "${STREAM_RESP_FILE}" <<'PYEOF'
+import json, sys
+from pathlib import Path
+
+raw = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+events = []
+for line in raw.splitlines():
+    stripped = line.strip()
+    if not stripped or stripped.startswith(":") or stripped.startswith("event:"):
+        continue
+    if stripped.startswith("data:"):
+        stripped = stripped[5:].strip()
+    if not stripped or stripped == "[DONE]":
+        continue
+    try:
+        events.append(json.loads(stripped))
+    except json.JSONDecodeError:
+        continue
+
+if not events:
+    raise SystemExit(f"No JSON event frames received from :streamQuery?alt=sse. Raw tail: {raw[-500:]!r}")
+
+for ev in events:
+    if isinstance(ev, dict) and ev.get("error"):
+        raise SystemExit(f"Streamed error frame from Agent Runtime: {ev['error']!r}")
+
+text_chunks = []
+tool_calls = 0
+tool_outputs = []
+
+
+def _walk(obj):
+    global tool_calls
+    if isinstance(obj, dict):
+        for key in ("function_call", "functionCall"):
+            if key in obj and obj[key]:
+                tool_calls += 1
+        for key in ("function_response", "functionResponse"):
+            if key in obj and obj[key]:
+                tool_outputs.append(json.dumps(obj[key], default=str))
+        if isinstance(obj.get("text"), str) and obj["text"].strip():
+            text_chunks.append(obj["text"])
+        for val in obj.values():
+            _walk(val)
+    elif isinstance(obj, list):
+        for item in obj:
+            _walk(item)
+
+
+_walk(events)
+
+combined_text = "\n".join(text_chunks).strip()
+combined_all = (combined_text + "\n" + "\n".join(tool_outputs)).lower()
+if not combined_text:
+    raise SystemExit(f"Empty model response text across {len(events)} SSE frames.")
+if tool_calls < 1 and not tool_outputs:
+    raise SystemExit(
+        f"Expected at least 1 BYOC sandbox tool call during :streamQuery turn (frames={len(events)}, text={combined_text[:200]!r})."
+    )
+if "appuser" not in combined_all or "agy" not in combined_all:
+    raise SystemExit(
+        f"BYOC sandbox agy/non-root verification missing expected markers ('appuser' and 'agy') in streamed turn. "
+        f"tool_calls={tool_calls}, text={combined_text[:300]!r}"
+    )
+
+preview = " ".join(combined_text.split())[:140]
+print(f"frames={len(events)}, tool_calls={tool_calls}, preview={preview!r}")
+PYEOF
+)"
+pass "Live Agent Runtime :streamQuery?alt=sse (Gemini 4 Hydrogen + BYOC sandbox agy check) succeeded (${STREAM_SUMMARY})"
 
 # -----------------------------------------------------------------------------
 # Stage 6: Offline Evaluation (global) + Cloud Monitoring Quality Alert Policy
@@ -774,9 +1043,14 @@ run_teardown
 LEAKS=0
 VERIFY_TOKEN="$(gcloud auth print-access-token)"
 
-# 7a. Verify 0 dry-run ReasoningEngines remain in AGENT_PLATFORM_LOC (allow brief LRO propagation)
+if [[ "${TF_DESTROY_FAILED}" -ne 0 ]]; then
+  warn "TEARDOWN FAILURE: terraform destroy returned a non-zero exit code in Stage 7"
+  LEAKS=$((LEAKS + 1))
+fi
+
+# 7a. Verify 0 dry-run ReasoningEngines remain in AGENT_PLATFORM_LOC (allow LRO propagation)
 REMAINING_ENGINES=1
-for _ in $(seq 1 6); do
+for _ in $(seq 1 12); do
   ENGINES_JSON="$(curl -sS -H "Authorization: Bearer ${VERIFY_TOKEN}" \
     "https://${AGENT_PLATFORM_LOC}-aiplatform.googleapis.com/v1beta1/projects/${PROJECT_ID}/locations/${AGENT_PLATFORM_LOC}/reasoningEngines")"
   REMAINING_ENGINES="$(ENGINES_JSON="${ENGINES_JSON}" python3 - "${RUN_SUFFIX}" <<'PYEOF'
@@ -867,6 +1141,28 @@ if [[ "${AR_REPO_CREATED}" -eq 1 ]]; then
   else
     warn "LEAK DETECTED: Disposable Artifact Registry repository ${AR_REPO} still present in ${AR_LOC}"
     LEAKS=$((LEAKS + 1))
+  fi
+fi
+
+# 7f. Verify ephemeral Terraform Runtime Service Account was destroyed
+if [[ "${TF_APPLIED}" -eq 1 ]]; then
+  if gcloud iam service-accounts describe "${TF_SA_EMAIL}" \
+    --project="${PROJECT_ID}" </dev/null >/dev/null 2>&1; then
+    warn "LEAK DETECTED: Ephemeral Terraform Service Account still present: ${TF_SA_EMAIL}"
+    LEAKS=$((LEAKS + 1))
+  else
+    pass "Verified ephemeral Terraform Service Account removed: ${TF_SA_EMAIL}"
+  fi
+fi
+
+# 7g. Verify ephemeral Terraform Secret Manager secret was destroyed
+if [[ "${TF_APPLIED}" -eq 1 ]]; then
+  if gcloud secrets describe "${TF_SECRET_ID}" \
+    --project="${PROJECT_ID}" </dev/null >/dev/null 2>&1; then
+    warn "LEAK DETECTED: Ephemeral Terraform Secret Manager secret still present: ${TF_SECRET_ID}"
+    LEAKS=$((LEAKS + 1))
+  else
+    pass "Verified ephemeral Terraform Secret Manager secret removed: ${TF_SECRET_ID}"
   fi
 fi
 

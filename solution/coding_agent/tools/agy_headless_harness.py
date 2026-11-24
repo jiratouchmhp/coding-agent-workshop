@@ -178,7 +178,7 @@ class AgyHeadlessConfig:
             "enable_sandbox": cfg.agy_enable_sandbox,
             "dangerously_skip_permissions": cfg.agy_skip_permissions,
             "adc_auth": cfg.agy_adc_auth,
-            "google_cloud_project": cfg.google_cloud_project,
+            "google_cloud_project": cfg.resolved_agy_project_id,
             "model_location": cfg.model_location,
             "working_dir": str(cfg.local_workspace_path),
         }
@@ -256,14 +256,24 @@ def _extract_usage_counts(raw_usage: Mapping[str, Any]) -> dict[str, int]:
         "input_tokens": ("input_tokens", "prompt_tokens", "promptTokenCount"),
         "output_tokens": ("output_tokens", "completion_tokens", "candidatesTokenCount"),
         "total_tokens": ("total_tokens", "totalTokenCount"),
-        "cached_tokens": ("cached_tokens", "cache_read_input_tokens", "cachedContentTokenCount"),
-        "thought_tokens": ("thought_tokens", "thoughtsTokenCount", "reasoning_tokens"),
+        "cached_tokens": (
+            "cached_tokens",
+            "cache_read_tokens",
+            "cache_read_input_tokens",
+            "cachedContentTokenCount",
+        ),
+        "thought_tokens": (
+            "thought_tokens",
+            "thinking_tokens",
+            "thoughtsTokenCount",
+            "reasoning_tokens",
+        ),
     }
     normalized: dict[str, int] = {}
     for canonical, aliases in key_aliases.items():
         for alias in aliases:
             val = raw_usage.get(alias)
-            if isinstance(val, (int, float)) and not isinstance(val, bool):
+            if isinstance(val, int | float) and not isinstance(val, bool):
                 normalized[canonical] = int(val)
                 break
     if "total_tokens" not in normalized and ("input_tokens" in normalized or "output_tokens" in normalized):
@@ -323,10 +333,11 @@ def _classify_exit_code(exit_code: int) -> tuple[str, bool, str]:
             False,
             (
                 "Antigravity CLI failed with exit code 1 (CLI/auth/transport fault). "
-                "Verify Application Default Credentials with AGY_ADC_AUTH=true, "
-                "GOOGLE_CLOUD_PROJECT, and GOOGLE_CLOUD_LOCATION=global (or run "
-                "`gcloud auth application-default login` locally). Never proxy a "
-                "developer's personal OAuth credentials in a multi-tenant service."
+                "Verify Application Default Credentials with AGY_ADC_AUTH=true, a non-numeric "
+                "string project ID (GOOGLE_CLOUD_PROJECT / AGY_PROJECT_ID on Agent Runtime), "
+                "and GOOGLE_CLOUD_LOCATION=global (or run `gcloud auth application-default "
+                "login` locally). Never proxy a developer's personal OAuth credentials in a "
+                "multi-tenant service."
             ),
         )
     if exit_code == AgyExitCode.UNSUPPORTED_COMMAND:
@@ -365,7 +376,14 @@ def parse_agy_stream_json(
     duration_ms: int = 0,
     command: list[str] | None = None,
 ) -> AgyRunResult:
-    """Parse NDJSON (``--output-format stream-json``) or plain output into ``AgyRunResult``."""
+    """Parse NDJSON (``--output-format stream-json``) or plain output into ``AgyRunResult``.
+
+    Supports BOTH flat dry-run/legacy events (``{"type": "session_start"|"tool_use"|"text_delta"|"result"|"error", ...}``)
+    AND real ``agy 1.5+`` nested envelopes:
+    - ``{"event": "init", "conversation_id": ..., "init": {"model": ...}}``
+    - ``{"event": "step_update", "step_update": {"step_type": ..., "text_delta": ..., "usage": {...}}}``
+    - ``{"event": "result", "result": {"conversation_id": ..., "status": "SUCCESS"|"ERROR", "response": ..., "error": ..., "usage": {...}}}``
+    """
     events: list[dict[str, Any]] = []
     stream_text_parts: list[str] = []
     final_result_text: str | None = None
@@ -375,6 +393,14 @@ def parse_agy_stream_json(
     token_usage: dict[str, int] = {}
     event_errors: list[str] = []
     detected_model = model
+
+    def _record_error_val(err_val: Any) -> None:
+        if isinstance(err_val, Mapping):
+            err_val = err_val.get("message") or json.dumps(dict(err_val))
+        if err_val:
+            text_err = str(err_val).strip()
+            if text_err and text_err not in event_errors:
+                event_errors.append(text_err)
 
     for raw_line in (stdout or "").splitlines():
         line = raw_line.strip()
@@ -392,28 +418,41 @@ def parse_agy_stream_json(
 
         events.append(obj)
 
-        for conv_key in ("conversation_id", "conversationId", "session_id", "sessionId"):
-            raw_cid = obj.get(conv_key)
-            if isinstance(raw_cid, str) and raw_cid.strip():
-                conversation_id = raw_cid.strip()
-                break
-        if conversation_id is None and isinstance(obj.get("metadata"), Mapping):
-            meta = obj["metadata"]
-            for conv_key in ("conversation_id", "conversationId", "session_id"):
-                raw_cid = meta.get(conv_key)
+        # Unwrap optional `agy 1.5+` nested envelope payloads (`init`, `step_update`, `result`).
+        nested_init = obj.get("init") if isinstance(obj.get("init"), Mapping) else None
+        nested_step = (
+            obj.get("step_update") if isinstance(obj.get("step_update"), Mapping) else None
+        )
+        nested_result = obj.get("result") if isinstance(obj.get("result"), Mapping) else None
+        meta_obj = obj.get("metadata") if isinstance(obj.get("metadata"), Mapping) else None
+
+        containers: list[Mapping[str, Any]] = [
+            c for c in (obj, nested_result, nested_step, nested_init, meta_obj) if c is not None
+        ]
+
+        for container in containers:
+            for conv_key in ("conversation_id", "conversationId", "session_id", "sessionId"):
+                raw_cid = container.get(conv_key)
                 if isinstance(raw_cid, str) and raw_cid.strip():
                     conversation_id = raw_cid.strip()
                     break
 
-        if not detected_model and isinstance(obj.get("model"), str) and obj["model"].strip():
-            detected_model = obj["model"].strip()
+        if not detected_model:
+            for container in containers:
+                raw_model = container.get("model")
+                if isinstance(raw_model, str) and raw_model.strip():
+                    detected_model = raw_model.strip()
+                    break
 
-        for usage_key in ("usage", "token_usage", "usageMetadata"):
-            raw_usage = obj.get(usage_key)
-            if isinstance(raw_usage, Mapping):
-                token_usage.update(_extract_usage_counts(raw_usage))
+        for container in (obj, nested_step, nested_result):
+            if container is None:
+                continue
+            for usage_key in ("usage", "token_usage", "usageMetadata"):
+                raw_usage = container.get(usage_key)
+                if isinstance(raw_usage, Mapping):
+                    token_usage.update(_extract_usage_counts(raw_usage))
 
-        event_type = str(obj.get("type", "")).lower()
+        event_type = str(obj.get("type") or obj.get("event") or "").lower()
 
         if event_type in {"tool_use", "tool_call", "function_call"}:
             tool_calls.append(
@@ -423,46 +462,92 @@ def parse_agy_stream_json(
                     "input": obj.get("input", obj.get("arguments", {})),
                 }
             )
-        elif isinstance(obj.get("tool_calls"), list):
-            for tc in obj["tool_calls"]:
-                if isinstance(tc, Mapping):
-                    tool_calls.append(
-                        {
-                            "name": str(tc.get("name", tc.get("tool", "unknown"))),
-                            "id": str(tc.get("id", "")),
-                            "input": tc.get("input", tc.get("arguments", {})),
-                        }
-                    )
+        elif nested_step is not None and str(nested_step.get("step_type", "")).lower() in {
+            "tool_use",
+            "tool_call",
+            "function_call",
+        }:
+            tool_calls.append(
+                {
+                    "name": str(
+                        nested_step.get("name", nested_step.get("tool_name", nested_step.get("tool", "unknown")))
+                    ),
+                    "id": str(nested_step.get("id", nested_step.get("call_id", ""))),
+                    "input": nested_step.get("input", nested_step.get("arguments", {})),
+                }
+            )
+
+        for container in (obj, nested_step, nested_result):
+            if container is not None and isinstance(container.get("tool_calls"), list):
+                for tc in container["tool_calls"]:
+                    if isinstance(tc, Mapping):
+                        tool_calls.append(
+                            {
+                                "name": str(tc.get("name", tc.get("tool", "unknown"))),
+                                "id": str(tc.get("id", "")),
+                                "input": tc.get("input", tc.get("arguments", {})),
+                            }
+                        )
 
         if event_type == "error" or obj.get("error"):
-            err_val = obj.get("error") or obj.get("message") or obj.get("detail")
-            if isinstance(err_val, Mapping):
-                err_val = err_val.get("message") or json.dumps(dict(err_val))
-            if err_val:
-                event_errors.append(str(err_val))
+            _record_error_val(obj.get("error") or obj.get("message") or obj.get("detail"))
+        if nested_step is not None and nested_step.get("error"):
+            _record_error_val(nested_step.get("error"))
+        if nested_result is not None:
+            if nested_result.get("error"):
+                _record_error_val(nested_result.get("error"))
+            elif str(nested_result.get("status", "")).upper() == "ERROR":
+                _record_error_val(
+                    nested_result.get("message")
+                    or nested_result.get("detail")
+                    or "agy result status=ERROR"
+                )
 
         if event_type in {"result", "final", "response"}:
-            candidate = obj.get("result") or obj.get("response") or obj.get("text")
-            if isinstance(candidate, str) and candidate.strip():
-                final_result_text = candidate.strip()
-            elif "content" in obj:
-                result_parts: list[str] = []
-                _extract_content_text_and_tools(obj["content"], result_parts, tool_calls)
-                if result_parts:
-                    final_result_text = "".join(result_parts).strip()
+            if nested_result is not None:
+                candidate = (
+                    nested_result.get("response")
+                    or nested_result.get("result")
+                    or nested_result.get("text")
+                )
+                if isinstance(candidate, str) and candidate.strip():
+                    final_result_text = candidate.strip()
+                elif "content" in nested_result:
+                    nested_parts: list[str] = []
+                    _extract_content_text_and_tools(
+                        nested_result["content"], nested_parts, tool_calls
+                    )
+                    if nested_parts:
+                        final_result_text = "".join(nested_parts).strip()
+            else:
+                candidate = obj.get("result") or obj.get("response") or obj.get("text")
+                if isinstance(candidate, str) and candidate.strip():
+                    final_result_text = candidate.strip()
+                elif "content" in obj:
+                    result_parts: list[str] = []
+                    _extract_content_text_and_tools(obj["content"], result_parts, tool_calls)
+                    if result_parts:
+                        final_result_text = "".join(result_parts).strip()
         else:
-            delta = obj.get("delta")
+            delta_source = nested_step if nested_step is not None else obj
+            delta = (
+                delta_source.get("text_delta")
+                if delta_source.get("text_delta") is not None
+                else delta_source.get("delta")
+            )
             if isinstance(delta, str) and delta:
                 stream_text_parts.append(delta)
             elif isinstance(delta, Mapping) and isinstance(delta.get("text"), str):
                 stream_text_parts.append(delta["text"])
-            elif isinstance(obj.get("text"), str) and obj["text"]:
-                stream_text_parts.append(obj["text"])
-            elif "content" in obj:
-                _extract_content_text_and_tools(obj["content"], stream_text_parts, tool_calls)
-            elif isinstance(obj.get("message"), Mapping):
+            elif isinstance(delta_source.get("text"), str) and delta_source["text"]:
+                stream_text_parts.append(delta_source["text"])
+            elif "content" in delta_source:
                 _extract_content_text_and_tools(
-                    obj["message"].get("content"),
+                    delta_source["content"], stream_text_parts, tool_calls
+                )
+            elif isinstance(delta_source.get("message"), Mapping):
+                _extract_content_text_and_tools(
+                    delta_source["message"].get("content"),
                     stream_text_parts,
                     tool_calls,
                 )
@@ -506,8 +591,27 @@ def build_local_agy_env(
         env["AGY_CLI_DISABLE_AUTO_UPDATE"] = "true"
     if config.adc_auth:
         env["AGY_ADC_AUTH"] = "true"
-    if config.google_cloud_project:
-        env["GOOGLE_CLOUD_PROJECT"] = config.google_cloud_project
+
+    # Prefer non-numeric string project IDs: Agent Runtime auto-injects the numeric
+    # project number into GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_QUOTA_PROJECT, which
+    # `agy` rejects with exit code 3 (`invalid project ID`).
+    candidate_project = config.google_cloud_project.strip()
+    if not candidate_project or candidate_project.isdigit():
+        env_agy_project = env.get("AGY_PROJECT_ID", "").strip()
+        if env_agy_project and not env_agy_project.isdigit():
+            candidate_project = env_agy_project
+
+    if candidate_project and not candidate_project.isdigit():
+        env["GOOGLE_CLOUD_PROJECT"] = candidate_project
+        env["GOOGLE_CLOUD_QUOTA_PROJECT"] = candidate_project
+    elif env.get("GOOGLE_CLOUD_PROJECT", "").strip().isdigit():
+        logger.warning(
+            "GOOGLE_CLOUD_PROJECT=%r is numeric (Agent Runtime default); `agy` rejects "
+            "numeric project IDs with exit code 3. Inject non-reserved `AGY_PROJECT_ID = var.project_id` "
+            "in terraform/main.tf so `agy` receives the string project ID.",
+            env.get("GOOGLE_CLOUD_PROJECT"),
+        )
+
     # Always route Gemini 4 inference inside `agy` to `config.model_location` (default: `global`)
     # even when the host Agent Runtime container runs in `asia-southeast1`.
     if config.model_location:
@@ -529,8 +633,10 @@ def build_sandbox_agy_env(
         env["AGY_CLI_DISABLE_AUTO_UPDATE"] = "true"
     if config.adc_auth:
         env["AGY_ADC_AUTH"] = "true"
-    if config.google_cloud_project:
-        env["GOOGLE_CLOUD_PROJECT"] = config.google_cloud_project
+    candidate_project = config.google_cloud_project.strip()
+    if candidate_project and not candidate_project.isdigit():
+        env["GOOGLE_CLOUD_PROJECT"] = candidate_project
+        env["GOOGLE_CLOUD_QUOTA_PROJECT"] = candidate_project
     if config.model_location:
         env["GOOGLE_CLOUD_LOCATION"] = config.model_location
 
@@ -629,8 +735,20 @@ class AgyHeadlessHarness:
         self,
         *,
         ctx: Any = None,
+        extra_sandbox_env: Mapping[str, str] | None = None,
     ) -> Literal["sandbox", "local", "unavailable"]:
-        """Resolve effective execution backend (``sandbox`` | ``local`` | ``unavailable``)."""
+        """Resolve effective execution backend (``sandbox`` | ``local`` | ``unavailable``).
+
+        In ``auto`` mode:
+        - When ``adc_auth=True`` and no explicit sandbox credential override (such as
+          ``GEMINI_API_KEY`` in ``extra_sandbox_env``) is supplied, prefer ``local``
+          (Agent Runtime Custom SA ADC / workstation ADC) instead of routing ``agy``
+          into an air-gapped gVisor BYOC sandbox (which blocks the metadata server and
+          exits 1 with authentication required). Untrusted ``pytest`` / ``ruff`` checks
+          still execute inside the isolated BYOC sandbox.
+        - When explicit sandbox credentials are supplied (or ``adc_auth=False``), prefer
+          the BYOC sandbox when ``SANDBOX_MODE=byoc`` and ``/health`` reports ``agy``.
+        """
         requested = self.config.execution_mode
         if requested == "sandbox":
             if self.sandbox_env is not None and await self._probe_sandbox_agy_available(ctx=ctx):
@@ -641,17 +759,25 @@ class AgyHeadlessHarness:
             return "local" if self._local_agy_available() else "unavailable"
 
         # Auto mode:
-        # 1. Prefer isolated BYOC Managed Sandbox when SANDBOX_MODE=byoc and /health reports agy.
+        # 1. With ADC auth and no BYOC GEMINI_API_KEY override, prefer local/Agent Runtime
+        #    `agy` (Custom SA ADC) over an air-gapped BYOC gVisor sandbox without metadata.
+        has_sandbox_creds = bool(extra_sandbox_env and extra_sandbox_env.get("GEMINI_API_KEY"))
+        if self.config.adc_auth and not has_sandbox_creds:
+            if self._local_agy_available():
+                return "local"
+            return "unavailable"
+
+        # 2. Otherwise prefer isolated BYOC Managed Sandbox when SANDBOX_MODE=byoc and /health reports agy.
         if (
             self._settings.sandbox_mode == "byoc"
             and self.sandbox_env is not None
             and await self._probe_sandbox_agy_available(ctx=ctx)
         ):
             return "sandbox"
-        # 2. Otherwise use local/Agent Runtime `agy` when installed on PATH.
+        # 3. Otherwise use local/Agent Runtime `agy` when installed on PATH.
         if self._local_agy_available():
             return "local"
-        # 3. Caller falls back gracefully to native ADK 2.0 LlmAgent + EnvironmentToolset.
+        # 4. Caller falls back gracefully to native ADK 2.0 LlmAgent + EnvironmentToolset.
         return "unavailable"
 
     def simulate_dry_run(
@@ -872,7 +998,10 @@ class AgyHeadlessHarness:
                 _record_span_attributes(span, result, run_cfg)
                 return result
 
-            mode = await self.resolve_execution_mode(ctx=ctx)
+            mode = await self.resolve_execution_mode(
+                ctx=ctx,
+                extra_sandbox_env=extra_sandbox_env,
+            )
             if mode == "sandbox":
                 result = await self._run_in_sandbox(
                     prompt,

@@ -168,8 +168,9 @@ looping_workflow = Workflow(
 )
 ```
 
-- **Mandatory Routed Edge:** Every cycle in `edges` **must contain at least one conditional (routed) edge** — an unconditional cycle is rejected at `Workflow` construction time.
+- **Mandatory Routed Edge:** Every cycle in `edges` **must contain at least one conditional (routed) edge** — an unconditional cycle is rejected at `Workflow` construction time. Always include `DEFAULT_ROUTE` (`from google.adk.workflow import DEFAULT_ROUTE`) in partial routing maps.
 - **CRITICAL Unbounded Cycle Warning:** ADK does **NOT** automatically bound graph cycles. You must enforce an explicit termination check (like `attempts >= 3` above) OR use a **Dynamic workflow** (Section 6) where your Python `for`/`while` loop controls the iteration cap directly.
+- **Reset Per-Turn Loop Counters for Multi-Turn Sessions:** Session state persists across user turns in the same session. Always reset per-turn counters (e.g., `Event(output=..., state={"loop_attempts": 0, "fix_attempts": 0})`) in your terminal node so the next user message in the same session gets a fresh retry budget. (For workspace test checks using `pytest`, treat exit code `5` — *no tests collected* — as non-fatal when linting/testing new repositories without tests yet.)
 
 ---
 
@@ -211,7 +212,8 @@ async def emit_progress_and_data(node_input: str):
 | *(none)* | — | Persists for the lifetime of the current session |
 
 - **Lightweight Key-Value Store Only:** Never store large files, diffs, or binary payloads in `state` — use **ADK Artifacts** or external DB tools instead.
-- **Prefer `Event(output=...)` Over State** for direct predecessor-to-successor data flow. Reserve `state` for values that must outlive a step, be read by tools/callbacks, or populate `{key}` instruction templates.
+- **Prefer `Event(output=...)` Over State** for direct predecessor-to-successor data flow. Reserve `state` for values that must outlive a step, cross a `JoinNode` + `RequestInput` HITL boundary, be read by tools/callbacks, or populate `{key}` instruction templates.
+- **ADK 2.0 `State` API Contract (`google.adk.sessions.state.State`):** `ctx.state` is a `State` object (not a plain `dict`). It supports `.get()`, `.setdefault()`, `.update()`, `.to_dict()`, `.has_delta()`, `in`, `[]`, and iteration, but does **NOT** implement `.pop()`, `.keys()`, `.items()`, `.values()`, `__delitem__`, or `__len__` (calling `ctx.state.pop(...)` raises `AttributeError`). Clear keys via `ctx.state[key] = None` or `Event(state={key: ""})`.
 
 ### 3.3 Pydantic Schemas & Instruction Templating (Critical Python vs. TS Contrast!)
 
@@ -296,12 +298,13 @@ root_agent = Workflow(
 )
 ```
 
-**Three Essential Graph HITL Rules:**
+**Four Essential Graph HITL Rules:**
 1. **`response_schema` Does NOT Reformat Human Replies:** The user's reply **must already conform** to `response_schema`. For natural-language UX, either render a structured form in the client UI (in TS, the schema travels as `functionCall.args.response_schema`) OR place a downstream `LlmAgent` node after the pause to parse free-form text into the schema.
 2. **`rerun_on_resume=False` vs. `rerun_on_resume=True`:**
    - **`False` (leaf default — handoff mode):** The interrupted node does **not** re-run on resume; the user's reply becomes its output and flows straight to the successor node.
    - **`True` (re-entry mode):** The node body re-runs from the top on resume. **Mandatory** for any dynamic orchestrator calling `ctx.run_node()` (so already-finished children replay from checkpoints) and in Go for nodes using `workflow.ResumeOrRequestInput`.
-3. **Go Contrast:** Leaf handoff emits `workflow.NewRequestInputEvent(ctx, session.RequestInput{ InterruptID, Message, Payload, ResponseSchema })` and returns `workflow.ErrNodeInterrupted`. Re-entry sets `NodeConfig{ RerunOnResume: &true }` and calls `workflow.ResumeOrRequestInput(...)`.
+3. **Carrying Upstream Context Across `JoinNode` + `RequestInput` (`rerun_on_resume=False`):** Because handoff mode replaces the post-HITL node's `node_input` with the human's reply (discarding the pre-HITL summary payload from `node_input`), attach `output_key="coder_summary"` on your upstream `LlmAgent` and persist check findings in `Event(state={"latest_findings": ...})` before pausing. In the post-HITL terminal node, read the persisted summary/findings back from `ctx.state`, combine with the human reply (`node_input`), and reset per-turn loop counters in the terminal `Event(state={"fix_attempts": 0})`!
+4. **Go Contrast:** Leaf handoff emits `workflow.NewRequestInputEvent(ctx, session.RequestInput{ InterruptID, Message, Payload, ResponseSchema })` and returns `workflow.ErrNodeInterrupted`. Re-entry sets `NodeConfig{ RerunOnResume: &true }` and calls `workflow.ResumeOrRequestInput(...)`.
 
 ### 4.2 LLM-Agent-Level Tool Confirmation (Separate Mechanism)
 

@@ -2,4 +2,4 @@
 
 from __future__ import annotations
 
-__all__ = ["registry_loader", "sandbox_execution", "sandbox_lifecycle"]
+__all__ = ["agy_headless_harness", "registry_loader", "sandbox_execution", "sandbox_lifecycle"]

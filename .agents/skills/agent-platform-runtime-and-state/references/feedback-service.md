@@ -36,7 +36,7 @@ os.environ["GOOGLE_GENAI_USE_ENTERPRISE"] = "TRUE"
 client = agentplatform.Client(project="PROJECT_ID", location="asia-southeast1")
 engine_name = "projects/PROJECT_ID/locations/asia-southeast1/reasoningEngines/AGENT_ENGINE_ID"
 
-# 1. Create feedback entry (returns LRO)
+# 1. Create feedback entry (returns LRO; wait_for_completion=True is the SDK default)
 # IMPORTANT: `event_id` MUST match the OTel span UUID `gcp.vertex.agent.event_id`
 # (or `raw_event.id` in Managed Sessions) to render in the Console Traces UI.
 create_op = client.feedback_entries.create(
@@ -52,7 +52,9 @@ create_op = client.feedback_entries.create(
         "custom_metadata": {"model_name": "gemini-4-hydrogen", "thinking_level": "MEDIUM", "revision": "rev-42"},
     },
 )
-entry_name = create_op.response.name  # .../feedbackEntries/FEEDBACK_ENTRY_ID
+# None-safe LRO extraction (Pydantic operation models always have a `.response` attribute, which may be None)
+resp = getattr(create_op, "response", None)
+entry_name = resp.name if (resp is not None and getattr(resp, "name", None)) else create_op.name  # .../feedbackEntries/FEEDBACK_ENTRY_ID
 
 # 2. Get feedback entry
 entry = client.feedback_entries.get(name=entry_name)

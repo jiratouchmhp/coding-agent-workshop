@@ -114,16 +114,18 @@ Open [`starter/coding_agent/memory/session_manager.py`](../starter/coding_agent/
 ADK's `VertexAiSessionService` seamlessly persists conversation turns and `state_delta` updates into Managed Sessions while falling back to `InMemorySessionService` during offline local development:
 
 ```python
+import os
 from google.adk.sessions import BaseSessionService, InMemorySessionService, VertexAiSessionService
 
 
 def build_adk_session_service(
-    project_id: str | None,
-    location: str,
-    agent_engine_id: str | None,
+    project_id: str | None = None,
+    location: str = "asia-southeast1",
+    agent_engine_id: str | None = None,
 ) -> BaseSessionService:
     """Return VertexAiSessionService when configured, else InMemorySessionService."""
     if project_id and agent_engine_id:
+        os.environ.setdefault("GOOGLE_GENAI_USE_ENTERPRISE", "TRUE")
         return VertexAiSessionService(
             project=project_id,
             location=location,
@@ -174,13 +176,22 @@ class SessionLifecycleManager:
         self,
         user_id: str,
         session_id: str | None = None,
-        ttl_days: int = 10,
+        ttl_days: int | None = 10,
+        expire_time: datetime.datetime | None = None,
     ) -> str:
         """Create a managed session and return its canonical resource name."""
+        if ttl_days is not None and expire_time is not None:
+            raise ValueError("Specify either ttl_days or expire_time, not both.")
+
         # Verified for google-cloud-agentplatform==2.10.0:
         # `session_id` MUST go inside `config={}` (CreateRuntimeSessionConfig),
         # NOT as a top-level kwarg to `client.sessions.create()`.
-        config: dict[str, object] = {"ttl": f"{ttl_days * 24 * 60 * 60}s"}
+        # (`wait_for_completion` defaults to True in CreateRuntimeSessionConfig.)
+        config: dict[str, object] = {}
+        if ttl_days is not None:
+            config["ttl"] = f"{ttl_days * 24 * 60 * 60}s"
+        elif expire_time is not None:
+            config["expire_time"] = expire_time
         if session_id:
             config["session_id"] = session_id
 
@@ -189,9 +200,12 @@ class SessionLifecycleManager:
             user_id=user_id,
             config=config,
         )
-        # Verified SDK gotcha: some SDK flows return an LRO (.response.name),
-        # while others return the Session object directly (.name). Handle both!
-        return session_op.response.name if hasattr(session_op, "response") else session_op.name
+        # CRITICAL None-safe LRO guard (google-cloud-agentplatform==2.10.0):
+        # RuntimeSessionOperation is a Pydantic model with `response: Optional[Session] = None`,
+        # so `hasattr(session_op, "response")` is ALWAYS True and crashes with AttributeError
+        # when `response` is None! Always check `resp is not None` (pre-filled `_extract_session_name()`).
+        resp = getattr(session_op, "response", None)
+        return resp.name if (resp is not None and getattr(resp, "name", None)) else session_op.name
 
     def get_session(self, session_name: str):
         # Verified for google-cloud-agentplatform==2.10.0:
@@ -249,9 +263,10 @@ class SessionLifecycleManager:
 
 > [!NOTE]
 > **Verified `agentplatform==2.10.0` SDK & Upstream Doc Quirks to Avoid:**
-> 1. **`sessions.create` & `sessions.get` Signatures:** In `google-cloud-agentplatform==2.10.0`, passing `session_id=` as a top-level kwarg to `client.sessions.create()` raises `TypeError` — pass it inside `config={"session_id": ...}`. Likewise, `client.sessions.get(name=...)` accepts only `name` and optional `config` (no `user_id=` kwarg).
-> 2. **`name=` vs. `resource_name=`:** One ADK Managed Sessions doc snippet writes `client.runtimes.update(resource_name=...)` — the verified parameter name across the SDK is **`name=`**.
-> 3. **REST `appendEvent` Doc Bug:** The REST tab for "Append an event to a session" in `sessions/manage-with-api` accidentally copy-pastes the `POST .../sessions` create payload — use `client.sessions.events.append(...)` in Python.
+> 1. **`sessions.create`, `sessions.get` & `wait_for_completion` Defaults:** In `google-cloud-agentplatform==2.10.0`, passing `session_id=` as a top-level kwarg to `client.sessions.create()` raises `TypeError` — pass it inside `config={"session_id": ...}`. Likewise, `client.sessions.get(name=...)` accepts only `name` and optional `config` (no `user_id=` kwarg). Note that `wait_for_completion` defaults to **`True`** across `CreateRuntimeSessionConfig`, `GenerateMemoriesConfig`, and `CreateRuntimeFeedbackEntryConfig`.
+> 2. **None-Safe `RuntimeSessionOperation.response` Check:** Because `RuntimeSessionOperation` is a Pydantic model with `response: Optional[Session] = None`, `hasattr(session_op, "response")` is always `True` even when `response` is `None`. Always use `resp = getattr(session_op, "response", None)` (or pre-filled `_extract_session_name(session_op)`).
+> 3. **`name=` vs. `resource_name=`:** One ADK Managed Sessions doc snippet writes `client.runtimes.update(resource_name=...)` — the verified parameter name across the SDK is **`name=`**.
+> 4. **REST `appendEvent` Doc Bug:** The REST tab for "Append an event to a session" in `sessions/manage-with-api` accidentally copy-pastes the `POST .../sessions` create payload — use `client.sessions.events.append(...)` in Python.
 
 > [!NOTE]
 > **Multi-Tenant Isolation, CMEK & VPC-SC (Optional Lab 7):** For multi-tenant `sessionUserId` IAM Conditions (`roles/aiplatform.sessionViewer` / `sessionEditor` / `sessionUser`), `ListSessions` proxy limits, and CMEK/VPC-SC encryption controls, see [Lab 7 (Optional): Enterprise Security & Governance Hardening](./07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md).
@@ -407,7 +422,7 @@ managed_semantic_memory_config = {
    ```
 
    > [!TIP]
-   > **Pairing Multi-Regional (`us`/`eu`) or `global` Memory Bank with Regional (`asia-southeast1`) Agent Runtime:** Keep Memory Bank collocated in Singapore (`asia-southeast1`) for lowest latency, or pass a `memory_service_builder` callable to `AdkApp(agent=root_agent, memory_service_builder=...)` returning `VertexAiMemoryBankService(project=..., location="global", agent_engine_id=MEMORY_BANK_ID)` when sharing long-term memories across regions.
+   > **Pairing Multi-Regional (`us`/`eu`) or `global` Memory Bank with Regional (`asia-southeast1`) Agent Runtime:** Keep Memory Bank collocated in Singapore (`asia-southeast1`) for lowest latency, or pass a `memory_service_builder` callable to `AdkApp(agent=root_agent, memory_service_builder=...)` returning `VertexAiMemoryBankService(project=..., location="global", agent_engine_id=MEMORY_BANK_ID)` when sharing long-term memories across regions. *(Deployed runtime `:query` note: `AdkApp.async_search_memory` accepts `(user_id, query)` only — passing `app_name` raises `TypeError`!)*
 
 ### Step B3: Implement `generate_memories_from_session()` & `retrieve_similar_memories()` (Plus Pre-Filled Helpers)
 
@@ -418,7 +433,47 @@ Complete the **2 `# TODO(lab-3)` methods** in `MemoryBankManager` — **`generat
 - **Avoid Direct `memories.create()` for Conversation Facts:** `memories.create()` bypasses extraction and consolidation and can introduce duplicate or conflicting memories — prefer `memories.generate()` or streaming `client.memory_banks.ingest_events(...)` (which buffers by `(scope, stream_id)`, deduplicates by `event_id`, auto-flushes after 24h, and uses `idle_duration` / `fixed_interval` multiples of 60s; note default merge strategy in `ingest_events` is `OVERWRITE` vs `MERGE` in `generate`).
 
 ```python
-# 1. Generate memories from a Managed Session or inline direct_contents_source
+# 1a. TODO(lab-3): Generate memories from a Managed Session (`vertex_session_source`)
+# Note: `scope` is optional when `vertex_session_source` is provided (Memory Bank derives
+# it from the session if omitted); pass explicit `scope` or `user_id` to override.
+def generate_memories_from_session(
+    self,
+    session_name: str,
+    user_id: str | None = None,
+    *,
+    scope: dict[str, str] | None = None,
+    start_time: datetime.datetime | None = None,
+    end_time: datetime.datetime | None = None,
+    wait_for_completion: bool = True,
+    allowed_topics: list[dict[str, str]] | None = None,
+    metadata: dict[str, object] | None = None,
+    metadata_merge_strategy: str = "MERGE",
+):
+    session_source: dict[str, object] = {"session": session_name}
+    if start_time is not None:
+        session_source["start_time"] = start_time
+    if end_time is not None:
+        session_source["end_time"] = end_time
+
+    resolved_scope = dict(scope) if scope else ({"user_id": user_id} if user_id else None)
+    config: dict[str, object] = {"wait_for_completion": wait_for_completion}
+    if allowed_topics:
+        config["allowed_topics"] = allowed_topics
+    if metadata:
+        config["metadata"] = metadata
+        config["metadata_merge_strategy"] = metadata_merge_strategy
+
+    kwargs: dict[str, object] = {
+        "name": self._memory_bank_name,
+        "vertex_session_source": session_source,
+        "config": config,
+    }
+    if resolved_scope is not None:
+        kwargs["scope"] = resolved_scope
+    return self._client.memory_banks.memories.generate(**kwargs)
+
+
+# 1b. Pre-filled companion helper: Generate memories from inline `direct_contents_source`
 def generate_memories_from_text(
     self,
     user_id: str,
@@ -566,7 +621,55 @@ def build_reasoning_engine_logger(project_id: str, location: str, log_id: str = 
 Inside `after_tool_callback`:
 1. Compute `duration_ms` from the start timestamp stored in `tool_context.state` by `before_tool_callback`.
 2. Attach OTel attributes (`coding_agent.tool.name`, `coding_agent.tool.duration_ms`, `coding_agent.sandbox.exit_code`) to `trace.get_current_span()`.
-3. Call `logger.log_struct({...}, severity="INFO" if exit_code == 0 else "WARNING")` with truncated, secret-redacted `stdout` / `stderr` previews so sandbox execution outputs appear cleanly in Cloud Logging under `resource.type="aiplatform.googleapis.com/ReasoningEngine"`.
+3. Call `_emit_structured_tool_log(...)` (`logger.log_struct({...}, severity="INFO" if exit_code in (None, 0) else "WARNING")`) with truncated, secret-redacted `stdout` / `stderr` previews so sandbox execution outputs appear cleanly in Cloud Logging under `resource.type="aiplatform.googleapis.com/ReasoningEngine"`.
+
+> [!CAUTION]
+> **ADK 2.0 `ToolContext.state` Does NOT Implement `dict.pop()`!**
+> In `google-adk==2.15.0`, `google.adk.sessions.state.State` implements `.get()`, `.setdefault()`, `.update()`, `.to_dict()`, `__contains__`, `__getitem__`, `__setitem__`, and `__iter__`, but does **NOT** implement `.pop()`. Calling `tool_context.state.pop(key, None)` immediately raises `AttributeError: 'State' object has no attribute 'pop'`! Always read with `state.get(key)` and clear with `state[key] = None`:
+
+```python
+def after_tool_callback(
+    tool,
+    args: dict,
+    tool_context,
+    tool_response,
+    *,
+    cloud_logger=None,
+    preview_max_chars: int = 1000,
+) -> dict | None:
+    tool_name = getattr(tool, "name", None) or getattr(tool, "__name__", str(tool))
+    state = getattr(tool_context, "state", None)
+    start_key = f"temp:tool_start:{tool_name}"
+    start_ts = state.get(start_key) if state is not None else None
+    if state is not None and start_ts is not None:
+        state[start_key] = None  # NEVER call state.pop() — ADK 2.0 State has no .pop()!
+
+    duration_ms = round((time.perf_counter() - float(start_ts)) * 1000.0, 2) if start_ts is not None else 0.0
+    stdout, stderr, exit_code, timed_out = _extract_tool_execution_fields(tool_response)
+
+    span = trace.get_current_span()
+    if span is not None and span.is_recording():
+        span.set_attribute("coding_agent.tool.name", tool_name)
+        span.set_attribute("coding_agent.tool.duration_ms", duration_ms)
+        if exit_code is not None:
+            span.set_attribute("coding_agent.sandbox.exit_code", int(exit_code))
+
+    severity = "INFO" if exit_code in (None, 0) and not timed_out else "WARNING"
+    _emit_structured_tool_log(
+        payload={
+            "event": "sandbox_tool_execution",
+            "tool_name": tool_name,
+            "duration_ms": duration_ms,
+            "exit_code": exit_code,
+            "timed_out": timed_out,
+            "stdout_preview": redact_and_truncate_preview(stdout, max_chars=preview_max_chars),
+            "stderr_preview": redact_and_truncate_preview(stderr, max_chars=preview_max_chars),
+        },
+        severity=severity,
+        cloud_logger=cloud_logger,
+    )
+    return None
+```
 
 Query your structured logs from Cloud Logging *(live entries populate as soon as you deploy the runtime in [Lab 5](./05-LAB-DEPLOY-RUNTIME-TERRAFORM.md); smoke-test the callbacks locally now with `--offline-check` in Step C5)*:
 
@@ -630,14 +733,26 @@ class FeedbackClient:
         self,
         session_id: str,
         event_id: str,
-        feedback_type: str,
-        feedback_text: str,
-        feedback_labels: list[str],
-        user_id: str,
+        feedback_type: str = "THUMBS_UP",
+        feedback_text: str = "",
+        feedback_labels: list[str] | None = None,
+        user_id: str = "",
         source: str = "Workshop IDE",
         custom_metadata: dict[str, str] | None = None,
+        *,
+        score: float | None = None,
+        trace_id: str | None = None,
     ) -> str:
         """Create a feedback entry linked to session_id + gcp.vertex.agent.event_id."""
+        merged_metadata: dict[str, str] = {
+            str(k): str(v) for k, v in (custom_metadata or {}).items()
+        }
+        if score is not None:
+            merged_metadata["score"] = str(score)
+        resolved_trace_id = trace_id or _current_trace_id()
+        if resolved_trace_id:
+            merged_metadata.setdefault("trace_id", resolved_trace_id)
+
         op = self._client.feedback_entries.create(
             name=self._runtime_name,
             session_id=session_id,
@@ -645,13 +760,13 @@ class FeedbackClient:
             feedback_type=feedback_type,
             config={
                 "feedback_text": feedback_text,
-                "feedback_labels": feedback_labels,
+                "feedback_labels": list(feedback_labels or []),
                 "user_id": user_id,
                 "source": source,
-                "custom_metadata": custom_metadata or {},
+                "custom_metadata": merged_metadata,
             },
         )
-        return op.response.name  # .../feedbackEntries/FEEDBACK_ENTRY_ID
+        return _extract_entry_name(op)  # None-safe extraction of .../feedbackEntries/FEEDBACK_ENTRY_ID
 
     def attach_context_snapshot(self, entry_name: str, context_events: list[dict]):
         """Preserve transcript context even if the original Managed Session expires."""
@@ -692,8 +807,8 @@ class FeedbackClient:
 ### Step C5: Wire Lab 3 Callbacks & Memory Tool into `starter/coding_agent/agent.py`
 
 Open [`starter/coding_agent/agent.py`](../starter/coding_agent/agent.py) and complete `# TODO(lab-3)` inside `_build_optional_callbacks()` (compare with [`solution/coding_agent/agent.py`](../solution/coding_agent/agent.py)):
-1. When `settings.enable_telemetry_callbacks` is `True`, attach `before_tool_callback` and `after_tool_callback` from `coding_agent.callbacks.telemetry_and_feedback`.
-2. When `settings.enable_memory_bank` is `True`, append `PreloadMemoryTool()` to `callbacks["extra_tools"]` and wire `persist_turn_to_memory_callback` as `callbacks["after_agent_callback"]`.
+1. When `settings.enable_telemetry_callbacks` is `True`, attach `before_tool_callback` and `after_tool_callback` imported from `coding_agent.callbacks.telemetry_and_feedback`.
+2. When `settings.enable_memory_bank` is `True`, import `PreloadMemoryTool` from **`google.adk.tools.preload_memory_tool`** and `persist_turn_to_memory_callback` from **`coding_agent.memory.memory_bank_manager`**, append `PreloadMemoryTool()` to `callbacks["extra_tools"]`, and wire `persist_turn_to_memory_callback` as `callbacks["after_agent_callback"]`.
 
 You can run offline smoke checks on `session_manager` and `telemetry_and_feedback` directly (`cd starter && uv run python -m coding_agent.memory.session_manager --offline-check` and `uv run python -m coding_agent.callbacks.telemetry_and_feedback --offline-check`). Once you deploy your complete agent in [Lab 5](./05-LAB-DEPLOY-RUNTIME-TERRAFORM.md), these callbacks and `FeedbackClient` automatically correlate with live Cloud Trace spans and [Lab 6](./06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md) Online Evaluation Monitors!
 

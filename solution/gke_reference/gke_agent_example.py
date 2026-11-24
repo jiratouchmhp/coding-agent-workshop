@@ -12,6 +12,19 @@ Verified against:
 Optional dependencies (not installed by default in ``solution/pyproject.toml``):
 - ADK GKE executor: ``pip install "google-adk[extensions]"``
 - Standalone warm-pool Python SDK: ``pip install k8s-agent-sandbox==1.0.6``
+
+IMPORTANT SDK COMPATIBILITY NOTE:
+``google-adk==2.15.0``'s ``GkeCodeExecutor._execute_in_sandbox()`` uses the pre-1.0
+``k8s-agent-sandbox`` context-manager API, which conflicts with ``k8s-agent-sandbox==1.0.6``
+if both are installed in the same virtual environment. Keep ADK ``GkeCodeExecutor`` and
+the standalone ``k8s-agent-sandbox==1.0.6`` warm-pool SDK in separate virtual environments
+until ADK migrates to ``k8s-agent-sandbox`` v1.x.
+
+Production namespace note:
+The workshop defaults to ``agent-sandbox-system`` for single-namespace convenience, but
+``secure-sandbox-policy`` ValidatingAdmissionPolicy excludes controller namespaces by
+default. For production clusters, deploy templates/warm pools/RBAC into a dedicated
+non-system workload namespace (e.g., ``GKE_SANDBOX_NAMESPACE=coding-sandboxes``).
 """
 
 from __future__ import annotations
@@ -71,9 +84,12 @@ def build_gke_code_executor(settings: GkeSandboxSettings) -> Any:
     """Instantiate ADK ``GkeCodeExecutor`` in Sandbox Mode.
 
     Prerequisites:
-    - ``pip install "google-adk[extensions]"`` (ADK Python 2.0+).
+    - ``pip install "google-adk[extensions]"`` (ADK Python 2.0+; do NOT co-install
+      ``k8s-agent-sandbox==1.0.6`` in the same venv — ADK 2.15.0's
+      ``GkeCodeExecutor._execute_in_sandbox()`` expects the pre-1.0 context-manager API).
     - ``rbac.yaml``, ``sandbox_template.yaml``, and ``sandbox_warmpool.yaml``
-      applied in ``settings.namespace``.
+      applied in ``settings.namespace`` (use a dedicated non-system workload namespace
+      such as ``coding-sandboxes`` in production for full VAP enforcement).
     """
     try:
         from google.adk.code_executors import GkeCodeExecutor
@@ -181,6 +197,8 @@ def run_warmpool_sdk_smoke_test(
 ) -> str:
     """Claim a pre-warmed Pod directly using ``k8s-agent-sandbox==1.0.6``.
 
+    Install ``k8s-agent-sandbox==1.0.6`` in a dedicated venv separate from
+    ``google-adk==2.15.0`` (whose ``GkeCodeExecutor`` still uses the pre-1.0 API).
     Development mode uses ``SandboxLocalTunnelConnectionConfig()`` (which
     invokes ``kubectl port-forward`` to ``svc/sandbox-router-svc`` in
     ``agent-sandbox-system``). For production clusters, switch to:

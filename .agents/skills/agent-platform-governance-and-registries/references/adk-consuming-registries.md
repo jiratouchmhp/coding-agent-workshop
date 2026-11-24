@@ -87,7 +87,9 @@ toolset = SkillToolset(
 ## 3. `GCPSkillRegistry` Deep Dive (Source-Verified: `gcp_skill_registry.py`)
 
 ### Constructor & Usage with `Agent`
-All constructor and method arguments are **keyword-only** (`*`). Both `project_id` and `location` fall back to `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` (raises `ValueError` if either is missing):
+All constructor and method arguments are **keyword-only** (`*`). Both `project_id` and `location` fall back to `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` (raises `ValueError` if either is missing).
+
+> **CRITICAL `location=` Fallback Trap:** Always pass `location=os.environ.get("AGENT_REGISTRY_SKILLS_LOCATION", "global")` explicitly! Omitting `location=` silently falls back to `GOOGLE_CLOUD_LOCATION` (e.g., `asia-southeast1` in Bangkok/Singapore setups) instead of `global`, causing `GCPSkillRegistry` to miss `global` Agent Registry standalone skills (or time out if pointed at `asia-southeast3`).
 
 ```python
 import os
@@ -130,12 +132,15 @@ agent = Agent(
 ### Runtime Behaviors & Critical Source Realities
 1. **Collision Prevention:** Registry results matching any locally loaded skill name are automatically filtered out.
 2. **Session State Caching:** `load_skill` downloads and unpacks the ZIP payload once per session and caches it in session state (`_adk_activated_skill_{agent_name}`), avoiding repeated network calls across turns.
-3. **Sandbox Egress Caveat:** Agents running inside isolated sandboxes **without outbound network access to Google APIs** will fail to reach the registry and fall back to locally mounted filesystem skills. Either run `GCPSkillRegistry` inside the trusted orchestrator runtime (outside the isolated code sandbox) or configure VPC/PSC egress to Google APIs.
-4. **CRITICAL Doc vs. `adk-python` `main` Endpoint Evolution:**
-   - `adk.dev/integrations/skills-registry` describes `GCPSkillRegistry` as calling Vertex AI services via the Vertex AI SDK.
-   - However, current `google/adk-python` `main` (`gcp_skill_registry.py`) calls **Agent Registry** (`https://agentregistry.googleapis.com/v1alpha`, mTLS `https://agentregistry.mtls.googleapis.com/v1alpha`), overridable via **`AGENT_REGISTRY_ENDPOINT`**:
-     - `POST .../skills:search` with `{"search_string": query}` (falls back to `GET` on HTTP `404`/`405`).
-     - `GET .../skills/{name}` -> reads `defaultRevision` -> `GET .../{defaultRevision}?alt=media` with `follow_redirects=True`.
+3. **Lazy Init & Air-Gapped Sandbox Egress Caveat (ADK 2.15.0):**
+   - `GCPSkillRegistry.__init__` is **completely lazy** — it performs **zero network calls** and does **not** call `google.auth.default()`. Wrapping `GCPSkillRegistry(...)` in `try/except` will **NOT** detect an air-gapped sandbox at startup!
+   - Instead, network/ADC failures surface lazily at runtime inside `search_skills` / `get_skill`. `SearchSkillsTool.run_async` catches those runtime errors and returns `{"error_code": "REGISTRY_ERROR"}` to the model while locally mounted skills in `SkillToolset(skills=[...])` remain fully usable.
+   - Always run `GCPSkillRegistry` inside the trusted orchestrator runtime (outside air-gapped code sandboxes) or configure VPC/PSC egress to Google APIs.
+4. **CRITICAL Backend Split & `STATE_ACTIVE` Requirement (`adk-python` `main` / ADK 2.15.0):**
+   - Although older `adk.dev/integrations/skills-registry` prose mentions Vertex AI SDK, live ADK 2.15.0 `gcp_skill_registry.py` calls **Agent Registry standalone skills** (`https://agentregistry.googleapis.com/v1alpha`, mTLS `https://agentregistry.mtls.googleapis.com/v1alpha`, `location="global"`, overridable via **`AGENT_REGISTRY_ENDPOINT`**) — **NOT** Vertex AI Skill Registry (`aiplatform.googleapis.com/v1beta1`, `us-central1`)! Publishing only to Vertex AI Skill Registry (`us-central1`) will NOT make a skill visible to `GCPSkillRegistry`.
+   - `POST .../skills:search` with `{"search_string": query}` (falls back to `GET` on HTTP `404`/`405`).
+   - `GET .../skills/{name}` -> reads `defaultRevision` -> `GET .../{defaultRevision}?alt=media` with `follow_redirects=True`.
+   - **`STATE_DRAFT` Trap:** `gcloud alpha agent-registry skills create` defaults to `STATE_DRAFT`. While `search_skills` can return `DRAFT` skills, `get_skill()` (`?alt=media`) fails with **HTTP 400 `FAILED_PRECONDITION: skill container must be in ACTIVE or DEPRECATED state to download content`**. Always promote with `--default-revision=...` AND `--target-state=active`!
    - **302 GCS Signed URL Header-Stripping Hook:** Agent Registry `?alt=media` returns a 302 redirect to a GCS signed URL. `httpx` automatically drops `Authorization` on cross-origin redirects but **retains `x-goog-user-project` and `x-goog-api-client`**, which invalidates GCS signatures! `GCPSkillRegistry` registers an `httpx` request hook that strips all `x-goog-*` headers when redirected off `base_host`. (Replicate this hook if writing custom `httpx` downloaders!)
    - **Registry Resource IDs Permit Dots:** Unlike `SKILL.md` frontmatter names, `get_skill(name=...)` accepts `^[a-z0-9]+(?:[._-][a-z0-9]+)*$` (<= 256 chars) so Google-published IDs like `cloud.google.com-agent-platform-eval-flywheel` work cleanly.
 
@@ -153,6 +158,8 @@ registry = AgentRegistry(
     header_provider=None,         # Optional Callable[[ReadonlyContext], dict[str, str]] — MCP ONLY!
 )
 ```
+
+> **Eager ADC Contrast (`AgentRegistry` vs. `GCPSkillRegistry`):** Unlike `GCPSkillRegistry.__init__` (which is lazy), **`AgentRegistry.__init__` eagerly calls `google.auth.default()` inside `_connect()`** and immediately raises `RuntimeError: Failed to get default Google Cloud credentials` if ADC is missing — mock `google.auth.default` or `AgentRegistry` in offline unit tests!
 
 Accepts **short relative names** (`"agents/AGENT_ID"`, `"mcpServers/SERVER_ID"`) or **full resource names** (`f"projects/{project_id}/locations/{location}/agents/AGENT_ID"`):
 - **Agents:** `list_agents(filter_str, page_size, page_token)`, `search_agents(*, search_string, search_type, filter_str, order_by, page_size, page_token)`, `get_agent_info(name)`, `get_remote_a2a_agent(agent_name, auth_scheme=None, auth_credential=None, *, httpx_client=None, continue_uri=None) -> RemoteA2aAgent`
@@ -221,7 +228,9 @@ from google.adk.auth.credential_manager import CredentialManager
 from google.adk.integrations.agent_identity import GcpAuthProvider
 from google.adk.integrations.agent_registry import AgentRegistry
 
-# Register once at startup so ADK resolves GcpAuthProviderScheme from Registry Bindings
+# Register once at startup so ADK resolves GcpAuthProviderScheme from Registry Bindings.
+# Note: register_auth_provider is idempotent-with-warning — calling it repeatedly logs
+# duplicate-provider warnings and ignores subsequent registrations (guard with a module flag).
 CredentialManager.register_auth_provider(GcpAuthProvider())
 
 registry = AgentRegistry(project_id=project_id, location=location)
@@ -283,7 +292,9 @@ external_tools = registry.get_mcp_toolset("mcpServers/EXTERNAL_SERVER_ID")
 | `401`/`403` calling `RemoteA2aAgent` even though `header_provider` is set | `header_provider` does NOT apply to `RemoteA2aAgent` | Pass `httpx_client=httpx.AsyncClient(auth=GoogleApiAuth(...))` or `CloudRunOidcAuth(...)` |
 | `401` calling Cloud Run A2A agent with `GoogleApiAuth` | Cloud Run requires OIDC **ID token**, not OAuth access token | Switch to `id_token.fetch_id_token(Request(), f"https://{host}")` |
 | `ValueError` attaching same `RemoteA2aAgent` to two `LlmAgent`s | Single-parent rule in ADK | Call `base_remote_agent.clone()` for each orchestrator |
-| `GCPSkillRegistry` fails inside isolated sandbox | Sandbox blocks outbound Google API egress | Move `GCPSkillRegistry` to orchestrator runtime or configure PSC/SWP egress |
+| `GCPSkillRegistry` fails inside isolated sandbox (`REGISTRY_ERROR`) | Sandbox blocks outbound Google API egress (surfaces lazily on `search_skills`/`get_skill`, NOT in `__init__`) | Move `GCPSkillRegistry` to orchestrator runtime or configure PSC/SWP egress; keep local fallback skills in `skills=[...]` |
+| `400 FAILED_PRECONDITION: skill container must be in ACTIVE or DEPRECATED state` in `GCPSkillRegistry.get_skill()` | Agent Registry skill was left in default `STATE_DRAFT` (or missing `defaultRevision`) | Run `gcloud alpha agent-registry skills update private-SKILL_ID --location=global --default-revision=.../revisions/rev-1 --target-state=active` |
+| `RuntimeError: Failed to get default Google Cloud credentials` in `AgentRegistry(...)` | `AgentRegistry.__init__` eagerly calls `google.auth.default()` in `_connect()` (unlike lazy `GCPSkillRegistry`) | Run `gcloud auth application-default login`, or mock `AgentRegistry` / `google.auth.default` in offline tests |
 | `403 SignatureDoesNotMatch` downloading skill ZIP via custom `httpx` | `x-goog-*` headers leaked across 302 redirect to GCS signed URL | Strip `x-goog-*` headers on cross-origin redirect (or use `GCPSkillRegistry`) |
 
 ### Concrete Verification Steps

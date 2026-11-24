@@ -109,9 +109,12 @@ def build_skill_registry_toolset(
 
     - Local skills from ``local_skill_dirs`` are loaded via ``load_skill_from_dir()``
       and automatically shadow remote registry skills with identical names.
-    - If ``GCPSkillRegistry`` initialization fails (for example inside an air-gapped
-      sandbox without outbound HTTPS egress to Google APIs), logs a warning and
-      returns a ``SkillToolset`` backed by local skills only.
+    - Always passes ``location=`` explicitly (e.g., ``AGENT_REGISTRY_SKILLS_LOCATION="global"``)
+      because omitting ``location`` falls back to regional ``GOOGLE_CLOUD_LOCATION``.
+      Note that ADK 2.15+ ``GCPSkillRegistry.__init__`` is lazy (no network/ADC call at init;
+      air-gapped runtime failures surface inside ``SearchSkillsTool`` as ``REGISTRY_ERROR``
+      while local skills remain usable), and standalone Agent Registry skills must be in
+      ``ACTIVE`` state (``--target-state=active``) for ``get_skill()`` downloads to succeed.
     - Enforces ADK's mutual-exclusivity rule between ``environment`` and ``code_executor``.
     """
     if environment is not None and code_executor is not None:

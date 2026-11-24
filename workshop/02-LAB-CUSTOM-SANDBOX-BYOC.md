@@ -115,7 +115,7 @@ Per [Custom Containers (BYOC)](https://docs.cloud.google.com/gemini-enterprise-a
 
 Inspect how `starter/sandbox_image/Dockerfile` and `starter/sandbox_image/runner.py` enable Lab 1 Part B's `AGY_EXECUTION_MODE=sandbox` **with zero local Docker** (built remotely in Bangkok Cloud Build via `make push-sandbox`) while preserving strict gVisor credential hygiene:
 
-1. **Static Go `agy` Binary (`ARG INSTALL_AGY_CLI=true`):** `starter/sandbox_image/Dockerfile` bakes `/usr/local/bin/agy` cleanly at image build time (or set `--build-arg INSTALL_AGY_CLI=false` for air-gapped minimal images):
+1. **Static Go `agy` Binary (`ARG INSTALL_AGY_CLI=true`):** `starter/sandbox_image/Dockerfile` bakes `/usr/local/bin/agy` cleanly at image build time (or set `--build-arg INSTALL_AGY_CLI=false` for air-gapped minimal images). *(Benign build log note: `bash /tmp/agy_install.sh --dir /usr/local/bin` installs the working static binary at `/usr/local/bin/agy` with mode `0755` accessible to `appuser`, even though its internal `agy install` step also prints a message referencing `/root/.local/bin/agy`.)*
    ```dockerfile
    ARG INSTALL_AGY_CLI=true
    RUN if [ "${INSTALL_AGY_CLI}" = "true" ]; then \
@@ -279,8 +279,9 @@ byoc_tpl_op = client.sandboxes.templates.create(
 template_name = byoc_tpl_op.response.name  # Capture dynamically!
 
 # LIST Templates
-templates_resp = client.sandboxes.templates.list(name=instance_name)
-for tpl in templates_resp.sandbox_environment_templates:
+# Verified on google-cloud-agentplatform==2.10.0: templates.list() returns an Iterator[...]
+# directly (accessing .sandbox_environment_templates raises AttributeError!).
+for tpl in client.sandboxes.templates.list(name=instance_name):
     print(tpl.name)
 
 # GET Template
@@ -288,9 +289,11 @@ template_details = client.sandboxes.templates.get(name=template_name)
 
 # UPDATE Template: No in-place SDK update method is documented.
 # Official pattern (scale/sandbox/manage-templates): delete old template + create new template.
-# NOTE: delete() returns an async LRO and fails if a warm pool or sandbox is still active —
-# always wait for delete LROs to finish before tearing down parent/dependent resources!
-client.sandboxes.templates.delete(name=template_name, config={"wait_for_completion": True})
+# CRITICAL (google-cloud-agentplatform==2.10.0): Delete*Config accepts ONLY `http_options`
+# and raises `pydantic.ValidationError` if passed `config={"wait_for_completion": True}`!
+# Call delete() without wait_for_completion and poll the returned async LRO (as implemented
+# by SandboxLifecycleManager._wait_for_delete_operation() with transient FAILED_PRECONDITION retry).
+delete_tpl_op = client.sandboxes.templates.delete(name=template_name)
 ```
 
 #### 3. `SandboxEnvironment` Lifecycle (All 7 Operations)
@@ -341,10 +344,14 @@ snap_op = client.sandboxes.snapshots.create(
         "wait_for_completion": True,
     },
 )
-# Capture snapshot_name safely from snap_op.response.name (or match display_name — never blindly index [0]!)
-snapshot_name = getattr(getattr(snap_op, "response", None), "name", None)
+# Capture snapshot_name safely from snap_op.response.name (verify "/sandboxEnvironmentSnapshots/"
+# so an LRO `/operations/...` path is never mistaken for a snapshot name, and NEVER blindly index [0]!)
+resp_name = getattr(getattr(snap_op, "response", None), "name", None)
+snapshot_name = resp_name if (resp_name and "/sandboxEnvironmentSnapshots/" in str(resp_name)) else None
 if not snapshot_name:
-    snapshots = client.sandboxes.snapshots.list(name=instance_name).sandbox_environment_snapshots
+    # Verified on google-cloud-agentplatform==2.10.0: snapshots.list() returns an Iterator[...] directly
+    # (accessing .sandbox_environment_snapshots raises AttributeError!).
+    snapshots = list(client.sandboxes.snapshots.list(name=instance_name))
     matched = [s.name for s in snapshots if getattr(s, "display_name", "") == snap_display_name]
     if not matched:
         raise RuntimeError(f"Snapshot {snap_display_name!r} not found in {instance_name}")
@@ -361,18 +368,25 @@ branch_op = client.sandboxes.create(
     },
 )
 
-# 7. DELETE Snapshot, Sandboxes & Template — WAIT FOR EACH DELETE LRO TO COMPLETE!
-# Deleting a sandbox does NOT delete its backing template, and firing async delete() calls
-# without waiting can leave orphaned snapshots or templates behind when parent cleanup runs.
-client.sandboxes.snapshots.delete(name=snapshot_name, config={"wait_for_completion": True})
-client.sandboxes.delete(name=branch_op.response.name, config={"wait_for_completion": True})
-client.sandboxes.delete(name=sandbox_name, config={"wait_for_completion": True})
-client.sandboxes.templates.delete(name=template_name, config={"wait_for_completion": True})
+# 7. DELETE Sandboxes, Snapshot & Template — POLL EACH ASYNC DELETE LRO SEQUENTIALLY!
+# Deleting a sandbox does NOT delete its backing template.
+# CRITICAL (google-cloud-agentplatform==2.10.0): NEVER pass `config={"wait_for_completion": True}`
+# to sandboxes.delete(), snapshots.delete(), or templates.delete() — their Delete*Config models
+# accept ONLY `http_options` and raise `pydantic.ValidationError`!
+# Instead, invoke delete() and poll each returned LRO (or use SandboxLifecycleManager's pre-filled
+# delete_sandbox() -> delete_snapshot() -> delete_template() helpers, which poll & retry transient
+# FAILED_PRECONDITION errors automatically):
+del_branch_op = client.sandboxes.delete(name=branch_op.response.name)
+del_sbx_op = client.sandboxes.delete(name=sandbox_name)
+del_snap_op = client.sandboxes.snapshots.delete(name=snapshot_name)
+del_tpl_op = client.sandboxes.templates.delete(name=template_name)
 ```
 
-> [!WARNING]
-> **Avoid Orphaned Snapshots & Templates During Teardown (Async Delete LROs):**
-> `sandboxes.delete()`, `sandboxes.snapshots.delete()`, and `sandboxes.templates.delete()` return asynchronous Long-Running Operations (LROs). Even if a `finally:` block logs `"Deleted snapshot"` / `"Deleted template"`, failing to wait for each delete LRO to reach completion causes parent template/instance teardown races and leaves orphaned snapshots or templates behind. Always wait for `delete_sandbox` → `delete_snapshot` → `delete_template` LROs in order (`config={"wait_for_completion": True}` or polling `op.done`), and verify zero leftovers with `uv run python -m coding_agent.tools.sandbox_lifecycle cleanup-all --include-templates`.
+> [!CAUTION]
+> **Avoid `pydantic.ValidationError` & Orphaned Resources During Teardown (`google-cloud-agentplatform==2.10.0`):**
+> - **Never pass `config={"wait_for_completion": True}` to `.delete()`:** `DeleteRuntimeSandboxConfig`, `DeleteSandboxEnvironmentSnapshotConfig`, and `DeleteSandboxEnvironmentTemplateConfig` accept ONLY `http_options` and immediately raise `pydantic.ValidationError` if given `wait_for_completion`.
+> - **Poll delete LROs sequentially (`sandboxes` → `snapshots` → `templates`):** Because `.delete()` returns an asynchronous LRO, firing deletes without polling causes `FAILED_PRECONDITION` races and leaves orphaned snapshots or templates behind. Use `SandboxLifecycleManager`'s pre-filled `delete_sandbox()`, `delete_snapshot()`, and `delete_template()` helpers (which poll each LRO via `_wait_for_delete_operation()` and retry transient `FAILED_PRECONDITION` errors), and verify zero leftovers with `uv run python -m coding_agent.tools.sandbox_lifecycle cleanup-all --include-templates`.
+> - **Direct Iterator on `.list()`:** On `google-cloud-agentplatform==2.10.0`, `templates.list()` and `snapshots.list()` return plain `Iterator[...]` objects directly (not wrapper objects with `.sandbox_environment_templates` / `.sandbox_environment_snapshots`).
 
 ### Run the Lifecycle CLI Demo
 
@@ -423,7 +437,24 @@ result = client.sandboxes.execute_bash(
 
 When targeting your custom BYOC container image from Part A:
 - Your container exposes port `8080` (declared in `SandboxEnvironmentTemplate.config.custom_container_environment.ports`) running `runner.py`'s `POST /exec` endpoint.
-- The parent agent authenticates over the sandbox data plane using IAM or short-lived JWT access tokens (`client.sandboxes.generate_access_token(service_account_email=...)`, audited as `AuthorizeSandboxEnvironmentAccess`, paired with `client.sandboxes.send_command(http_method=..., path=..., access_token=..., request_dict=..., sandbox_environment=...)` for HTTP runner endpoints)—or privately over a VPC **PSC-E** forwarding rule targeting `sandbox.connection_info.service_attachment`—and receives the same structured `{stdout, stderr, returncode, duration_ms}` payload.
+- The parent agent authenticates over the sandbox data plane using **one of two token paths** (matching `execute_byoc_command()` and pre-filled `check_byoc_health()` in `sandbox_execution.py`):
+  1. **Signed Sandbox Access Token (when `SANDBOX_SERVICE_ACCOUNT_EMAIL` is set):** Mint a short-lived token via `client.sandboxes.generate_access_token(service_account_email=...)` (audited as `AuthorizeSandboxEnvironmentAccess`; requires `roles/iam.serviceAccountTokenCreator` on that SA) and pass it to `client.sandboxes.send_command(...)`.
+  2. **ADC OAuth Bearer Fallback (when `SANDBOX_SERVICE_ACCOUNT_EMAIL` is unset — the `.env.example` default — or `use_iam_bearer=True`):** Call the pre-filled `fetch_iam_bearer_token()` (`google.auth.default()` + `refresh(Request())`) so local/starter runs do not crash when no signing SA is configured.
+- Optionally pass allowlisted per-invocation `"env"` inside `request_dict` (restricted to `ALLOWED_EXEC_ENV_KEYS` by `runner.py`; never written to disk):
+  ```python
+  request_dict: dict[str, object] = {"command": command, "cwd": cwd, "timeout": timeout}
+  if env:
+      request_dict["env"] = dict(env)
+  resp = client.sandboxes.send_command(
+      http_method="POST",
+      path="/exec",
+      access_token=token,
+      request_dict=request_dict,
+      sandbox_environment=sandbox_name,
+  )
+  ```
+- **Verified `agentplatform==2.10.0` `send_command()` Gotcha:** `Sandboxes.send_command()` does **not** call `raise_for_status()` and can return an `HttpResponse` with empty/non-JSON `body=""` on HTTP `401`/`403`. Always validate that `resp.body` is non-empty JSON before calling `json.loads()`! *(Note: `client.sandboxes.generate_browser_ws_headers` is also exposed directly on `google-cloud-agentplatform >= 2.10.0` for Computer Use CDP WebSockets; older SDK builds fall back to `vertexai.Client`.)*
+- Alternatively, connect privately over a VPC **PSC-E** forwarding rule targeting `sandbox.connection_info.service_attachment` (or locally via `runner_base_url="http://127.0.0.1:8080"`) and receive the same structured `{stdout, stderr, returncode, duration_ms}` payload.
 
 ### Path C: Code Execution Sandbox (`execute_code` & ADK `AgentEngineSandboxCodeExecutor`)
 
@@ -560,7 +591,7 @@ class AgentPlatformSandboxEnvironment(BaseEnvironment):
         self._is_initialized = False
 ```
 
-Now wire `AgentPlatformSandboxEnvironment` into [`starter/coding_agent/agent.py`](../starter/coding_agent/agent.py) under `TODO(lab-2)` when `SANDBOX_MODE` is `shell` or `byoc`—making sure to forward `template_name=(settings.sandbox_template_name or None) if settings.sandbox_mode == "byoc" else None` (so Lab 2's BYOC template in `.env` is never passed into `shell` mode) and only sending inline `spec={"shell_environment": {}}` when `self._template_name` is `None` (and attach `AgentEngineSandboxCodeExecutor` when `SANDBOX_MODE=code_execution`), update `.env` to `SANDBOX_MODE=shell`, and test your agent remotely!
+Now wire `AgentPlatformSandboxEnvironment` into [`starter/coding_agent/agent.py`](../starter/coding_agent/agent.py) under `TODO(lab-2)` when `SANDBOX_MODE` is `shell` or `byoc`—making sure to forward `template_name=(settings.sandbox_template_name or None) if settings.sandbox_mode == "byoc" else None` (so Lab 2's BYOC template in `.env` is never passed into `shell` mode) and only sending inline `spec={"shell_environment": {}}` to `create_sandbox()` when `template_name` is `None` (never pass `spec` and `sandbox_environment_template` together!). For `SANDBOX_MODE=code_execution`, call the pre-filled `build_code_execution_executor(sandbox_resource_name=..., agent_engine_resource_name=...)` helper (using those exact keyword-only parameter names, passing `sandbox_resource_name` if `settings.sandbox_resource_name` is set, otherwise `agent_engine_resource_name=settings.reasoning_engine_name`), update `.env` to `SANDBOX_MODE=shell`, and test your agent remotely!
 
 ---
 
@@ -621,11 +652,11 @@ When combining Lab 1 Part B's **`AGENT_ARCHITECTURE=agy_harness`** with Lab 2's 
 
 | Pattern | Egress Posture | Where `agy` Runs | Credential & Security Boundary |
 |---|---|---|---|
-| **Pattern 1 (Default Air-Gapped Recommended)** | `internet_access: False` (sandbox completely air-gapped) | Trusted **Agent Runtime (Lab 5)** via `AGY_EXECUTION_MODE=local` + `AGY_ADC_AUTH=true` on Custom SA (`coding-agent-runtime-sa`) | **Zero credentials ever enter the sandbox.** Untrusted `pytest`, `ruff`, and `bandit` commands run inside the air-gapped gVisor BYOC Sandbox; `agy` / Gemini 4 calls stay strictly inside the trusted Agent Runtime! |
+| **Pattern 1 (Default Air-Gapped Recommended)** | `internet_access: False` (sandbox completely air-gapped) | Trusted **Agent Runtime (Lab 5)** via `AGY_EXECUTION_MODE=local` (or `auto`) + `AGY_ADC_AUTH=true` + non-numeric `AGY_PROJECT_ID` on Custom SA (`coding-agent-runtime-sa`) | **Zero credentials ever enter the sandbox.** Untrusted `pytest`, `ruff`, and `bandit` commands run inside the air-gapped gVisor BYOC Sandbox; `agy` / Gemini 4 calls stay strictly inside the trusted Agent Runtime! |
 | **Pattern 2 (In-Sandbox `agy` Harness)** | `internet_access: True` + **PSC-I + Cloud NGFW / SWP** allowlisting Gemini/Vertex endpoints | Inside **BYOC gVisor Sandbox** via `AGY_EXECUTION_MODE=sandbox` (`agy -p ... --output-format stream-json --dangerously-skip-permissions`) | Because gVisor sandboxes have **zero IAM roles** and **block `169.254.169.254`**, the parent Agent Runtime fetches a **scoped ephemeral credential / Secret Manager key** and passes it per-call inside `POST /exec`'s allowlisted `env` dict (injected only into that child process, never written to disk or logged). **NEVER** relay a developer's personal `agy` OAuth session! |
 
 > [!TIP]
-> **`AGY_EXECUTION_MODE=auto` Handles Air-Gapped Sandboxes Automatically:** When `SANDBOX_MODE=byoc`, `auto` checks `GET /health` for `agy_cli_available=True`; if the BYOC sandbox is air-gapped (`internet_access=False`) or `agy` is absent, it seamlessly runs `agy` locally in the trusted runtime (`AGY_ADC_AUTH=true`) or falls back to native ADK 2.0 `LlmAgent` + `EnvironmentToolset`!
+> **Verified Live BYOC Behavior & `AGY_EXECUTION_MODE=auto`:** Inside an air-gapped BYOC gVisor sandbox (`internet_access=False`, zero metadata server), `which agy`, `agy --version`, and `GET /health` (`"agy_cli_available": true`) all succeed, whereas invoking `agy -p` inside the air-gapped sandbox exits **`1` (`Error: authentication required`)** because no credentials or outbound Gemini egress exist inside the sandbox! Therefore, **`AGY_EXECUTION_MODE=auto` prefers `local`** (running `agy` on the trusted Agent Runtime Custom SA with `AGY_ADC_AUTH=true` + `AGY_PROJECT_ID`, while untrusted `pytest`/`ruff`/`bandit` still execute inside the air-gapped BYOC sandbox) whenever no BYOC `GEMINI_API_KEY`/egress override is supplied — and falls back cleanly to native ADK 2.0 `LlmAgent` + `EnvironmentToolset` if `agy` is unavailable!
 
 ---
 

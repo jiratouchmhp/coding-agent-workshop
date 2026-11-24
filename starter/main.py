@@ -11,7 +11,7 @@ Implements the verified Gemini Enterprise Agent Platform BYOC runtime contract
   (one JSON object per line, converted to SSE by Agent Runtime; max 15 min).
 - ``GET /is_busy``: Optional keep-alive probe endpoint (``200`` busy / ``412`` idle).
 
-Complete the ``# TODO(lab-5)`` blocks below and compare with ``solution/main.py``.
+Complete the Lab 5 exercises below and compare with ``solution/main.py``.
 """
 
 from __future__ import annotations
@@ -105,7 +105,7 @@ async def _ndjson_stream(output: Any) -> AsyncGenerator[str, None]:
             yield encoded
         return
 
-    if hasattr(output, "__iter__") and not isinstance(output, (str, bytes, dict)):
+    if hasattr(output, "__iter__") and not isinstance(output, str | bytes | dict):
         for chunk in output:
             encoded = _encode_ndjson_chunk(chunk)
             if encoded is None:
@@ -136,26 +136,21 @@ def get_runtime_app() -> Any:
     Lazy initialization ensures the container passes startup health probes (``GET /``)
     even on first deploy under Agent Identity before env vars/secrets are attached.
     """
-    # Defensively pop empty or whitespace-only GOOGLE_CLOUD_AGENT_ENGINE_ID so an
-    # exported `GOOGLE_CLOUD_AGENT_ENGINE_ID=` in `.env` or a local shell never
-    # triggers `ValueError: agent_engine_id is required for VertexAiMemoryBankService.`
-    # inside `AdkApp.set_up()` (which checks `"GOOGLE_CLOUD_AGENT_ENGINE_ID" in os.environ`).
-    # Keep this cleanup AFTER importing `coding_agent.agent` (which may load `.env`)
-    # and BEFORE instantiating `AdkApp` / calling `runtime_app.set_up()`.
-    if not os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID", "").strip():
-        os.environ.pop("GOOGLE_CLOUD_AGENT_ENGINE_ID", None)
-
-    # TODO(lab-5): Import `app as adk_app` and `root_agent` from `coding_agent.agent`,
-    # import `AdkApp` from `agentplatform.frameworks` (falling back to
-    # `vertexai.agent_engines`), defensively pop empty or whitespace-only
-    # `GOOGLE_CLOUD_AGENT_ENGINE_ID` from `os.environ` BEFORE instantiating `AdkApp` /
-    # calling `runtime_app.set_up()` (`if not os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID", "").strip():
-    # os.environ.pop("GOOGLE_CLOUD_AGENT_ENGINE_ID", None)`) so an empty
-    # `GOOGLE_CLOUD_AGENT_ENGINE_ID=` in `.env` or the shell never triggers
-    # `ValueError: agent_engine_id is required for VertexAiMemoryBankService.`, inspect
-    # `inspect.signature(AdkApp.__init__).parameters` to pass `AdkApp(app=adk_app)` when
-    # supported (else `AdkApp(agent=root_agent)` with `plugins=list(adk_app.plugins)` if
-    # available), call `set_up()` if present, and return the initialized `AdkApp` instance.
+    # TODO(lab-5):
+    # 1. Import `app as adk_app` and `root_agent` from `coding_agent.agent`, and
+    #    import `AdkApp` from `agentplatform.frameworks` (falling back to
+    #    `vertexai.agent_engines`).
+    # 2. IMPORTANT — AFTER importing `coding_agent.agent` (which may load `.env`) and
+    #    BEFORE instantiating `AdkApp` / calling `runtime_app.set_up()`, defensively pop
+    #    empty or whitespace-only `GOOGLE_CLOUD_AGENT_ENGINE_ID`:
+    #      if not os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID", "").strip():
+    #          os.environ.pop("GOOGLE_CLOUD_AGENT_ENGINE_ID", None)
+    #    Otherwise an empty `GOOGLE_CLOUD_AGENT_ENGINE_ID=` in `.env` or a local shell
+    #    triggers `ValueError: agent_engine_id is required for VertexAiMemoryBankService.`
+    #    inside `AdkApp.set_up()` (which checks `"GOOGLE_CLOUD_AGENT_ENGINE_ID" in os.environ`).
+    # 3. Inspect `inspect.signature(AdkApp.__init__).parameters` to pass `AdkApp(app=adk_app)`
+    #    when supported (else `AdkApp(agent=root_agent)` with `plugins=list(adk_app.plugins)`
+    #    if available), call `set_up()` if present, and return the initialized `AdkApp` instance.
     raise NotImplementedError(
         "Complete TODO(lab-5) in starter/main.py: get_runtime_app()."
     )

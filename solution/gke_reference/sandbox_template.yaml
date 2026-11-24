@@ -13,6 +13,12 @@
 #
 # Verified CRD version: `extensions.agents.x-k8s.io/v1beta1` (`v1.0.0` removed `v1alpha1`).
 #
+# Production Namespace Note:
+# The workshop uses `agent-sandbox-system` for single-namespace convenience, but
+# `secure-sandbox-policy` VAP excludes controller system namespaces by default. In
+# production, apply this template into a dedicated workload namespace (e.g.,
+# `coding-sandboxes`) so VAP admission checks enforce on every Sandbox Pod.
+#
 # -----------------------------------------------------------------------------
 # NETWORK ISOLATION & EGRESS POLICY NOTES (VERIFIED)
 # -----------------------------------------------------------------------------

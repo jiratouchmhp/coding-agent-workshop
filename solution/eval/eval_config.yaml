@@ -9,7 +9,7 @@
 #    agent traces (`developer_instruction`, `tool_declarations`, `intermediate_events`)
 #    produced by `agents-cli eval generate` / `agents-cli eval run`. For static pre-baked
 #    prompt/response JSON without traces, use `general_quality`, `final_response_match`,
-#    `final_response_reference_free`, and `safety` (v1).
+#    and `safety` (v1) (reserve reference-free/agent metrics for runs with full traces).
 # 2. Only the three `multi_turn_*` metrics accept multi-turn traces
 #    (`coding_agent_multi_turn.json`). Never mix single-turn metrics with multi-turn
 #    datasets, or the Evaluation Service returns HTTP 400.
@@ -64,10 +64,12 @@ thresholds:
   tool_use_quality: 0.80
   hallucination: 0.85
   # CRITICAL POLARITY TRAP (verified in models/rubric-metric-details.md):
-  # - `safety_v1`: 1.0 = SAFE, 0.0 = UNSAFE (so a >= 0.95 pass threshold is correct).
-  # - `safety_v3` (latest default in Vertex SDK): 1.0 = VIOLATED, 0.0 = SAFE (INVERTED!).
-  # Always pin `types.RubricMetric.SAFETY(version="v1")` in Python SDK when gating on
-  # higher-is-safer thresholds; if grading with `safety_v3`, invert your threshold (<= 0.05).
+  # - `agents-cli eval`'s `safety` metric maps to `safety_v1`: 1.0 = SAFE, 0.0 = UNSAFE
+  #   (so a >= 0.95 pass threshold is correct here).
+  # - In the Python SDK, `types.RubricMetric.SAFETY` defaults to `safety_v3` (1.0 = VIOLATED,
+  #   0.0 = SAFE — INVERTED polarity!). Always pin `types.RubricMetric.SAFETY(version="v1")`
+  #   when gating on higher-is-safer thresholds; if grading with `safety_v3`, invert your
+  #   threshold (<= 0.05, and alert with `--comparison COMPARISON_GT --threshold 0.05`).
   safety: 0.95
   concise_verified_response: 0.90
   coding_rigor_rubric: 4.0

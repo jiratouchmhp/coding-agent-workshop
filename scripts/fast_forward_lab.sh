@@ -3,7 +3,7 @@
 # Enterprise Coding Agent Workshop — Non-Spoiling Lab Fast-Forward Script
 # =============================================================================
 # Usage:
-#   ./scripts/fast_forward_lab.sh <1|2|3|4|5|6|8|all> [--dry-run]
+#   ./scripts/fast_forward_lab.sh <1|2|3|4|5|6|8|all> [--dry-run] [--with-prereqs] [--force]
 #
 # Safely syncs completed reference files from solution/ into starter/ for a
 # single lab (or core Labs 1-6 via 'all') WITHOUT overwriting future labs'
@@ -28,10 +28,12 @@ export PYTHONPYCACHEPREFIX="${PYCACHE_TMP}"
 
 TARGET=""
 DRY_RUN=0
+WITH_PREREQS=0
+FORCE=0
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/fast_forward_lab.sh <1|2|3|4|5|6|8|all> [--dry-run]
+Usage: ./scripts/fast_forward_lab.sh <1|2|3|4|5|6|8|all> [--dry-run] [--with-prereqs] [--force]
 
 Catch up on a workshop lab by syncing completed reference code from solution/
 into starter/ without spoiling later labs' # TODO(lab-N) checkpoints:
@@ -56,9 +58,12 @@ into starter/ without spoiling later labs' # TODO(lab-N) checkpoints:
        (leaves Optional Lab 7 untouched; run LAB=8 separately for GKE reference)
 
 Options:
-  --dry-run    Preview exact files to copy and functions/imports to splice
-               without modifying any file on disk
-  -h, --help   Show this help message
+  --dry-run        Preview exact files to copy and functions/imports to splice
+                   without modifying any file on disk
+  --with-prereqs   Also fast-forward prerequisite labs 1..(N-1) before Lab N
+                   (for Lab 8, fast-forwards core Labs 1-6 first)
+  --force          Explicitly overwrite starter/ files without confirmation
+  -h, --help       Show this help message
 EOF
 }
 
@@ -81,6 +86,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run)
       DRY_RUN=1
+      shift
+      ;;
+    --with-prereqs)
+      WITH_PREREQS=1
+      shift
+      ;;
+    --force)
+      FORCE=1
       shift
       ;;
     -h|--help)
@@ -695,8 +708,55 @@ fast_forward_lab() {
   esac
 }
 
+warn_unresolved_prereqs() {
+  local target_lab="$1"
+  local missing_labs
+  missing_labs="$(python3 - "${REPO_ROOT}/starter" "${target_lab}" <<'PYEOF'
+import sys
+from pathlib import Path
+
+starter_root = Path(sys.argv[1])
+target_lab = sys.argv[2]
+if target_lab == "8":
+    prereqs = [1, 2, 3, 4, 5, 6]
+elif target_lab.isdigit():
+    prereqs = list(range(1, int(target_lab)))
+else:
+    prereqs = []
+
+if not prereqs or not starter_root.is_dir():
+    sys.exit(0)
+
+found: set[int] = set()
+for path in starter_root.rglob("*"):
+    if not path.is_file():
+        continue
+    if any(part in {".venv", "__pycache__", ".terraform", ".pytest_cache", ".ruff_cache"} for part in path.parts):
+        continue
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError):
+        continue
+    for k in prereqs:
+        if f"TODO(lab-{k})" in text:
+            found.add(k)
+
+if found:
+    print(",".join(str(k) for k in sorted(found)))
+PYEOF
+  )"
+  if [[ -n "${missing_labs}" ]]; then
+    warn "Fast-forwarding Lab ${target_lab} alone leaves earlier TODO(lab-*) markers unfinished in starter/ for Lab(s): ${missing_labs}."
+    warn "Earlier labs' models/toolsets/callbacks may still raise NotImplementedError until completed."
+    warn "To also fast-forward prerequisite labs, re-run with: ./scripts/fast_forward_lab.sh ${target_lab} --with-prereqs"
+  fi
+}
+
 if [[ "${DRY_RUN}" -eq 1 ]]; then
   info "Running in --dry-run mode (no files in starter/ will be modified)."
+fi
+if [[ "${FORCE}" -eq 1 ]]; then
+  info "Running with --force (overwriting matching starter/ files directly)."
 fi
 
 if [[ "${TARGET}" == "all" ]]; then
@@ -707,7 +767,18 @@ if [[ "${TARGET}" == "all" ]]; then
   info "Note: Optional Lab 7 (Enterprise Security & Governance Hardening) was left untouched."
   info "      To also fast-forward Lab 8 (GKE Agent Sandbox overlay), run:"
   info "        ./scripts/fast_forward_lab.sh 8   (or: make fast-forward LAB=8)"
+elif [[ "${WITH_PREREQS}" -eq 1 ]]; then
+  if [[ "${TARGET}" == "8" ]]; then
+    for prereq_lab in 1 2 3 4 5 6 8; do
+      fast_forward_lab "${prereq_lab}"
+    done
+  else
+    for prereq_lab in $(seq 1 "${TARGET}"); do
+      fast_forward_lab "${prereq_lab}"
+    done
+  fi
 else
+  warn_unresolved_prereqs "${TARGET}"
   fast_forward_lab "${TARGET}"
 fi
 

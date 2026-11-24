@@ -35,6 +35,13 @@ logger = logging.getLogger(__name__)
 ONLINE_EVAL_RESOURCE_TYPE = "aiplatform.googleapis.com/OnlineEvaluator"
 ONLINE_EVAL_SCORES_METRIC = "aiplatform.googleapis.com/online_evaluator/scores"
 
+VALID_COMPARISON_TYPES: dict[str, str] = {
+    "COMPARISON_LT": "<",
+    "COMPARISON_GT": ">",
+    "COMPARISON_LE": "<=",
+    "COMPARISON_GE": ">=",
+}
+
 
 def build_metric_filter(
     *,
@@ -61,6 +68,7 @@ def build_alert_policy_dict(
     display_name: str,
     metric_name: str = "task_success",
     threshold: float = 0.80,
+    comparison: str = "COMPARISON_LT",
     duration_seconds: int = 1800,
     alignment_period_seconds: int = 60,
     agent_resource_name: str | None = None,
@@ -71,7 +79,16 @@ def build_alert_policy_dict(
 
     Imports ``monitoring_v3`` when available to bind enum constants cleanly, and
     falls back to verified protobuf string enum names during offline ``--dry-run``.
+    Pass ``comparison="COMPARISON_GT"`` (e.g., ``threshold=0.05``) when alerting
+    on inverted-polarity metrics such as ``safety_v3`` (``1.0 = VIOLATED``).
     """
+    normalized_comparison = comparison.strip().upper()
+    if normalized_comparison not in VALID_COMPARISON_TYPES:
+        raise ValueError(
+            f"Unsupported comparison {comparison!r}; expected one of {sorted(VALID_COMPARISON_TYPES)}."
+        )
+    op_symbol = VALID_COMPARISON_TYPES[normalized_comparison]
+
     # `aiplatform.googleapis.com/online_evaluator/scores` has kind=DELTA and
     # value_type=DISTRIBUTION, which rejects ALIGN_MEAN with HTTP 400.
     # ALIGN_PERCENTILE_50 extracts the per-series median scalar cleanly
@@ -79,11 +96,11 @@ def build_alert_policy_dict(
     try:
         from google.cloud import monitoring_v3
 
-        comparison: Any = monitoring_v3.ComparisonType.COMPARISON_LT
+        comparison_value: Any = getattr(monitoring_v3.ComparisonType, normalized_comparison)
         aligner: Any = monitoring_v3.Aggregation.Aligner.ALIGN_PERCENTILE_50
         combiner: Any = monitoring_v3.AlertPolicy.ConditionCombinerType.OR
     except ImportError:
-        comparison = "COMPARISON_LT"
+        comparison_value = normalized_comparison
         aligner = "ALIGN_PERCENTILE_50"
         combiner = "OR"
 
@@ -97,10 +114,10 @@ def build_alert_policy_dict(
         "display_name": display_name,
         "conditions": [
             {
-                "display_name": f"Online {metric_name} < {threshold:.2f}",
+                "display_name": f"Online {metric_name} {op_symbol} {threshold:.2f}",
                 "condition_threshold": {
                     "filter": metric_filter,
-                    "comparison": comparison,
+                    "comparison": comparison_value,
                     "threshold_value": threshold,
                     "duration": {"seconds": duration_seconds},
                     "aggregations": [
@@ -125,6 +142,7 @@ def render_gcloud_policy_yaml(
     display_name: str,
     metric_name: str = "task_success",
     threshold: float = 0.80,
+    comparison: str = "COMPARISON_LT",
     duration_seconds: int = 1800,
     alignment_period_seconds: int = 60,
     agent_resource_name: str | None = None,
@@ -132,6 +150,12 @@ def render_gcloud_policy_yaml(
     notification_channels: list[str] | None = None,
 ) -> str:
     """Render the equivalent ``gcloud monitoring policies create`` YAML file."""
+    normalized_comparison = comparison.strip().upper()
+    if normalized_comparison not in VALID_COMPARISON_TYPES:
+        raise ValueError(
+            f"Unsupported comparison {comparison!r}; expected one of {sorted(VALID_COMPARISON_TYPES)}."
+        )
+    op_symbol = VALID_COMPARISON_TYPES[normalized_comparison]
     metric_filter = build_metric_filter(
         metric_name=metric_name,
         agent_resource_name=agent_resource_name,
@@ -140,11 +164,11 @@ def render_gcloud_policy_yaml(
     lines = [
         f'displayName: "{display_name}"',
         "conditions:",
-        f'- displayName: "Online {metric_name} < {threshold:.2f}"',
+        f'- displayName: "Online {metric_name} {op_symbol} {threshold:.2f}"',
         "  conditionThreshold:",
         "    filter: >",
         f"      {metric_filter}",
-        "    comparison: COMPARISON_LT",
+        f"    comparison: {normalized_comparison}",
         f"    thresholdValue: {threshold}",
         f"    duration: {duration_seconds}s",
         "    aggregations:",
@@ -204,7 +228,16 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--threshold",
         type=float,
         default=0.80,
-        help="Trigger alert when aligned median (p50) score falls below this value (default: 0.80).",
+        help="Alert threshold value on aligned median (p50) score (default: 0.80).",
+    )
+    parser.add_argument(
+        "--comparison",
+        choices=sorted(VALID_COMPARISON_TYPES),
+        default="COMPARISON_LT",
+        help=(
+            "Threshold comparison operator (default: COMPARISON_LT for higher-is-better scores; "
+            "use COMPARISON_GT with e.g. --threshold 0.05 for inverted-polarity safety_v3)."
+        ),
     )
     parser.add_argument(
         "--duration-seconds",
@@ -265,6 +298,7 @@ def main(argv: list[str] | None = None) -> int:
         display_name=display_name,
         metric_name=args.metric_name,
         threshold=args.threshold,
+        comparison=args.comparison,
         duration_seconds=args.duration_seconds,
         alignment_period_seconds=args.alignment_period_seconds,
         agent_resource_name=agent_resource_name,
@@ -275,6 +309,7 @@ def main(argv: list[str] | None = None) -> int:
         display_name=display_name,
         metric_name=args.metric_name,
         threshold=args.threshold,
+        comparison=args.comparison,
         duration_seconds=args.duration_seconds,
         alignment_period_seconds=args.alignment_period_seconds,
         agent_resource_name=agent_resource_name,

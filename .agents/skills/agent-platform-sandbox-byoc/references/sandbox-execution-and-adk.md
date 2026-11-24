@@ -60,17 +60,24 @@ if test_res["returncode"] != 0:
 
 Expose a TCP port (e.g., `8080`) on `SandboxEnvironmentTemplate.config.custom_container_environment.ports` and invoke your container runner via either the managed data-plane proxy or private PSC-E ingress:
 
-### Required IAM for `generate_access_token()`
+### Required IAM & Token Paths (`generate_access_token()` vs. ADC Bearer Fallback)
 
-- Caller holds `roles/aiplatform.user` on the project AND `roles/iam.serviceAccountTokenCreator` on `SERVICE_ACCOUNT_EMAIL`.
-- `SERVICE_ACCOUNT_EMAIL` holds `roles/aiplatform.user` on the project.
-- Audited in Cloud Audit Logs (`DATA_WRITE`) as `AuthorizeSandboxEnvironmentAccess`.
+- **Signing SA JWT (`generate_access_token`, recommended in production / Agent Runtime):**
+  - Caller holds `roles/aiplatform.user` on the project AND `roles/iam.serviceAccountTokenCreator` on `SERVICE_ACCOUNT_EMAIL` (on Agent Runtime, bind `roles/iam.serviceAccountTokenCreator` on the Custom Runtime SA to itself).
+  - `SERVICE_ACCOUNT_EMAIL` holds `roles/aiplatform.user` on the project.
+  - Audited in Cloud Audit Logs (`DATA_WRITE`) as `AuthorizeSandboxEnvironmentAccess`.
+- **ADC OAuth Bearer Fallback (when `SANDBOX_SERVICE_ACCOUNT_EMAIL` is unset):**
+  - When no dedicated signing SA is configured, obtain a short-lived caller IAM bearer token via `google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])` + `creds.refresh(google.auth.transport.requests.Request())` and pass `creds.token` as `access_token`.
+- **CRITICAL `send_command()` Error-Handling Trap (`google-cloud-agentplatform >= 2.10.0`):** `client.sandboxes.send_command()` calls `requests.request(...)` **without** `raise_for_status()` and returns `HttpResponse(headers=..., body=response.text)` even on HTTP 401/403 with an empty `body=""` or plain-text error! Always validate that `response.body` is non-empty JSON (and inspect headers like `www-authenticate` on empty/non-JSON bodies) before calling `json.loads()`.
 
-### Managed Data-Plane Proxy (`generate_access_token` + `send_command`)
+### Managed Data-Plane Proxy (`generate_access_token` / ADC Fallback + `send_command` + Allowlisted `env`)
 
 ```python
 import json
+import os
 import agentplatform
+import google.auth
+from google.auth.transport.requests import Request
 
 client = agentplatform.Client(
     project="PROJECT_ID",
@@ -79,20 +86,36 @@ client = agentplatform.Client(
 )
 sandbox = client.sandboxes.get(name=sandbox_name)
 
-# Mint short-lived data-plane JWT
-access_token = client.sandboxes.generate_access_token(
-    service_account_email="sandbox-caller@PROJECT_ID.iam.gserviceaccount.com",
-)
+# Mint short-lived data-plane JWT when SANDBOX_SERVICE_ACCOUNT_EMAIL is set; otherwise fall back to ADC bearer
+sa_email = os.environ.get("SANDBOX_SERVICE_ACCOUNT_EMAIL", "").strip()
+if sa_email:
+    access_token = client.sandboxes.generate_access_token(service_account_email=sa_email)
+else:
+    creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    creds.refresh(Request())
+    access_token = creds.token
 
-# POST /exec on the BYOC container's exposed port
+# POST /exec on the BYOC container's exposed port (optional allowlisted per-exec `env`)
+request_payload = {
+    "command": "ruff check /workspace && pytest -q",
+    "cwd": "/workspace",
+    "timeout": 60,
+    # Optional: pass ONLY keys allowed by runner.py ALLOWED_EXEC_ENV_KEYS (unknown keys -> HTTP 400)
+    "env": {"GOOGLE_CLOUD_LOCATION": "global"},
+}
 response = client.sandboxes.send_command(
     http_method="POST",
     path="exec",
     access_token=access_token,
-    request_dict={"command": "ruff check /workspace && pytest -q", "cwd": "/workspace", "timeout": 60},
+    request_dict=request_payload,
     sandbox_environment=sandbox,
 )
-result = json.loads(response.body) if isinstance(response.body, (str, bytes)) else response.body
+raw_body = response.body.decode("utf-8") if isinstance(response.body, bytes) else (response.body or "")
+if not raw_body.strip():
+    raise RuntimeError(
+        f"BYOC send_command returned empty body (check auth headers={getattr(response, 'headers', {})})"
+    )
+result = json.loads(raw_body) if isinstance(raw_body, str) else raw_body
 print(result["returncode"], result["stdout"], result["stderr"])
 ```
 
@@ -180,6 +203,8 @@ root_agent = Agent(
 )
 ```
 
+> **Workshop Helper Signature (`build_code_execution_executor`):** Wrap `AgentEngineSandboxCodeExecutor` with explicit mutually exclusive keyword arguments `sandbox_resource_name: str | None = None` and `agent_engine_resource_name: str | None = None` (matching the exact parameter names of `AgentEngineSandboxCodeExecutor.__init__` above).
+
 ### Code Execution Troubleshooting Matrix (`troubleshooting/code-execution`)
 
 | Issue | Cause | Fix |
@@ -211,21 +236,21 @@ Create a template with `"default_container_category": "DEFAULT_CONTAINER_CATEGOR
 
 ### Playwright Over CDP (`generate_browser_ws_headers`) & Live VNC
 
-> **SDK Namespace Note:** `generate_browser_ws_headers` is documented on **`vertexai.Client`** (`v_client.agent_engines.sandboxes`), whereas `send_command` and `generate_access_token` work directly on **`agentplatform.Client`** (`client.sandboxes`). Always initialize `vertexai.Client` explicitly before calling `.agent_engines.sandboxes` — calling `.agent_engines` on `agentplatform.Client` raises `AttributeError`.
+> **SDK Namespace Note:** In **`google-cloud-agentplatform >= 2.10.0`**, `client.sandboxes.generate_browser_ws_headers(...)` is exposed directly alongside `send_command` and `generate_access_token` on `agentplatform.Client`. On older SDK versions where `client.sandboxes` lacks `generate_browser_ws_headers`, fall back to `vertexai.Client(...).agent_engines.sandboxes.generate_browser_ws_headers(...)` (never call `.agent_engines` on `agentplatform.Client`, which raises `AttributeError`).
 
 ```python
 import asyncio
-import vertexai
+import agentplatform
 from playwright.async_api import async_playwright
 
-v_client = vertexai.Client(
+client = agentplatform.Client(
     project="PROJECT_ID",
     location="asia-southeast1",
     http_options={"api_version": "v1beta1"},
 )
-v_sandbox = v_client.agent_engines.sandboxes.get(name=sandbox_name)
-ws_url, ws_headers = v_client.agent_engines.sandboxes.generate_browser_ws_headers(
-    sandbox_environment=v_sandbox,
+sandbox = client.sandboxes.get(name=sandbox_name)
+ws_url, ws_headers = client.sandboxes.generate_browser_ws_headers(
+    sandbox_environment=sandbox,
     service_account_email="SERVICE_ACCOUNT_EMAIL",
 )
 
@@ -290,15 +315,39 @@ _WRITE_CHUNK_BYTES = 24_576  # Stays safely below OS ARG_MAX limits
 
 
 class AgentPlatformSandboxEnvironment(BaseEnvironment):
-    """Per-session ADK BaseEnvironment backed by a Managed Shell Sandbox."""
+    """Per-session ADK BaseEnvironment backed by a Managed Shell or BYOC Sandbox.
+
+    In the workshop (`coding_agent/tools/sandbox_execution.py`), pass
+    `project_id`, `location`, `instance_name`, `template_name`, `mode`
+    (`"shell"` | `"byoc"`), `ttl`, `service_account_email`, and optional
+    `runner_base_url` (for local BYOC testing) so the adapter lazily creates
+    its `agentplatform.Client` and supports both Shell and BYOC execution.
+    """
 
     STATE_KEY = "agent_platform:sandbox_name"
 
-    def __init__(self, *, client: Any, instance_name: str, template_name: str | None = None, ttl: str = "3600s"):
+    def __init__(
+        self,
+        *,
+        client: Any = None,
+        project_id: str | None = None,
+        location: str = "asia-southeast1",
+        instance_name: str = "",
+        template_name: str | None = None,
+        mode: str = "shell",
+        ttl: str = "3600s",
+        service_account_email: str | None = None,
+        runner_base_url: str | None = None,
+    ):
         self._client = client
+        self._project_id = project_id
+        self._location = location
         self._instance_name = instance_name
         self._template_name = template_name
+        self._mode = mode
         self._ttl = ttl
+        self._service_account_email = service_account_email
+        self._runner_base_url = runner_base_url
         self._working_dir = Path("/workspace")
         self._fallback_sandbox: str | None = None
 
@@ -334,11 +383,13 @@ class AgentPlatformSandboxEnvironment(BaseEnvironment):
 
         def _create() -> str:
             cfg = {"display_name": "adk-session-sandbox", "ttl": self._ttl, "wait_for_completion": True}
+            create_kwargs: dict[str, Any] = {"name": self._instance_name, "config": cfg}
             if self._template_name:
+                # NEVER pass inline `spec` together with `sandbox_environment_template`!
                 cfg["sandbox_environment_template"] = self._template_name
-            op = self._client.sandboxes.create(
-                name=self._instance_name, spec={"shell_environment": {}}, config=cfg
-            )
+            else:
+                create_kwargs["spec"] = {"shell_environment": {}}
+            op = self._client.sandboxes.create(**create_kwargs)
             return op.response.name
 
         sandbox_name = await asyncio.to_thread(_create)

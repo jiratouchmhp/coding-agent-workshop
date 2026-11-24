@@ -16,8 +16,8 @@ Over the course of this hands-on workshop, you evolve a single ADK Coding Agent 
 | **2. Scale** | [Lab 2: Custom Sandbox (BYOC), Lifecycle & Execution](workshop/02-LAB-CUSTOM-SANDBOX-BYOC.md) | Standalone Agent Platform instance (`client.runtimes.create()`), Non-root Debian BYOC container with baked `/usr/local/bin/agy` (`ARG INSTALL_AGY_CLI=true`), `/health` `agy_cli_available` & allowlisted `/exec` `env` (never written to disk), `SandboxEnvironmentTemplate`, Sandbox CRUD/Pause/Resume/Snapshot, Shell `execute_bash()`, Code Execution (`AgentEngineSandboxCodeExecutor`), custom `BaseEnvironment`, PSC-I/NGFW egress |
 | **2. Scale** | [Lab 3: Managed Sessions, Memory Bank, Telemetry & Feedback](workshop/03-LAB-SESSIONS-MEMORY-FEEDBACK.md) | Reuses Lab 2 standalone instance: `VertexAiSessionService` & Sessions API, `VertexAiMemoryBankService` (topics, TTL, similarity retrieval), Feedback Service, GenAI OTel Tracing, parent sandbox `stdout`/`stderr` Cloud Logging & PromQL Monitoring |
 | **3. Extend** | [Lab 4: Skill Registry & Agent Registry Discovery](workshop/04-LAB-SKILLS-AND-AGENT-REGISTRY.md) | Skill Registry 16-check ZIP/`SKILL.md` packaging, Vertex AI Skill Registry upload, `GCPSkillRegistry` + `SkillToolset`, `AgentRegistry` (`google-adk[a2a,agent-identity,mcp]`) wired into `coding_agent` before deployment |
-| **2. Scale** | [Lab 5: Deploy Complete Agent ONCE (CLI & Terraform)](workshop/05-LAB-DEPLOY-RUNTIME-TERRAFORM.md) | Build & deploy the 100% feature-complete Labs 1–4 agent **once** (with baked `/usr/local/bin/agy`, `AGY_ADC_AUTH=true` via Custom SA, and Gemini 4 Terraform vars) via `agents-cli deploy` & declarative `google_vertex_ai_reasoning_engine` (`container_spec` & `source_code_spec`), Custom SA + `roles/aiplatform.memoryUser`, dual service-agent IAM `depends_on`, unified vs. decoupled `REASONING_ENGINE_NAME`, revisions, traffic splitting, emergency stop |
-| **4. Optimize** | [Lab 6: Observability, Evaluation, Alerts & Optimize](workshop/06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md) | Offline Eval (traces vs. sessions), 2-Step Simulated User Eval, Failure Clustering (`vertexai.evals`), Online Evaluation Monitors, Cloud Monitoring Quality Alerts (`monitoring_v3`), Dual-Track Optimization Flywheel: Root Prompt Canary (`agents-cli eval optimize` + `trafficSplitManual`) **and** Zero-Redeploy Skill Updates (`GEPARootAgentOptimizer` → Skill Registry `client.skills.update` / Agent Registry `rev-2` revision rollout & `rev-1` rollback) |
+| **2. Scale** | [Lab 5: Deploy Complete Agent ONCE (CLI & Terraform)](workshop/05-LAB-DEPLOY-RUNTIME-TERRAFORM.md) | Build & deploy the 100% feature-complete Labs 1–4 agent **once** (with baked `/usr/local/bin/agy`, `AGY_ADC_AUTH=true` + non-numeric `AGY_PROJECT_ID` via Custom SA, and Gemini 4 Terraform vars) via `agents-cli deploy` & declarative `google_vertex_ai_reasoning_engine` (`container_spec` & `source_code_spec`), Custom SA + `roles/aiplatform.memoryUser`, dual service-agent IAM `depends_on`, unified vs. decoupled `REASONING_ENGINE_NAME`, live `:query`/`:streamQuery` verification, revisions, traffic splitting, emergency stop |
+| **4. Optimize** | [Lab 6: Observability, Evaluation, Alerts & Optimize](workshop/06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md) | Offline Eval (traces vs. sessions), 2-Step Simulated User Eval, Failure Clustering (`agentplatform.Client.evals`), Online Evaluation Monitors, Cloud Monitoring Quality Alerts (`monitoring_v3`), Dual-Track Optimization Flywheel: Root Prompt Canary (`agents-cli eval optimize` + `trafficSplitManual`) **and** Zero-Redeploy Skill Updates (`GEPARootAgentOptimizer` → Skill Registry `client.skills.update` / Agent Registry `rev-2` revision rollout & `rev-1` rollback) |
 | **3. Govern (Optional)** | [Lab 7 (Optional / Skippable): Enterprise Security & Governance Hardening](workshop/07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md) | Agent Registry `ENABLED_BLOCKING` LLM scanning & lifecycle, Semantic Governance Policies (NLC) & Model Armor, SPIFFE `AGENT_IDENTITY` + Agent Gateway Terraform upgrade path, Multi-Tenant Session/Memory IAM Conditions, Memory Poisoning audit, CMEK/VPC-SC, WORM Audit Buckets + SIEM Pub/Sub + 3-Layer Agent Anomaly Detection → SCC *(skipping Lab 7 leaves Labs 1–6 100% green!)* |
 | **Architecture** | [Lab 8: Agent Runtime vs. Self-Hosted GKE](workshop/08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md) | 14-Dimension Limitations & Trade-Off Matrix comparing Agent Runtime + Managed Sandbox vs. Self-Hosted GKE + `kubernetes-sigs/agent-sandbox` + GKE Agent Substrate |
 
@@ -52,8 +52,8 @@ flowchart LR
     end
 
     subgraph REG["3. EXTEND WITH REGISTRIES (Lab 4)"]
-        SKREG["Skill Registry (v1beta1)<br/>16-Check Validated ZIP Packages"]
-        AGREG["Agent Registry Discovery<br/>GCPSkillRegistry + AgentRegistry ADK Clients"]
+        SKREG["Vertex AI Skill Registry (v1beta1, us-central1)<br/>16-Check Validated Skill Packages"]
+        AGREG["Agent Registry Discovery<br/>GCPSkillRegistry (global Standalone Skills) +<br/>AgentRegistry A2A/MCP (Bangkok asia-southeast3)"]
         SKREG --> ADK
         AGREG --> ADK
     end
@@ -104,7 +104,7 @@ flowchart LR
 ### Key Architectural Highlights
 
 - **Frontier Gemini 4 Dual-Model Routing (Replacing Retired `gemini-2.5-flash`):** Defaults to **Gemini 4 Hydrogen (`MODEL_NAME=gemini-4-hydrogen`)** for fast coding/tool-calling and **Gemini 4 Neon (`REASONING_MODEL_NAME=gemini-4-neon`)** for architecture, planning, and code review via **`MODEL_LOCATION=global`** using ADK 2.0 `Gemini(model=..., client_kwargs=...)` (`google-genai>=2.34.0` for 1M-token automatic `continuation_token` long decodes; `THINKING_LEVEL=MEDIUM` from `LOW|MEDIUM|HIGH|XHIGH`). Teams requiring strict Singapore regional inference residency can switch to **Gemini 4 Argon (`gemini-4-argon`, `MODEL_LOCATION=asia-southeast1`)**. *(Replaces `gemini-2.5-flash`, retired Oct 20, 2026.)*
-- **Trusted Orchestration vs. Untrusted Execution (and Enterprise `agy` Auth Boundary):** **Agent Runtime (`ReasoningEngine`)** holds the runtime identity, calls Gemini 4 models, reads/writes Managed Sessions & Memory Bank, and runs `/usr/local/bin/agy` exclusively via **`AGY_ADC_AUTH=true`** on the least-privilege Custom Service Account (`coding-agent-runtime-sa` — **never** proxying personal developer OAuth!); **Managed Sandboxes (`SandboxEnvironment`)** execute untrusted LLM-generated commands inside a **gVisor-isolated container** (`appuser`) with **zero IAM roles**, **no ADC**, and **no metadata server access (`169.254.169.254`)**.
+- **Trusted Orchestration vs. Untrusted Execution (and Enterprise `agy` Auth Boundary):** **Agent Runtime (`ReasoningEngine`)** holds the runtime identity, calls Gemini 4 models, reads/writes Managed Sessions & Memory Bank, and runs `/usr/local/bin/agy` exclusively via **`AGY_ADC_AUTH=true`** + non-numeric **`AGY_PROJECT_ID`** (overriding Agent Runtime's auto-injected numeric project number) on the least-privilege Custom Service Account (`coding-agent-runtime-sa` — **never** proxying personal developer OAuth!); **Managed Sandboxes (`SandboxEnvironment`)** execute untrusted LLM-generated commands inside a **gVisor-isolated container** (`appuser`) with **zero IAM roles**, **no ADC**, and **no metadata server access (`169.254.169.254`)**.
 - **Build Complete Before Deploying Once:** Labs 2 & 3 run against a lightweight standalone Agent Platform backing instance (`client.runtimes.create()`, ~3 seconds), and Lab 4 wires Skill Registry + Agent Registry directly into `coding_agent/` — so Lab 5 containerizes and deploys the **100% feature-complete** agent **once** via `agents-cli` & Terraform.
 - **5 Portable ADK 2.0 Architectures:** Toggle `AGENT_ARCHITECTURE` across `simple` (default), `collaborative` (`single_turn`/`task` subagents + `GlobalInstructionPlugin`), `graph` (deterministic `Workflow`, `JoinNode`, `RetryConfig`, `RequestInput`), `dynamic` (`@node(rerun_on_resume=True)`, `asyncio.gather(..., use_sub_branch=True)`), and **`agy_harness`** (Outer ADK Factory + Inner `agy` Headless CLI Harness with 4-tier exit-code retry/fallback and independent `pytest`/`ruff` gates) with zero changes to your sandbox or container contract.
 - **Dual-Track Optimization Flywheel:** Root-prompt fixes roll out safely via Agent Runtime `v1beta1` `trafficSplitManual` canaries, while domain skill improvements (`GEPARootAgentOptimizer`) hot-update live via `client.skills.update(...)` or immutable Agent Registry `rev-2` revisions (with 1-command rollback to `rev-1`) and **zero agent container rebuild**.
@@ -135,16 +135,18 @@ Every service defaults to **Bangkok (`asia-southeast3`)** first. We only fall ba
 ### Prerequisites
 
 - **Python 3.11+** (required by ADK 2.0, `google-genai>=2.34.0` for Gemini 4 1M-token automatic long decodes, and `google/agents-cli`)
-- **[`uv`](https://docs.astral.sh/uv/)** (fast Python package & virtualenv manager — install standalone via `curl -LsSf https://astral.sh/uv/install.sh | sh`; works even on fresh Debian/Linux workstations without `python3-venv` or `docker`!)
+- **[`uv`](https://docs.astral.sh/uv/)** (fast Python package & virtualenv manager — download and run the official standalone installer script below; works even on fresh Debian/Linux workstations without `python3-venv` or `docker`!)
 - **Google Cloud CLI (`gcloud`) + `alpha` component** (`gcloud components install alpha`, needed for `gcloud alpha agent-registry skills` in Labs 4, 6 & 7) authenticated against a **Standard billing-enabled GCP project** (see [Express Mode vs. Standard GCP caveats](workshop/00-WORKSHOP-OVERVIEW.md#express-mode-vs-standard-gcp-project-important))
 - **Cloud Build** (zero local Docker required — local `docker` CLI is strictly optional), **Terraform >= 1.5.0** (Lab 5), **Node.js** (optional, for `npx skills add`)
-- **`google/agents-cli` & Antigravity (`agy`) Headless CLI (Optional Locally):** Install `agents-cli` via `uvx google-agents-cli setup` and optionally install the static Go `agy` headless CLI via `curl -fsSL https://antigravity.google/cli/install.sh | bash` (baked automatically into Lab 2 BYOC Sandbox and Lab 5 Agent Runtime containers via Bangkok Cloud Build!). Every lab works end-to-end with pure `uv`, `gcloud`, and Terraform — and `make test-agy-harness` validates Lab 1's `agy` harness contract even before installing `agy` locally via `--dry-run`.
+- **`google/agents-cli` & Antigravity (`agy`) Headless CLI (Optional Locally):** Install `agents-cli` via `uvx google-agents-cli setup` and optionally download & run the official static Go `agy` headless CLI installer below (baked automatically into Lab 2 BYOC Sandbox and Lab 5 Agent Runtime containers via Bangkok Cloud Build!). Every lab works end-to-end with pure `uv`, `gcloud`, and Terraform — and `make test-agy-harness` validates Lab 1's `agy` harness contract even before installing `agy` locally via `--dry-run`.
 
 ### 1. Install `uv`, `gcloud alpha`, (Optional) `google/agents-cli` & Authenticate GCP
 
 ```bash
 # Install standalone uv if not present (works even without python3-venv or docker!)
-curl -LsSf https://astral.sh/uv/install.sh | sh
+curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv_install.sh \
+  && sh /tmp/uv_install.sh \
+  && rm -f /tmp/uv_install.sh
 
 # Ensure gcloud alpha component is installed (required for Agent Registry standalone skills)
 gcloud components install alpha --quiet
@@ -155,7 +157,9 @@ agents-cli info   # optional check if agents-cli is on PATH
 
 # Optional: Install Antigravity (`agy`) headless CLI locally for Lab 1 Part B `agy_harness`
 # (Also baked automatically into Lab 2 BYOC Sandbox and Lab 5 Agent Runtime via Cloud Build!)
-curl -fsSL https://antigravity.google/cli/install.sh | bash
+curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy_install.sh \
+  && bash /tmp/agy_install.sh \
+  && rm -f /tmp/agy_install.sh
 
 # Authenticate Application Default Credentials (ADC) for your GCP project
 gcloud auth login
@@ -235,7 +239,7 @@ gemini-coding-agent-workshop/
 │   ├── 06-LAB-OPTIMIZE-EVAL-AND-ALERTS.md          # Lab 6 (Optimize): Offline/Simulated/Online Eval, Alerts & Prompt Tuning
 │   ├── 07-LAB-OPTIONAL-SECURITY-AND-GOVERNANCE.md  # Lab 7 (Optional / Skippable): Scanning, NLC, Model Armor, SPIFFE, CMEK/VPC-SC, WORM/SIEM/SCC
 │   ├── 08-ARCHITECTURE-AGENT-RUNTIME-VS-GKE.md     # Lab 8 (Architecture): Agent Runtime vs. Self-Hosted GKE & Agent Substrate
-│   └── FACILITATOR-GUIDE.md                        # Instructor checklist, skip-Lab-7 guide, quota math & Top-25 troubleshooting
+│   └── FACILITATOR-GUIDE.md                        # Instructor checklist, skip-Lab-7 guide, quota math & Top-30 troubleshooting
 ├── starter/                                        # Hands-on participant workspace with # TODO(lab-N) markers
 │   ├── pyproject.toml                              # Python >=3.11 uv dependencies (ADK >=2.0, google-genai>=2.34.0, Agent Platform, Eval, OTel)
 │   ├── agents-cli-manifest.yaml                    # Lab 1: agents-cli config (agent_directory: coding_agent, target: agent_runtime)
@@ -319,7 +323,7 @@ Run `make help` at any time from the repository root to list available targets. 
 | Target | Purpose | Lab |
 |---|---|---|
 | `make help` | Print all available targets and usage notes | All |
-| `make preflight` | Run `scripts/preflight_check.sh` (verifies `gcloud`, ADC, APIs, `uv`, Bangkok/Singapore regions; zero Docker needed) | Lab 0 / Lab 1 |
+| `make preflight` | Run `scripts/preflight_check.sh` (verifies `gcloud`, ADC, APIs, `uv`, Bangkok/Singapore regions; zero Docker needed; supports `--offline` / `--skip-gcp`) | Lab 0 / Lab 1 |
 | `make install` | Sync Python 3.11+ dependencies via `uv` (`starter/` and `solution/`) | Lab 1 |
 | `make install-pip` | Pure `python3 -m venv` + `pip` dependency install fallback (zero `uv` required) | Lab 1 |
 | `make lint` | Run `ruff check` across `starter/`, `solution/`, and `scripts/` | All |
@@ -338,7 +342,7 @@ Run `make help` at any time from the repository root to list available targets. 
 | `make eval-simulated` | Run 2-step simulated user evaluation personas (`EVAL_LOCATION=global`) | Lab 6 |
 | `make validate-skills` | Run `scripts/validate_skills.py` on `.agents/skills/` | Lab 1 / All |
 | `make verify-lab LAB=1` | Run `./scripts/verify_lab.sh <1..8\|all>` checkpoint verification (`all` checks core Labs 1–6; `7` Optional Hardening; `8` GKE Overlay) | Labs 1–8 |
-| `make fast-forward LAB=1` | Run `./scripts/fast_forward_lab.sh <1..6\|8>` to sync **only** Lab `N` from `solution/` into `starter/` without spoiling later labs' TODOs | Labs 1–6, 8 |
+| `make fast-forward LAB=1` | Run `./scripts/fast_forward_lab.sh <1..6\|8>` to sync **only** Lab `N` from `solution/` into `starter/` without spoiling later labs' TODOs *(explicit `LAB=` required)* | Labs 1–6, 8 |
 | `make cleanup` | Run `scripts/cleanup_workshop.sh` to safely delete workshop sandboxes, templates, alert policies, and runtimes *(supports `CLEANUP_ARGS=--dry-run`)* | Post-Workshop |
 
 ---

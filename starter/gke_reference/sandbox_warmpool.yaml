@@ -17,6 +17,9 @@
 # 3. Multi-tenant identity warning:
 #    All Pods in a single `SandboxWarmPool` share one KSA / WIF identity bound
 #    at Pod creation. Isolate tenants with separate warm pools or direct Sandboxes.
+# 4. Production namespace note:
+#    Deploy into a dedicated non-system workload namespace (e.g., `coding-sandboxes`)
+#    matching `sandbox_template.yaml` so `secure-sandbox-policy` VAP enforces by default.
 
 apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxWarmPool

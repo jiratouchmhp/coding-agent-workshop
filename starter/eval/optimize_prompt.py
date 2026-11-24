@@ -294,6 +294,38 @@ def _extract_optimized_skills(
     return results
 
 
+def _make_routed_llm_factory(settings: Any) -> Any:
+    """Return a factory matching ``optimizer._llm_class(model=...)`` routed to ``MODEL_LOCATION``."""
+    from coding_agent.models import build_gemini_model
+
+    def _factory(model: str, **_: Any) -> Any:
+        return build_gemini_model(settings, model_override=model)
+
+    return _factory
+
+
+def _bind_optimizer_gemini4_routing(
+    optimizer: Any,
+    *,
+    settings: Any,
+    optimizer_model: str,
+) -> Any:
+    """Route ADK optimizer LLM calls to ``settings.model_location`` (e.g., ``global``).
+
+    Without explicit ``client_kwargs`` routing, ADK's ``SimplePromptOptimizer`` and
+    ``GEPARootAgent*Optimizer`` instantiate models via ``LLMRegistry`` using the process-wide
+    ``GOOGLE_CLOUD_LOCATION`` (``asia-southeast1``), causing HTTP 404 for global-only
+    Frontier Gemini 4 models (``gemini-4-hydrogen`` / ``gemini-4-neon``).
+    """
+    from coding_agent.models import build_gemini_model
+
+    if hasattr(optimizer, "_llm"):
+        optimizer._llm = build_gemini_model(settings, model_override=optimizer_model)
+    if hasattr(optimizer, "_llm_class"):
+        optimizer._llm_class = _make_routed_llm_factory(settings)
+    return optimizer
+
+
 def build_adk_sampler_and_optimizer(
     *,
     sampler_config_path: Path,
@@ -311,6 +343,13 @@ def build_adk_sampler_and_optimizer(
         LocalEvalSampler,
         LocalEvalSamplerConfig,
     )
+
+    from coding_agent.models import build_gemini4_generate_config
+
+    cfg = get_settings()
+    # ADK 2.15 optimizers default to `ThinkingConfig(thinking_budget=10240)`, which causes
+    # HTTP 400 on Gemini 4; pass a Gemini 4 `thinking_level` GenerateContentConfig explicitly.
+    gemini4_model_config = build_gemini4_generate_config(cfg, include_thoughts=True)
 
     raw_cfg = json.loads(sampler_config_path.read_text(encoding="utf-8"))
     eval_cfg_dict = raw_cfg.get("eval_config") or {"criteria": {"response_match_score": 0.75}}
@@ -335,6 +374,7 @@ def build_adk_sampler_and_optimizer(
                 num_iterations=iterations,
                 batch_size=batch_size,
                 optimizer_model=optimizer_model,
+                model_configuration=gemini4_model_config,
             )
         )
     elif optimizer_choice == "gepa":
@@ -346,6 +386,7 @@ def build_adk_sampler_and_optimizer(
         optimizer = GEPARootAgentPromptOptimizer(
             config=GEPARootAgentPromptOptimizerConfig(
                 optimizer_model=optimizer_model,
+                model_configuration=gemini4_model_config,
                 max_metric_calls=max(10, iterations * batch_size * 2),
                 reflection_minibatch_size=min(3, max(1, batch_size)),
             )
@@ -359,6 +400,7 @@ def build_adk_sampler_and_optimizer(
         optimizer = GEPARootAgentOptimizer(
             config=GEPARootAgentOptimizerConfig(
                 optimizer_model=optimizer_model,
+                model_configuration=gemini4_model_config,
                 max_metric_calls=max(10, iterations * batch_size * 2),
                 reflection_minibatch_size=min(3, max(1, batch_size)),
             )
@@ -366,6 +408,11 @@ def build_adk_sampler_and_optimizer(
     else:
         raise ValueError(f"Unsupported optimizer_choice: {optimizer_choice!r}")
 
+    _bind_optimizer_gemini4_routing(
+        optimizer,
+        settings=cfg,
+        optimizer_model=optimizer_model,
+    )
     return sampler, optimizer
 
 
@@ -462,9 +509,15 @@ def _build_reference_commands(
     return {
         "working_directory": f"{track_name}/",
         "adk_optimize_cli": (
-            "adk optimize coding_agent "
+            "GOOGLE_CLOUD_LOCATION=${MODEL_LOCATION:-global} adk optimize coding_agent "
             "--sampler_config_file_path eval/sampler_config.json "
             "--print_detailed_results --log_level INFO"
+        ),
+        "adk_optimize_gemini4_note": (
+            "Prefer `uv run python eval/optimize_prompt.py` (which overrides ADK 2.15's default "
+            "`thinking_budget=10240` with Gemini 4 `thinking_level` and routes to MODEL_LOCATION=global); "
+            "if invoking `adk optimize` directly with Gemini 4, pass `--optimizer_config_file_path` "
+            "with a `thinking_level`-based `model_configuration`."
         ),
         "gepa_skills_optimize_cmd": (
             f"uv run python eval/optimize_prompt.py --optimizer gepa-skills "
@@ -492,11 +545,20 @@ def _build_reference_commands(
         ),
         "skill_registry_hot_update_cli": (
             f"uv run python eval/optimize_prompt.py --publish-skill "
-            f"--skill-dir skills_to_register/{skill_id} --skill-id {skill_id}"
+            f"--skill-dir skills_to_register/{skill_id} --skill-id {skill_id} "
+            f"--skill-location {skill_location}"
+        ),
+        "skill_registry_update_rest": (
+            f'curl -X PATCH -H "Authorization: Bearer $(gcloud auth application-default print-access-token)" '
+            f'-H "Content-Type: application/json; charset=utf-8" '
+            f'-d \'{{"displayName":"Secure Code Review","description":"Updated from Lab 6 eval flywheel",'
+            f'"zippedFilesystem":"\'"$(base64 -w 0 ../dist/{skill_id}.zip)"\'"}} \' '
+            f'"https://{skill_location}-aiplatform.googleapis.com/v1beta1/projects/{proj}/locations/{skill_location}/skills/{skill_id}?updateMask=displayName,description,zippedFilesystem"'
         ),
         "agent_registry_skill_create": (
             f"gcloud alpha agent-registry skills create {skill_id} "
-            f'--project={proj} --location="{skills_loc_expr}"'
+            f'--project={proj} --location="{skills_loc_expr}" '
+            "--target-state=active --scanning-policy=enabled-nonblocking"
         ),
         "agent_registry_revision_create_rev1": (
             f"gcloud alpha agent-registry skills revisions create rev-1 "
@@ -514,22 +576,25 @@ def _build_reference_commands(
             f'--location="{skills_loc_expr}"'
         ),
         "agent_registry_scan_policy_note": (
-            "Under ENABLED_BLOCKING, promoting --default-revision fails with "
-            "FAILED_PRECONDITION until `revisions describe` shows "
-            "`scanResult.scanState: SUCCEEDED` (or pass "
+            "Agent Registry skills default to `STATE_DRAFT` (which causes `GCPSkillRegistry.get_skill()` "
+            "to return HTTP 400 FAILED_PRECONDITION) unless `--target-state=active` is passed. "
+            "Under ENABLED_BLOCKING, promoting `--default-revision` also fails with FAILED_PRECONDITION "
+            "until `revisions describe` shows `scanResult.scanState: SUCCEEDED` (or pass "
             "`--scanning-policy=enabled-nonblocking` when creating a rapid workshop demo skill)."
         ),
         "agent_registry_revision_promote_rev2": (
             f"gcloud alpha agent-registry skills update {private_skill_id} "
-            f'--project={proj} --location="{skills_loc_expr}" '
+            f'--project={proj} --location="{skills_loc_expr}" --target-state=active '
             f'--default-revision="projects/{proj}/locations/{skills_loc_expr}/skills/{private_skill_id}/revisions/rev-2"'
         ),
         "agent_registry_revision_rollback_rev1": (
             f"gcloud alpha agent-registry skills update {private_skill_id} "
-            f'--project={proj} --location="{skills_loc_expr}" '
+            f'--project={proj} --location="{skills_loc_expr}" --target-state=active '
             f'--default-revision="projects/{proj}/locations/{skills_loc_expr}/skills/{private_skill_id}/revisions/rev-1"'
         ),
         "agent_registry_cleanup": (
+            f"gcloud alpha agent-registry skills update {private_skill_id} "
+            f'--clear-default-revision --target-state=disabled --project={proj} --location="{skills_loc_expr}" && '
             f"gcloud alpha agent-registry skills revisions delete rev-2 "
             f'--skill={private_skill_id} --project={proj} --location="{skills_loc_expr}" --quiet && '
             f"gcloud alpha agent-registry skills revisions delete rev-1 "
@@ -546,6 +611,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--project", help="GCP project ID (defaults to GOOGLE_CLOUD_PROJECT).")
     parser.add_argument("--location", help="GCP region (defaults to GOOGLE_CLOUD_LOCATION).")
+    parser.add_argument(
+        "--skill-location",
+        default=None,
+        help="Vertex AI Skill Registry region (defaults to SKILL_REGISTRY_LOCATION / 'us-central1').",
+    )
     parser.add_argument("--optimizer", choices=["simple", "gepa", "gepa-skills"], default="simple")
     parser.add_argument("--iterations", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=4)
@@ -578,7 +648,11 @@ def main(argv: list[str] | None = None) -> int:
 
     project_id = args.project or settings.google_cloud_project
     location = args.location or settings.google_cloud_location
-    skill_location = settings.skill_registry_location or "us-central1"
+    skill_location = (
+        (args.skill_location or "").strip()
+        or settings.skill_registry_location
+        or "us-central1"
+    )
     agent_registry_skills_location = settings.agent_registry_skills_location or "global"
     runtime_name = settings.reasoning_engine_name or os.environ.get("REASONING_ENGINE_NAME", "")
 

@@ -166,7 +166,7 @@ class AgyHeadlessConfig:
             "enable_sandbox": cfg.agy_enable_sandbox,
             "dangerously_skip_permissions": cfg.agy_skip_permissions,
             "adc_auth": cfg.agy_adc_auth,
-            "google_cloud_project": cfg.google_cloud_project,
+            "google_cloud_project": cfg.resolved_agy_project_id,
             "model_location": cfg.model_location,
             "working_dir": str(cfg.local_workspace_path),
         }
@@ -229,14 +229,24 @@ def _extract_usage_counts(raw_usage: Mapping[str, Any]) -> dict[str, int]:
         "input_tokens": ("input_tokens", "prompt_tokens", "promptTokenCount"),
         "output_tokens": ("output_tokens", "completion_tokens", "candidatesTokenCount"),
         "total_tokens": ("total_tokens", "totalTokenCount"),
-        "cached_tokens": ("cached_tokens", "cache_read_input_tokens", "cachedContentTokenCount"),
-        "thought_tokens": ("thought_tokens", "thoughtsTokenCount", "reasoning_tokens"),
+        "cached_tokens": (
+            "cached_tokens",
+            "cache_read_tokens",
+            "cache_read_input_tokens",
+            "cachedContentTokenCount",
+        ),
+        "thought_tokens": (
+            "thought_tokens",
+            "thinking_tokens",
+            "thoughtsTokenCount",
+            "reasoning_tokens",
+        ),
     }
     normalized: dict[str, int] = {}
     for canonical, aliases in key_aliases.items():
         for alias in aliases:
             val = raw_usage.get(alias)
-            if isinstance(val, (int, float)) and not isinstance(val, bool):
+            if isinstance(val, int | float) and not isinstance(val, bool):
                 normalized[canonical] = int(val)
                 break
     if "total_tokens" not in normalized and ("input_tokens" in normalized or "output_tokens" in normalized):
@@ -266,10 +276,11 @@ def _classify_exit_code(exit_code: int) -> tuple[str, bool, str]:
             False,
             (
                 "Antigravity CLI failed with exit code 1 (CLI/auth/transport fault). "
-                "Verify Application Default Credentials with AGY_ADC_AUTH=true, "
-                "GOOGLE_CLOUD_PROJECT, and GOOGLE_CLOUD_LOCATION=global (or run "
-                "`gcloud auth application-default login` locally). Never proxy a "
-                "developer's personal OAuth credentials in a multi-tenant service."
+                "Verify Application Default Credentials with AGY_ADC_AUTH=true, a non-numeric "
+                "string project ID (GOOGLE_CLOUD_PROJECT / AGY_PROJECT_ID on Agent Runtime), "
+                "and GOOGLE_CLOUD_LOCATION=global (or run `gcloud auth application-default "
+                "login` locally). Never proxy a developer's personal OAuth credentials in a "
+                "multi-tenant service."
             ),
         )
     if exit_code == AgyExitCode.UNSUPPORTED_COMMAND:
@@ -312,6 +323,11 @@ def parse_agy_stream_json(
 
     Requirements:
     - Parse each NDJSON line in ``stdout`` (tolerating plain text fallback lines).
+    - Support BOTH flat dry-run/legacy events (``{"type": "session_start"|"tool_use"|"text_delta"|"result"|"error", ...}``)
+      AND real ``agy 1.5+`` nested ``event`` envelopes:
+      - ``{"event": "init", "conversation_id": ..., "init": {"model": ...}}``
+      - ``{"event": "step_update", "step_update": {"step_type": ..., "text_delta": ..., "usage": {...}}}``
+      - ``{"event": "result", "result": {"conversation_id": ..., "status": "SUCCESS"|"ERROR", "response": ..., "error": ..., "usage": {...}}}``
     - Extract ``conversation_id``, ``response_text``, ``tool_calls``, ``token_usage``
       (via ``_extract_usage_counts``), and ``agy_error`` (via ``_extract_agy_error``).
     - Classify ``exit_code`` via ``_classify_exit_code(exit_code)`` so
@@ -336,8 +352,27 @@ def build_local_agy_env(
         env["AGY_CLI_DISABLE_AUTO_UPDATE"] = "true"
     if config.adc_auth:
         env["AGY_ADC_AUTH"] = "true"
-    if config.google_cloud_project:
-        env["GOOGLE_CLOUD_PROJECT"] = config.google_cloud_project
+
+    # Prefer non-numeric string project IDs: Agent Runtime auto-injects the numeric
+    # project number into GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_QUOTA_PROJECT, which
+    # `agy` rejects with exit code 3 (`invalid project ID`).
+    candidate_project = config.google_cloud_project.strip()
+    if not candidate_project or candidate_project.isdigit():
+        env_agy_project = env.get("AGY_PROJECT_ID", "").strip()
+        if env_agy_project and not env_agy_project.isdigit():
+            candidate_project = env_agy_project
+
+    if candidate_project and not candidate_project.isdigit():
+        env["GOOGLE_CLOUD_PROJECT"] = candidate_project
+        env["GOOGLE_CLOUD_QUOTA_PROJECT"] = candidate_project
+    elif env.get("GOOGLE_CLOUD_PROJECT", "").strip().isdigit():
+        logger.warning(
+            "GOOGLE_CLOUD_PROJECT=%r is numeric (Agent Runtime default); `agy` rejects "
+            "numeric project IDs with exit code 3. Inject non-reserved `AGY_PROJECT_ID = var.project_id` "
+            "in terraform/main.tf so `agy` receives the string project ID.",
+            env.get("GOOGLE_CLOUD_PROJECT"),
+        )
+
     if config.model_location:
         env["GOOGLE_CLOUD_LOCATION"] = config.model_location
     return env
@@ -357,8 +392,10 @@ def build_sandbox_agy_env(
         env["AGY_CLI_DISABLE_AUTO_UPDATE"] = "true"
     if config.adc_auth:
         env["AGY_ADC_AUTH"] = "true"
-    if config.google_cloud_project:
-        env["GOOGLE_CLOUD_PROJECT"] = config.google_cloud_project
+    candidate_project = config.google_cloud_project.strip()
+    if candidate_project and not candidate_project.isdigit():
+        env["GOOGLE_CLOUD_PROJECT"] = candidate_project
+        env["GOOGLE_CLOUD_QUOTA_PROJECT"] = candidate_project
     if config.model_location:
         env["GOOGLE_CLOUD_LOCATION"] = config.model_location
 
@@ -457,8 +494,20 @@ class AgyHeadlessHarness:
         self,
         *,
         ctx: Any = None,
+        extra_sandbox_env: Mapping[str, str] | None = None,
     ) -> Literal["sandbox", "local", "unavailable"]:
-        """Resolve effective execution backend (``sandbox`` | ``local`` | ``unavailable``)."""
+        """Resolve effective execution backend (``sandbox`` | ``local`` | ``unavailable``).
+
+        In ``auto`` mode:
+        - When ``adc_auth=True`` and no explicit sandbox credential override (such as
+          ``GEMINI_API_KEY`` in ``extra_sandbox_env``) is supplied, prefer ``local``
+          (Agent Runtime Custom SA ADC / workstation ADC) instead of routing ``agy``
+          into an air-gapped gVisor BYOC sandbox (which blocks the metadata server and
+          exits 1 with authentication required). Untrusted ``pytest`` / ``ruff`` checks
+          still execute inside the isolated BYOC sandbox.
+        - When explicit sandbox credentials are supplied (or ``adc_auth=False``), prefer
+          the BYOC sandbox when ``SANDBOX_MODE=byoc`` and ``/health`` reports ``agy``.
+        """
         requested = self.config.execution_mode
         if requested == "sandbox":
             if self.sandbox_env is not None and await self._probe_sandbox_agy_available(ctx=ctx):
@@ -467,6 +516,12 @@ class AgyHeadlessHarness:
 
         if requested == "local":
             return "local" if self._local_agy_available() else "unavailable"
+
+        has_sandbox_creds = bool(extra_sandbox_env and extra_sandbox_env.get("GEMINI_API_KEY"))
+        if self.config.adc_auth and not has_sandbox_creds:
+            if self._local_agy_available():
+                return "local"
+            return "unavailable"
 
         if (
             self._settings.sandbox_mode == "byoc"
@@ -694,7 +749,10 @@ class AgyHeadlessHarness:
                 _record_span_attributes(span, result, run_cfg)
                 return result
 
-            mode = await self.resolve_execution_mode(ctx=ctx)
+            mode = await self.resolve_execution_mode(
+                ctx=ctx,
+                extra_sandbox_env=extra_sandbox_env,
+            )
             if mode == "sandbox":
                 result = await self._run_in_sandbox(
                     prompt,

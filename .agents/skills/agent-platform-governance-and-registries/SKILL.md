@@ -85,14 +85,14 @@ What do you need to do?
    - *Why:* Vertex AI Skill Registry validates asynchronously (11 ZIP rules + 5 `SKILL.md` rules = 16 atomic checks; Agent Registry adds stricter `1 MB` ZIP / `10 MB` scanned caps and requires `SKILL.md` directly at ZIP root). Always `cd` inside the skill folder before zipping, or run `scripts/package_registry_skill.py`.
 2. **Never assert `gcp-skill-registry` on your first Skill Registry call, and never delete-and-recreate the same `SKILL_ID`.**
    - *Why:* The first API call asynchronously triggers ingestion of `gcp-skill-registry` (it appears starting on call #2). Deleting a `SKILL_ID` locks reuse for at least 24 hours (and Create docs warn of permanent reservation) — always use `UpdateSkill` instead.
-3. **Always use `private-SKILL_ID` after creating an Agent Registry standalone skill, and pass `-L` on REST downloads.**
-   - *Why:* Agent Registry auto-assigns user skills to the `private` publisher and prepends `private-`. `?alt=media` returns a 302 redirect to a GCS signed URL (`curl -L` required; custom `httpx` clients must also strip `x-goog-*` headers on cross-origin redirect to avoid signature mismatch).
+3. **Always use `private-SKILL_ID`, activate with `--target-state=active`, pass `-L` on REST downloads, and `--clear-default-revision` before deleting revisions.**
+   - *Why:* Agent Registry auto-assigns user skills to the `private` publisher (`private-SKILL_ID`) and defaults new skills to `STATE_DRAFT` — `search_skills` sees `DRAFT` skills, but `GCPSkillRegistry.get_skill()` fails with HTTP 400 `FAILED_PRECONDITION: skill container must be in ACTIVE or DEPRECATED state to download content` until activated (`--target-state=active`, with `--scanning-policy=enabled-nonblocking` for immediate promotion without waiting on async `ENABLED_BLOCKING` scans). `?alt=media` returns a 302 redirect to a GCS signed URL (`curl -L` required; custom `httpx` clients must strip `x-goog-*` headers on cross-origin redirect). On teardown, clear `--default-revision` (`--clear-default-revision --target-state=disabled`) before `revisions delete` -> `skills delete`.
 4. **Install `google-adk[a2a,agent-identity,mcp]>=2.0.0` — never core-only `google-adk` when importing `AgentRegistry`.**
    - *Why:* `google.adk.integrations.agent_registry` imports `a2a-sdk` and `agent-identity` at module scope and raises `ImportError` without both extras.
 5. **Authenticate `RemoteA2aAgent` via `httpx.AsyncClient(auth=...)`, NEVER via `AgentRegistry(header_provider=...)`, and call `.clone()` for shared subagents.**
    - *Why:* `header_provider` applies **only** to `McpToolset` (never Agent Registry API or `RemoteA2aAgent`). Match the bearer token to the target: OAuth + `X-Goog-User-Project` for `*.googleapis.com`, **OIDC ID token** (`fetch_id_token`) for `*.run.app` / IAP. A `RemoteA2aAgent` can only have one parent `LlmAgent` unless cloned.
-6. **Keep `GCPSkillRegistry` outside network-isolated sandboxes (or enable Google API egress) and check `AGENT_REGISTRY_ENDPOINT`.**
-   - *Why:* Isolated sandboxes without outbound access to Google APIs fail remote registry calls and fall back to local skills. Note that `adk-python` `main` `GCPSkillRegistry` calls `agentregistry.googleapis.com/v1alpha` (overridable via `AGENT_REGISTRY_ENDPOINT`), whereas older docs reference Vertex AI SDK.
+6. **Always pass `location="global"` explicitly to `GCPSkillRegistry`, keep it outside air-gapped sandboxes, and remember `__init__` is lazy.**
+   - *Why:* In ADK 2.15.0, `GCPSkillRegistry` calls Agent Registry (`agentregistry.googleapis.com/v1alpha`, overridable via `AGENT_REGISTRY_ENDPOINT` — NOT Vertex AI Skill Registry in `us-central1`). Omitting `location=` silently falls back to `GOOGLE_CLOUD_LOCATION` (e.g., `asia-southeast1`) instead of `global`. Moreover, `GCPSkillRegistry.__init__` performs zero network/ADC calls (unlike `AgentRegistry.__init__`, which eagerly calls `google.auth.default()`); air-gapped failures surface lazily at runtime inside `search_skills`/`get_skill` (`SearchSkillsTool` catches them as `REGISTRY_ERROR` while local skills remain usable).
 7. **Never confuse the 4 Identifier Layers: URNs (`urn:...`), Resource Names (`projects/...`), Agent Principals (`principal://...`), and Runtime References.**
    - *Why:* URNs are ONLY for discovery/search/`Binding` source & target (NEVER IAM/IAP/Gateway). IAM/UAP policies MUST use `principal://` or `principalSet://` (**passing `spiffe://` returns `INVALID_ARGUMENT`**). Gateway/IAP/Semantic Governance targets MUST use Resource Names.
 8. **Disable model streaming for Semantic Governance, exclude gRPC in `AuthzPolicy` CEL, and deploy agents with BOTH `AGENT_IDENTITY` and `agent_gateway_config`.**
@@ -107,8 +107,8 @@ What do you need to do?
 ### 1. Validate & Package a Skill ZIP Pre-Upload
 ```bash
 # Dry-run all 16 Skill Registry rules (add --agent-registry for 1 MB / 10 MB scanned caps)
-# In this workshop repo, the ready-to-register sample lives at solution/skills_to_register/secure-code-review
-python3 scripts/package_registry_skill.py solution/skills_to_register/secure-code-review --dry-run
+# In this workshop repo, the ready-to-register sample lives at starter/skills_to_register/secure-code-review
+python3 scripts/package_registry_skill.py starter/skills_to_register/secure-code-review --dry-run
 python3 scripts/package_registry_skill.py ./skills/secure-code-review --agent-registry -o /tmp/skill.zip
 ```
 
@@ -142,13 +142,15 @@ gcloud alpha agent-registry skills revisions create rev-1 \
 gcloud alpha agent-registry skills revisions describe rev-1 \
   --skill=private-secure-code-review --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_SKILLS_LOCATION}"
 
-# Promote & activate once scanResult.scanState=SUCCEEDED with 0 findings (set --default-revision for ADK GCPSkillRegistry)
+# Promote & activate once scanResult.scanState=SUCCEEDED with 0 findings (or immediately under enabled-nonblocking).
+# CRITICAL: ALWAYS pass --target-state=active; skills left in STATE_DRAFT fail GCPSkillRegistry.get_skill() with HTTP 400 FAILED_PRECONDITION!
 gcloud alpha agent-registry skills update private-secure-code-review \
   --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_SKILLS_LOCATION}" \
   --default-revision="projects/${GOOGLE_CLOUD_PROJECT}/locations/${AGENT_REGISTRY_SKILLS_LOCATION}/skills/private-secure-code-review/revisions/rev-1" \
-  --target-state=ACTIVE
+  --target-state=active
 
-# Clean teardown order: delete child revision(s) BEFORE deleting the skill (no `--force` flag in CLI)
+# Clean teardown order: clear default revision FIRST, then delete child revision(s), then delete the skill (no `--force` flag in CLI)
+# gcloud alpha agent-registry skills update private-secure-code-review --clear-default-revision --target-state=disabled --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_SKILLS_LOCATION}"
 # gcloud alpha agent-registry skills revisions delete rev-1 --skill=private-secure-code-review --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_SKILLS_LOCATION}" --quiet
 # gcloud alpha agent-registry skills delete private-secure-code-review --project="${GOOGLE_CLOUD_PROJECT}" --location="${AGENT_REGISTRY_SKILLS_LOCATION}" --quiet
 ```

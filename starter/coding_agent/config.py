@@ -127,6 +127,7 @@ class Settings:
 
     # Antigravity (`agy`) headless CLI coding harness controls (local, Agent Runtime, & BYOC sandbox)
     agy_bin: str = "agy"
+    agy_project_id: str = ""
     agy_model: str = ""
     agy_effort: AgyEffortLevel = "medium"
     agy_print_timeout: str = "5m"
@@ -207,6 +208,7 @@ class Settings:
         object.__setattr__(self, "thinking_level", normalized_thinking)
         normalized_agy_bin = self.agy_bin.strip() or "agy"
         object.__setattr__(self, "agy_bin", normalized_agy_bin)
+        object.__setattr__(self, "agy_project_id", self.agy_project_id.strip())
         object.__setattr__(self, "agy_model", self.agy_model.strip())
         normalized_agy_effort = self.agy_effort.strip().lower() or "medium"
         if normalized_agy_effort not in VALID_AGY_EFFORT_LEVELS:
@@ -230,6 +232,23 @@ class Settings:
     def resolved_agy_model(self) -> str:
         """Return explicit ``AGY_MODEL`` override or fall back to ``MODEL_NAME``."""
         return self.agy_model or self.model_name
+
+    @property
+    def resolved_agy_project_id(self) -> str:
+        """Return non-numeric string project ID for Antigravity (``agy``) CLI.
+
+        Agent Runtime auto-injects the numeric project number into
+        ``GOOGLE_CLOUD_PROJECT`` / ``GOOGLE_CLOUD_QUOTA_PROJECT`` (and its GCE
+        metadata server returns Google's internal tenant project), whereas
+        ``agy`` rejects numeric project IDs with exit code 3. Preferring the
+        non-reserved ``AGY_PROJECT_ID`` env var (injected by Terraform) keeps
+        ``agy`` working inside Agent Runtime without breaking local workstations.
+        """
+        if self.agy_project_id:
+            return self.agy_project_id
+        if self.google_cloud_project and not self.google_cloud_project.isdigit():
+            return self.google_cloud_project
+        return ""
 
     @property
     def local_workspace_path(self) -> Path:
@@ -332,6 +351,7 @@ def load_settings() -> Settings:
         enable_hitl_approval=_parse_bool(os.environ.get("ENABLE_HITL_APPROVAL"), False),
         managed_agent_id=os.environ.get("MANAGED_AGENT_ID", "").strip(),
         agy_bin=os.environ.get("AGY_BIN", "agy").strip() or "agy",
+        agy_project_id=os.environ.get("AGY_PROJECT_ID", "").strip(),
         agy_model=os.environ.get("AGY_MODEL", "").strip(),
         agy_effort=os.environ.get("AGY_EFFORT", "medium").strip().lower() or "medium",  # type: ignore[arg-type]
         agy_print_timeout=os.environ.get("AGY_PRINT_TIMEOUT", "5m").strip() or "5m",

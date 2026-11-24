@@ -15,6 +15,9 @@ so you can focus on split evaluation and failure clustering.
 from __future__ import annotations
 
 import argparse
+import asyncio
+import concurrent.futures
+import inspect
 import json
 import logging
 import os
@@ -214,6 +217,85 @@ def register_custom_coding_metrics(client: Any) -> dict[str, str]:
     }
 
 
+def _run_coro_sync(coro: Any) -> Any:
+    """Execute an async coroutine cleanly whether or not an event loop is already running."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
+
+
+def expand_agent_toolsets(agent: Any) -> Any:
+    """Return a cloned ADK agent whose ``BaseToolset`` entries are flattened into ``BaseTool``s.
+
+    Works around an ``agentplatform==2.10.0`` evaluation introspection gap where
+    ``AgentInfo.load_from_agent(agent=...)`` and ``client.evals.run_inference(agent=...)``
+    inspect ``agent.tools`` expecting each entry to define ``_get_declaration()`` or be a
+    plain callable — crashing with ``TypeError: Expected a callable object, got
+    EnvironmentToolset`` when an ADK 2.0 ``BaseToolset`` (``EnvironmentToolset``,
+    ``SkillToolset``, ``McpToolset``) is attached directly. Idempotent when already expanded.
+    """
+    # Pre-filled boilerplate helper
+    try:
+        from google.adk.tools.base_toolset import BaseToolset
+    except ImportError:
+        BaseToolset = None  # type: ignore[assignment, misc]
+
+    updates: dict[str, Any] = {}
+    raw_tools = getattr(agent, "tools", None)
+    if raw_tools:
+        expanded_tools: list[Any] = []
+        tools_changed = False
+        for tool in raw_tools:
+            is_toolset = (
+                BaseToolset is not None and isinstance(tool, BaseToolset)
+            ) or (
+                not hasattr(tool, "_get_declaration")
+                and callable(getattr(tool, "get_tools", None))
+            )
+            if is_toolset:
+                tools_changed = True
+                try:
+                    resolved = tool.get_tools()
+                    if inspect.isawaitable(resolved):
+                        resolved = _run_coro_sync(resolved)
+                    expanded_tools.extend(resolved or [])
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "Skipping toolset %s during eval tool expansion (%s).",
+                        type(tool).__name__,
+                        exc,
+                    )
+            else:
+                expanded_tools.append(tool)
+        if tools_changed:
+            updates["tools"] = expanded_tools
+
+    raw_sub_agents = getattr(agent, "sub_agents", None)
+    if raw_sub_agents:
+        expanded_subs: list[Any] = []
+        subs_changed = False
+        for sub in raw_sub_agents:
+            expanded_sub = expand_agent_toolsets(sub)
+            if expanded_sub is not sub:
+                subs_changed = True
+            expanded_subs.append(expanded_sub)
+        if subs_changed:
+            updates["sub_agents"] = [
+                sub.clone()
+                if getattr(sub, "parent_agent", None) is not None
+                and callable(getattr(sub, "clone", None))
+                else sub
+                for sub in expanded_subs
+            ]
+
+    if updates and callable(getattr(agent, "clone", None)):
+        return agent.clone(update=updates)
+    return agent
+
+
 def has_agent_trace_fields(cases: list[dict[str, Any]]) -> bool:
     """Return True when every case includes agent trace fields required by agent metrics.
 
@@ -242,8 +324,11 @@ def evaluate_split_datasets(
     #         `types.EvaluationDataset.model_validate({"eval_cases": inference_cases})`
     #         (with `types.EvaluationDataset(eval_cases=inference_cases)` fallback — NEVER pass
     #         a raw dict to `src=`, because `Evals.run_inference(src=...)` only accepts
-    #         `str | pd.DataFrame | types.EvaluationDataset`), call
-    #         `client.evals.run_inference(agent=root_agent, src=inference_src)`, and evaluate with:
+    #         `str | pd.DataFrame | types.EvaluationDataset`), flatten ADK `BaseToolset`
+    #         instances via `prepared_agent = expand_agent_toolsets(root_agent)` (so
+    #         `AgentConfig.from_agent` never crashes on `EnvironmentToolset`/`SkillToolset`),
+    #         call `client.evals.run_inference(agent=prepared_agent, src=inference_src)`, and
+    #         evaluate with:
     #         `[types.RubricMetric.FINAL_RESPONSE_QUALITY, types.RubricMetric.TOOL_USE_QUALITY,
     #           types.RubricMetric.HALLUCINATION, types.RubricMetric.SAFETY(version="v1")]`
     #       * When `run_inference=False` and `has_agent_trace_fields(single_turn_cases)` is True:

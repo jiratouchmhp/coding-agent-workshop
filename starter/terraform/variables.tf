@@ -19,7 +19,7 @@ variable "location" {
 variable "repository_name" {
   type        = string
   default     = "coding-agent-repo"
-  description = "The Artifact Registry Docker repository hosting the BYOC agent and sandbox images"
+  description = "Optional reference name of the Artifact Registry Docker repository hosting the BYOC agent and sandbox images (used when narrowing AR IAM to a single repo; default main.tf grants project-level artifactregistry.reader)"
 }
 
 variable "display_name" {
@@ -36,7 +36,7 @@ variable "agent_image_uri" {
 variable "sandbox_image_uri" {
   type        = string
   default     = ""
-  description = "Optional Artifact Registry URI for the Lab 2 untrusted BYOC sandbox image (e.g., asia-southeast3-docker.pkg.dev/PROJECT_ID/coding-agent-repo/coding-sandbox:v1 — Bangkok AR is verified working for Singapore BYOC Sandbox pulls by gcp-sa-vertex-sandbox; no second Singapore AR repository is needed)"
+  description = "Optional reference Artifact Registry URI for the Lab 2 untrusted BYOC sandbox image (informational metadata — main.tf launches sandboxes via sandbox_template_name; e.g., asia-southeast3-docker.pkg.dev/PROJECT_ID/coding-agent-repo/coding-sandbox:v1)"
 }
 
 variable "sandbox_template_name" {
